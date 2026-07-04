@@ -61,6 +61,7 @@ public class AgentService {
     private final ConversationIntentRouterService conversationIntentRouterService;
     private final SkillsService skillsService;
     private final AgentToolPolicyEngine toolPolicyEngine;
+    private final AgentStrategySelector agentStrategySelector;
     private final AgentContextBuilder agentContextBuilder;
     private final AgentContextSnapshotService contextSnapshotService;
     private final AgentSessionSummaryService sessionSummaryService;
@@ -78,6 +79,7 @@ public class AgentService {
                         ConversationIntentRouterService conversationIntentRouterService,
                         SkillsService skillsService,
                         AgentToolPolicyEngine toolPolicyEngine,
+                        AgentStrategySelector agentStrategySelector,
                         AgentContextBuilder agentContextBuilder,
                         AgentContextSnapshotService contextSnapshotService,
                         AgentSessionSummaryService sessionSummaryService,
@@ -94,6 +96,7 @@ public class AgentService {
         this.conversationIntentRouterService = conversationIntentRouterService;
         this.skillsService = skillsService;
         this.toolPolicyEngine = toolPolicyEngine;
+        this.agentStrategySelector = agentStrategySelector;
         this.agentContextBuilder = agentContextBuilder;
         this.contextSnapshotService = contextSnapshotService;
         this.sessionSummaryService = sessionSummaryService;
@@ -316,7 +319,8 @@ public class AgentService {
         log.debug("Agent context sections sessionId={} sections={}", session.getId(), contextPackage.sections());
         try {
             AgentRuntimeResult result = agentRuntimeService.run(new AgentRuntimeRequest(
-                    resolveStrategy(toolPolicy),
+                    agentStrategySelector.select(request.content(), toolPolicy),
+                    session.getId(),
                     effectiveHistory,
                     userId,
                     request.content(),
@@ -326,6 +330,7 @@ public class AgentService {
                     null,
                     session.getMaxSteps(),
                     ragDisabled,
+                    request.skillId(),
                     endpoint.apiKey(),
                     endpoint.apiUrl(),
                     resolvedSkill == null ? null : resolvedSkill.prompt(),
@@ -475,13 +480,6 @@ public class AgentService {
         if (tokenConsumer != null && StringUtils.hasText(content)) {
             tokenConsumer.accept(content);
         }
-    }
-
-    private AgentStrategy resolveStrategy(AgentToolPolicyEngine.Decision toolPolicy) {
-        if (toolPolicy == null || toolPolicy.allowedTools() == null || toolPolicy.allowedTools().isEmpty()) {
-            return AgentStrategy.DIRECT;
-        }
-        return AgentStrategy.SINGLE_STEP_REACT;
     }
 
     private int safeMessageLimit(Integer limit) {

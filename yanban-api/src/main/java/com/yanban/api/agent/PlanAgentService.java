@@ -224,7 +224,7 @@ public class PlanAgentService {
         String previousTraceId = MDC.get("traceId");
         MDC.put("traceId", traceId);
         try {
-            executePlan(userId, planId, traceId);
+            executePlan(userId, planId, traceId, true);
         } catch (Exception ex) {
             log.warn("Async plan execution failed planId={} traceId={}", planId, traceId, ex);
             try {
@@ -247,10 +247,24 @@ public class PlanAgentService {
     }
 
     public AgentPlanResponse executePlan(Long userId, Long planId) {
-        return executePlan(userId, planId, newPlanTraceId(planId));
+        return executePlan(userId, planId, newPlanTraceId(planId), true);
     }
 
-    private AgentPlanResponse executePlan(Long userId, Long planId, String traceId) {
+    public AgentPlanResponse createAndExecuteRuntimeReflectionPlan(Long userId,
+                                                                   Long sessionId,
+                                                                   String goal,
+                                                                   boolean ragDisabled,
+                                                                   String skillId) {
+        AgentPlanResponse created = createPlan(userId, sessionId, new CreateAgentPlanRequest(
+                goal,
+                ragDisabled,
+                skillId,
+                false
+        ));
+        return executePlan(userId, created.id(), newPlanTraceId(created.id()), false);
+    }
+
+    private AgentPlanResponse executePlan(Long userId, Long planId, String traceId, boolean persistConversationSummary) {
         String previousTraceId = MDC.get("traceId");
         MDC.put("traceId", traceId);
         try {
@@ -278,11 +292,13 @@ public class PlanAgentService {
                 if (planCancelled(plan.getId(), userId)) {
                     AgentPlan cancelled = plans.findByIdAndUserId(plan.getId(), userId).orElse(plan);
                     allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
-                    persistConversationSummary(userId, session.getId(), cancelled, allSteps);
+                    if (persistConversationSummary) {
+                        persistConversationSummary(userId, session.getId(), cancelled, allSteps);
+                    }
                     return toResponse(cancelled, allSteps);
                 }
                 if (deadlineExceeded(deadlineAt)) {
-                    markPlanBudgetExceeded(plan, allSteps, session.getId(), userId, traceId);
+                    markPlanBudgetExceeded(plan, allSteps, session.getId(), userId, traceId, persistConversationSummary);
                     allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
                     return toResponse(plan, allSteps);
                 }
@@ -304,7 +320,9 @@ public class PlanAgentService {
                             "traceId", traceId,
                             "error", plan.getErrorMessage()
                     ));
-                    persistConversationSummary(userId, session.getId(), plan, allSteps);
+                    if (persistConversationSummary) {
+                        persistConversationSummary(userId, session.getId(), plan, allSteps);
+                    }
                     return toResponse(plan, allSteps);
                 }
 
@@ -339,7 +357,9 @@ public class PlanAgentService {
                         "error", plan.getErrorMessage()
                 ));
             }
-            persistConversationSummary(userId, session.getId(), plan, allSteps);
+            if (persistConversationSummary) {
+                persistConversationSummary(userId, session.getId(), plan, allSteps);
+            }
             return toResponse(plan, allSteps);
         } finally {
             restoreTraceId(previousTraceId);
@@ -1090,7 +1110,8 @@ public class PlanAgentService {
                                         List<AgentPlanStep> allSteps,
                                         Long sessionId,
                                         Long userId,
-                                        String traceId) {
+                                        String traceId,
+                                        boolean persistConversationSummary) {
         String error = "Plan execution budget exceeded after " + PLAN_BUDGET_SECONDS + " seconds.";
         for (AgentPlanStep step : allSteps) {
             if (AgentPlanStepStatus.PENDING.name().equals(step.getStatus())) {
@@ -1110,7 +1131,9 @@ public class PlanAgentService {
                 "budgetSeconds", PLAN_BUDGET_SECONDS,
                 "error", error
         ));
-        persistConversationSummary(userId, sessionId, plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
+        if (persistConversationSummary) {
+            persistConversationSummary(userId, sessionId, plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
+        }
     }
 
     private boolean planCancelled(Long planId, Long userId) {

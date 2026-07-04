@@ -47,6 +47,7 @@ class CurrentHarnessAdapterTest {
 
         AgentRuntimeResult result = adapter.run(new AgentRuntimeRequest(
                 AgentStrategy.SINGLE_STEP_REACT,
+                21L,
                 List.of(ChatMessage.system("ctx")),
                 11L,
                 "hello",
@@ -56,6 +57,7 @@ class CurrentHarnessAdapterTest {
                 null,
                 8,
                 false,
+                null,
                 "api-key",
                 "https://example.test",
                 "skill prompt",

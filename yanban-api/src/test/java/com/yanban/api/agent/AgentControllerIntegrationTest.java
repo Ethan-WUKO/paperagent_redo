@@ -599,6 +599,52 @@ class AgentControllerIntegrationTest {
     }
 
     @Test
+    void explicitPlanReflectMessageUsesReflectionRuntime() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {
+                          "summary": "Audit runtime gaps",
+                          "steps": [
+                            {
+                              "id": "collect_runtime_evidence",
+                              "title": "Collect runtime evidence",
+                              "description": "Inspect the runtime boundary and identify remaining gaps.",
+                              "type": "ANALYSIS",
+                              "dependencies": [],
+                              "allowedTools": [],
+                              "successCriteria": "A reusable runtime gap summary is produced."
+                            }
+                          ]
+                        }
+                        """), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant(
+                        "Runtime gap summary: the reflection path still needs richer strategy selection and more adapters."
+                ), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {
+                          "passed": false,
+                          "reason": "The result identifies the main gap but still marks the output as partial.",
+                          "evidence": "reflection path still needs richer strategy selection",
+                          "missingItems": ["richer strategy selection"]
+                        }
+                        """), "stop", null));
+        String token = registerAndGetToken("agent_user_plan_reflect");
+        long sessionId = createSession(token, "Plan Reflect");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"/plan reflect audit the runtime gaps\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("Reflection summary for plan")))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("Evidence/completeness judgment")))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("Limitations")))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+    }
+
+    @Test
     void updateSessionCanRenameChangeModelAndDelete() throws Exception {
         String token = registerAndGetToken("agent_user_update_delete");
         long sessionId = createSession(token, "旧标题");

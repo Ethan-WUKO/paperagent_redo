@@ -51,6 +51,7 @@ class AgentRuntimeServiceTest {
     private AgentRuntimeRequest request(AgentStrategy strategy) {
         return new AgentRuntimeRequest(
                 strategy,
+                21L,
                 List.of(ChatMessage.user("history")),
                 11L,
                 "hello",
@@ -60,6 +61,7 @@ class AgentRuntimeServiceTest {
                 null,
                 8,
                 false,
+                null,
                 null,
                 null,
                 null,

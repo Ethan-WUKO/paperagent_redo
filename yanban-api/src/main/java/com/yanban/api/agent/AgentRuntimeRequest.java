@@ -6,6 +6,7 @@ import java.util.function.Consumer;
 
 public record AgentRuntimeRequest(
         AgentStrategy strategy,
+        Long sessionId,
         List<ChatMessage> history,
         Long userId,
         String userMessage,
@@ -15,6 +16,7 @@ public record AgentRuntimeRequest(
         Integer maxTokens,
         int maxSteps,
         boolean ragDisabled,
+        String skillId,
         String apiKey,
         String apiUrl,
         String skillPrompt,
