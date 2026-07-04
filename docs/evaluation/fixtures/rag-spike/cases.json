@@ -1,0 +1,147 @@
+[
+  {
+    "caseId": "RAG-LC4J-001",
+    "area": "private_active_recall",
+    "query": "What does the active polished Delta-Graph-RAG manuscript report about Recall@5 and citation coverage?",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [1002],
+    "forbiddenDocumentIds": [1005, 2001],
+    "expectedCitationIds": ["u101-paper-polished-001"],
+    "expectedAnswerFacts": ["Recall@5 0.78", "citation coverage 91%"],
+    "notes": "User A should retrieve the active polished manuscript, not deleted notes or user B private notes."
+  },
+  {
+    "caseId": "RAG-LC4J-002",
+    "area": "cross_user_isolation",
+    "query": "What is User A's Delta-Graph-RAG ablation result?",
+    "userId": 202,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [],
+    "forbiddenDocumentIds": [1001, 1002, 1003, 1004, 1005],
+    "expectedCitationIds": [],
+    "expectedAnswerFacts": ["insufficient private evidence"],
+    "notes": "User B must not see User A private documents even if the query names the topic."
+  },
+  {
+    "caseId": "RAG-LC4J-003",
+    "area": "public_document_recall",
+    "query": "What does the public RAG note say should be checked besides Recall@5?",
+    "userId": 202,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [3001],
+    "forbiddenDocumentIds": [1001, 1002, 1003, 1004, 1005],
+    "expectedCitationIds": ["public-rag-note-001"],
+    "expectedAnswerFacts": ["faithfulness", "citation coverage", "source correctness"],
+    "notes": "Public documents are visible to both users."
+  },
+  {
+    "caseId": "RAG-LC4J-004",
+    "area": "active_version_priority",
+    "query": "Which Delta-Graph-RAG version should be trusted for the current Recall@5 number?",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [1002],
+    "forbiddenDocumentIds": [1005, 2001],
+    "expectedCitationIds": ["u101-paper-polished-001"],
+    "expectedAnswerFacts": ["active polished", "Recall@5 0.78"],
+    "rankingRules": [
+      {
+        "preferredDocumentId": 1002,
+        "lowerPriorityDocumentId": 1004,
+        "reason": "ACTIVE polished manuscript must outrank SUPERSEDED obsolete draft."
+      }
+    ],
+    "notes": "The obsolete draft mentions Recall@5 0.62 and must not be treated as current."
+  },
+  {
+    "caseId": "RAG-LC4J-005",
+    "area": "deleted_document_filter",
+    "query": "What rewrite risk threshold should we use for section rewrites?",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [],
+    "forbiddenDocumentIds": [1005],
+    "expectedCitationIds": [],
+    "expectedAnswerFacts": ["insufficient active evidence"],
+    "notes": "The only direct threshold appears in a DELETED fixture and must not be used."
+  },
+  {
+    "caseId": "RAG-LC4J-006",
+    "area": "citation_metadata_preservation",
+    "query": "Which literature card supports edge-conditioned retrieval for GraphRAG?",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [1003],
+    "forbiddenDocumentIds": [2001],
+    "expectedCitationIds": ["u101-lit-graph-rag-001"],
+    "expectedAnswerFacts": ["Edge-conditioned retrieval", "DOI 10.5555/graph-rag.2025"],
+    "notes": "Runner must preserve literature-card citation metadata."
+  },
+  {
+    "caseId": "RAG-LC4J-007",
+    "area": "follow_up_query_transform",
+    "previousContext": "The user was discussing the active polished Delta-Graph-RAG manuscript.",
+    "query": "Does it still rely on manual bridge edges?",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [1002],
+    "forbiddenDocumentIds": [1005, 2001],
+    "expectedCitationIds": ["u101-paper-polished-001"],
+    "expectedAnswerFacts": ["learned bridge-edge classifier", "does not rely on manual bridge edges"],
+    "notes": "This case is intended to measure query transform or contextual query rewriting."
+  },
+  {
+    "caseId": "RAG-LC4J-008",
+    "area": "low_confidence_behavior",
+    "query": "What GPU cluster name was used for the Delta-Graph-RAG production run?",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [],
+    "forbiddenDocumentIds": [1005, 2001],
+    "expectedCitationIds": [],
+    "expectedAnswerFacts": ["evidence was insufficient"],
+    "notes": "No active fixture contains a GPU cluster name."
+  },
+  {
+    "caseId": "RAG-LC4J-009",
+    "area": "polished_vs_original",
+    "query": "For the final paper wording, should the system use the original draft or the polished version?",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [1002],
+    "forbiddenDocumentIds": [1005, 2001],
+    "expectedCitationIds": ["u101-paper-polished-001"],
+    "expectedAnswerFacts": ["use the polished version", "original draft is superseded"],
+    "rankingRules": [
+      {
+        "preferredDocumentId": 1002,
+        "lowerPriorityDocumentId": 1001,
+        "reason": "PAPER_POLISHED ACTIVE should outrank PAPER_ORIGINAL SUPERSEDED for final wording."
+      }
+    ],
+    "notes": "Original manuscript can be present but should not drive final wording."
+  },
+  {
+    "caseId": "RAG-LC4J-010",
+    "area": "chinese_query_mixed_language_recall",
+    "query": "Delta-Graph-RAG 的最终 polished 版本 Recall@5 和引用覆盖率是多少？",
+    "userId": 101,
+    "projectId": null,
+    "topK": 5,
+    "expectedDocumentIds": [1002],
+    "forbiddenDocumentIds": [1005, 2001],
+    "expectedCitationIds": ["u101-paper-polished-001"],
+    "expectedAnswerFacts": ["Recall@5 0.78", "citation coverage 91%"],
+    "notes": "Chinese query should recall mixed English/Chinese academic notes."
+  }
+]

@@ -1,0 +1,93 @@
+[
+  {
+    "documentId": 1001,
+    "userId": 101,
+    "projectId": null,
+    "visibility": "PRIVATE",
+    "sourceType": "PAPER_ORIGINAL",
+    "versionStatus": "SUPERSEDED",
+    "lineageId": "paper-delta-graph-rag",
+    "filename": "active-paper-original.md",
+    "path": "user-a/active-paper-original.md",
+    "citationId": "u101-paper-original-001",
+    "expectedChunkHints": ["Delta-Graph-RAG", "Recall@5 0.71", "manual bridge edges"]
+  },
+  {
+    "documentId": 1002,
+    "userId": 101,
+    "projectId": null,
+    "visibility": "PRIVATE",
+    "sourceType": "PAPER_POLISHED",
+    "versionStatus": "ACTIVE",
+    "lineageId": "paper-delta-graph-rag",
+    "filename": "active-paper-polished.md",
+    "path": "user-a/active-paper-polished.md",
+    "citationId": "u101-paper-polished-001",
+    "expectedChunkHints": ["Delta-Graph-RAG", "Recall@5 0.78", "citation coverage 91%"]
+  },
+  {
+    "documentId": 1003,
+    "userId": 101,
+    "projectId": null,
+    "visibility": "PRIVATE",
+    "sourceType": "LITERATURE_CARD",
+    "versionStatus": "ACTIVE",
+    "lineageId": "lit-graph-rag-survey",
+    "filename": "literature-card-graph-rag.md",
+    "path": "user-a/literature-card-graph-rag.md",
+    "citationId": "u101-lit-graph-rag-001",
+    "expectedChunkHints": ["GraphRAG", "Edge-conditioned retrieval", "DOI 10.5555/graph-rag.2025"]
+  },
+  {
+    "documentId": 1004,
+    "userId": 101,
+    "projectId": null,
+    "visibility": "PRIVATE",
+    "sourceType": "PAPER_DRAFT",
+    "versionStatus": "SUPERSEDED",
+    "lineageId": "paper-delta-graph-rag",
+    "filename": "outdated-draft.md",
+    "path": "user-a/outdated-draft.md",
+    "citationId": "u101-paper-outdated-001",
+    "expectedChunkHints": ["obsolete draft", "Recall@5 0.62", "do not use this draft"]
+  },
+  {
+    "documentId": 1005,
+    "userId": 101,
+    "projectId": null,
+    "visibility": "PRIVATE",
+    "sourceType": "LAB_NOTE",
+    "versionStatus": "DELETED",
+    "lineageId": "deleted-rewrite-threshold",
+    "filename": "deleted-method-note.md",
+    "path": "user-a/deleted-method-note.md",
+    "citationId": "u101-deleted-note-001",
+    "expectedChunkHints": ["DELETED fixture", "rewrite risk threshold 0.93"]
+  },
+  {
+    "documentId": 2001,
+    "userId": 202,
+    "projectId": null,
+    "visibility": "PRIVATE",
+    "sourceType": "LAB_NOTE",
+    "versionStatus": "ACTIVE",
+    "lineageId": "user-b-private-deadline",
+    "filename": "private-deadline.md",
+    "path": "user-b/private-deadline.md",
+    "citationId": "u202-private-deadline-001",
+    "expectedChunkHints": ["private benchmark deadline", "2026-09-18"]
+  },
+  {
+    "documentId": 3001,
+    "userId": null,
+    "projectId": null,
+    "visibility": "PUBLIC",
+    "sourceType": "PUBLIC_NOTE",
+    "versionStatus": "ACTIVE",
+    "lineageId": "public-rag-note",
+    "filename": "public-rag-note.md",
+    "path": "shared/public-rag-note.md",
+    "citationId": "public-rag-note-001",
+    "expectedChunkHints": ["citation coverage", "faithfulness", "public guidance"]
+  }
+]
