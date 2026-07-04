@@ -15,6 +15,9 @@ public class AgentToolPolicyEngine {
     private static final String SEARCH_WEB = "search_web";
     private static final String SEARCH_LITERATURE = "search_literature";
     private static final String SEARCH_KNOWLEDGE = "search_knowledge";
+    private static final String PAPER_POLISH_STATUS = "paper_polish_status";
+    private static final String PAPER_POLISH_RESULT = "paper_polish_result";
+    private static final String PAPER_TASK_CANCEL = "paper_task_cancel";
 
     private final ToolRegistry toolRegistry;
 
@@ -61,15 +64,33 @@ public class AgentToolPolicyEngine {
                 "\u836f\u7269", "\u764c", "\u8840\u764c", "\u767d\u8840\u75c5", "\u7cd6\u5c3f\u75c5",
                 "medical", "medicine", "health", "disease", "symptom", "diagnosis", "treatment",
                 "diabetes", "leukemia", "cancer", "pathogenesis", "mechanism");
+        boolean paperTaskIntent = containsAny(normalized,
+                "\u8bba\u6587\u4efb\u52a1", "\u6da6\u8272\u4efb\u52a1", "\u8bba\u6587\u6da6\u8272\u8fdb\u5ea6",
+                "\u6da6\u8272\u8fdb\u5ea6", "\u8bba\u6587\u8fdb\u5ea6", "\u4efb\u52a1\u72b6\u6001",
+                "\u8bba\u6587\u7ed3\u679c", "\u6da6\u8272\u7ed3\u679c", "\u5bfc\u51fa\u8bba\u6587",
+                "paper task", "polish task", "paper polish", "polish status", "polish result");
+        boolean paperCancelIntent = paperTaskIntent && containsAny(normalized,
+                "\u53d6\u6d88", "\u505c\u6b62", "\u7ec8\u6b62", "\u4e0d\u8981\u7ee7\u7eed",
+                "cancel", "stop", "abort");
+        boolean paperResultIntent = paperTaskIntent && containsAny(normalized,
+                "\u7ed3\u679c", "\u4ea7\u7269", "\u4e0b\u8f7d", "\u5bfc\u51fa", "\u62a5\u544a",
+                "result", "artifact", "download", "export", "report");
+        if (paperTaskIntent) {
+            literatureIntent = false;
+        }
 
         addIfRegistered(allowed, registeredTools, knowledgeIntent, SEARCH_KNOWLEDGE);
         addIfRegistered(allowed, registeredTools, literatureIntent, SEARCH_LITERATURE);
-        addIfRegistered(allowed, registeredTools, (explicitSearch || currentIntent || healthIntent) && !literatureIntent, SEARCH_WEB);
+        addIfRegistered(allowed, registeredTools, (explicitSearch || currentIntent || healthIntent) && !literatureIntent && !paperTaskIntent, SEARCH_WEB);
+        addIfRegistered(allowed, registeredTools, paperTaskIntent, PAPER_POLISH_STATUS);
+        addIfRegistered(allowed, registeredTools, paperResultIntent, PAPER_POLISH_RESULT);
+        addIfRegistered(allowed, registeredTools, paperCancelIntent, PAPER_TASK_CANCEL);
 
         int maxToolCalls = allowed.isEmpty()
                 ? 0
+                : allowed.stream().anyMatch(tool -> tool.startsWith("paper_")) ? Math.min(3, allowed.size())
                 : allowed.contains(SEARCH_WEB) && allowed.size() == 1 ? 1 : 2;
-        return new Decision(List.copyOf(allowed), maxToolCalls, 1, reason(allowed, explicitSearch, currentIntent, literatureIntent, knowledgeIntent, healthIntent));
+        return new Decision(List.copyOf(allowed), maxToolCalls, 1, reason(allowed, explicitSearch, currentIntent, literatureIntent, knowledgeIntent, healthIntent, paperTaskIntent));
     }
 
     private void addIfRegistered(Set<String> allowed, Set<String> registeredTools, boolean condition, String toolName) {
@@ -83,7 +104,8 @@ public class AgentToolPolicyEngine {
                           boolean currentIntent,
                           boolean literatureIntent,
                           boolean knowledgeIntent,
-                          boolean healthIntent) {
+                          boolean healthIntent,
+                          boolean paperTaskIntent) {
         if (allowed.isEmpty()) {
             return "direct_answer_no_tools";
         }
@@ -102,6 +124,9 @@ public class AgentToolPolicyEngine {
         }
         if (healthIntent) {
             reasons.add("health_or_medical");
+        }
+        if (paperTaskIntent) {
+            reasons.add("paper_task_intent");
         }
         return String.join("+", reasons);
     }

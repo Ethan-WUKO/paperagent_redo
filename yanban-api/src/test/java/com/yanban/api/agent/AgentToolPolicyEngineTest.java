@@ -84,11 +84,34 @@ class AgentToolPolicyEngineTest {
         assertThat(decision.reason()).isEqualTo("skill_allowlist");
     }
 
+    @Test
+    void paperTaskStatusRequestUsesPaperStatusToolOnly() {
+        AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry());
+
+        AgentToolPolicyEngine.Decision decision = engine.decide("\u67e5\u4e00\u4e0b\u8bba\u6587\u4efb\u52a1 101 \u7684\u8fdb\u5ea6", false, null);
+
+        assertThat(decision.allowedTools()).containsExactly("paper_polish_status");
+        assertThat(decision.reason()).contains("paper_task_intent");
+    }
+
+    @Test
+    void paperTaskCancelRequestUsesStatusAndCancelToolsWithoutLiteratureSearch() {
+        AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry());
+
+        AgentToolPolicyEngine.Decision decision = engine.decide("\u5e2e\u6211\u53d6\u6d88\u8bba\u6587\u4efb\u52a1 101", false, null);
+
+        assertThat(decision.allowedTools()).containsExactly("paper_polish_status", "paper_task_cancel");
+        assertThat(decision.allowedTools()).doesNotContain("search_literature");
+    }
+
     private ToolRegistry registry() {
         return new ToolRegistry()
                 .register(new StubTool("search_web"))
                 .register(new StubTool("search_literature"))
-                .register(new StubTool("search_knowledge"));
+                .register(new StubTool("search_knowledge"))
+                .register(new StubTool("paper_polish_status"))
+                .register(new StubTool("paper_polish_result"))
+                .register(new StubTool("paper_task_cancel"));
     }
 
     private class StubTool implements ToolExecutor {
