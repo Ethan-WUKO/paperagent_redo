@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <AppLayout>
     <div class="paper-page workbench-page scholar-page scholar-page--paper">
       <section class="workbench-hero">
@@ -231,7 +231,7 @@
             <div v-if="literatureSupportCards.length > 0" class="paper-evidence-grid-v2">
               <article v-for="card in literatureSupportCards" :key="card.id" class="paper-evidence-card-v2">
                 <strong>{{ card.title }}</strong>
-                <span>{{ card.authors || 'Unknown authors' }} · {{ card.publicationYear || '-' }} · {{ card.venue || '-' }}</span>
+                <span>{{ card.authors || 'Unknown authors' }} 路 {{ card.publicationYear || '-' }} 路 {{ card.venue || '-' }}</span>
                 <p>{{ card.citationCount == null ? 'Citation metadata unavailable.' : `${card.citationCount} citations found in metadata.` }}</p>
                 <div>
                   <NTag size="small" type="success">Evidence</NTag>
@@ -255,7 +255,7 @@
               <article v-for="card in literatureSupportCards" :key="`support-${card.id}`" class="paper-support-card-v2">
                 <div>
                   <strong>{{ card.title }}</strong>
-                  <span>{{ card.authors || 'Unknown authors' }} · {{ card.publicationYear || '-' }}</span>
+                  <span>{{ card.authors || 'Unknown authors' }} 路 {{ card.publicationYear || '-' }}</span>
                   <p>{{ card.venue || 'Venue unavailable' }}</p>
                 </div>
                 <NTag type="success" size="small">Support</NTag>
@@ -276,7 +276,7 @@
                 <span>{{ artifactDisplayName(artifact).slice(0, 2).toUpperCase() }}</span>
                 <div>
                   <strong>{{ artifactDisplayName(artifact) }}</strong>
-                  <small>v{{ artifact.version }} · {{ formatDateTime(artifact.createdAt) }}</small>
+                  <small>v{{ artifact.version }} 路 {{ formatDateTime(artifact.createdAt) }}</small>
                 </div>
               </article>
               <NEmpty v-if="exportArtifacts.length === 0" description="No export artifacts yet." />
@@ -356,7 +356,7 @@
               <div v-for="section in sections" :key="section.id" class="paper-section-role-row">
                 <div>
                   <strong>{{ section.orderIndex + 1 }}. {{ section.title }}</strong>
-                  <small>{{ section.roleSource || 'auto' }} · confidence {{ formatConfidence(section.roleConfidence) }}</small>
+                  <small>{{ section.roleSource || 'auto' }} 路 confidence {{ formatConfidence(section.roleConfidence) }}</small>
                 </div>
                 <NSelect :value="section.role" :options="sectionRoleOptions" size="small" @update:value="(role) => handleSectionRoleChange(section.id, role)" />
               </div>
@@ -371,14 +371,14 @@
                 <NButton :type="previewMode === 'advanced' ? 'primary' : 'default'" size="small" @click="previewMode = 'advanced'">Diff + cite patch</NButton>
               </NButtonGroup>
               <div v-for="section in previewSections" :key="`preview-${section.id}`" class="paper-diff-card">
-                <div class="paper-diff-card__title">{{ section.orderIndex + 1 }}. {{ section.title }} · {{ section.polishStatus || 'NOT_POLISHED' }}</div>
+                <div class="paper-diff-card__title">{{ section.orderIndex + 1 }}. {{ section.title }} 路 {{ section.polishStatus || 'NOT_POLISHED' }}</div>
                 <pre v-if="section.diffJson" class="paper-code-preview">{{ prettyJson(section.diffJson) }}</pre>
                 <pre v-else-if="section.reviewJson" class="paper-code-preview">{{ prettyJson(section.reviewJson) }}</pre>
               </div>
               <div v-for="suggestion in suggestions" :key="suggestion.id" class="paper-suggestion-card" :class="`paper-suggestion-card--${suggestion.honestyGrade}`">
-                <strong>{{ suggestion.category }} · {{ suggestion.severity || '-' }}</strong>
+                <strong>{{ suggestion.category }} 路 {{ suggestion.severity || '-' }}</strong>
                 <p>{{ suggestion.statement }}</p>
-                <small>{{ suggestion.honestyReason }} · evidence {{ suggestion.evidenceCount }} · {{ suggestion.track }} · {{ suggestion.status }}</small>
+                <small>{{ suggestion.honestyReason }} 路 evidence {{ suggestion.evidenceCount }} 路 {{ suggestion.track }} 路 {{ suggestion.status }}</small>
                 <pre v-if="suggestion.patchJson && previewMode === 'advanced'" class="paper-code-preview">{{ prettyJson(suggestion.patchJson) }}</pre>
               </div>
               <NEmpty v-if="suggestions.length === 0 && previewSections.length === 0" description="No preview results yet." />
@@ -389,7 +389,7 @@
             <div class="paper-report-panel">
               <div v-for="card in bibliographyCards" :key="`bib-${card.id}`" class="paper-bib-card">
                 <strong>{{ card.title }}</strong>
-                <small>{{ card.authors || 'Unknown authors' }} · {{ card.publicationYear || '-' }} · {{ card.venue || '-' }}</small>
+                <small>{{ card.authors || 'Unknown authors' }} 路 {{ card.publicationYear || '-' }} 路 {{ card.venue || '-' }}</small>
                 <div class="paper-bib-card__links">
                   <a v-if="card.doi" :href="doiUrl(card.doi)" target="_blank" rel="noreferrer">DOI: {{ card.doi }}</a>
                   <a v-if="card.url" :href="card.url" target="_blank" rel="noreferrer">URL</a>
@@ -616,13 +616,13 @@
                         </NTag>
                       </div>
                       <NAlert v-if="pendingBlockingClarifications.length > 0" type="warning" title="需要你的确认">
-                        阻塞类问题必须回答。默认选择“保持原样”，避免误重构论文结构。
+                        阻塞型问题必须先回答。默认选项会优先保持原结构，避免任务跑偏。
                       </NAlert>
                       <div v-for="item in clarifications" :key="item.id" class="paper-clarification-item">
                         <div class="paper-clarification-item__title">
                           <span>{{ clarificationQuestion(item).message || item.type }}</span>
                           <NTag size="small" :type="clarificationQuestion(item).blocking ? 'error' : 'info'">
-                            {{ clarificationQuestion(item).blocking ? '必须答' : '可跳过' }}
+                            {{ clarificationQuestion(item).blocking ? '必须回答' : '可跳过' }}
                           </NTag>
                         </div>
                         <div class="paper-clarification-item__meta">
@@ -656,7 +656,7 @@
                       <div v-for="section in sections" :key="section.id" class="paper-section-role-row">
                         <div>
                           <strong>{{ section.orderIndex + 1 }}. {{ section.title }}</strong>
-                          <small>{{ section.roleSource || 'auto' }} · confidence {{ formatConfidence(section.roleConfidence) }}</small>
+                          <small>{{ section.roleSource || 'auto' }} 路 confidence {{ formatConfidence(section.roleConfidence) }}</small>
                         </div>
                         <NSelect :value="section.role" :options="sectionRoleOptions" size="small" @update:value="(role) => handleSectionRoleChange(section.id, role)" />
                       </div>
@@ -673,15 +673,15 @@
                         <NTag size="small" type="info">已采纳 {{ acceptedSuggestions.length }}</NTag>
                       </div>
                       <NButtonGroup>
-                        <NButton :type="previewMode === 'basic' ? 'primary' : 'default'" size="small" @click="previewMode = 'basic'">基础版：只推荐</NButton>
-                        <NButton :type="previewMode === 'advanced' ? 'primary' : 'default'" size="small" @click="previewMode = 'advanced'">进阶版：改原文 + 补 cite</NButton>
+                        <NButton :type="previewMode === 'basic' ? 'primary' : 'default'" size="small" @click="previewMode = 'basic'">基础版：只看建议</NButton>
+                        <NButton :type="previewMode === 'advanced' ? 'primary' : 'default'" size="small" @click="previewMode = 'advanced'">进阶版：Diff + cite patch</NButton>
                       </NButtonGroup>
                       <NAlert :type="previewMode === 'basic' ? 'info' : 'warning'" :title="previewMode === 'basic' ? '基础版预览' : '进阶版预览'">
-                        {{ previewMode === 'basic' ? '仅展示建议、review 与 suggested.bib，不直接改写原文。' : '只会采纳 A 类且 evidence 真实可追溯的候选补丁；B 类仅作为骨架/批评展示。' }}
+                        {{ previewMode === 'basic' ? '只展示建议、review 和 suggested.bib，不直接改写原文。' : '只会采纳 A 类且 evidence 真实可追溯的补丁；B 类仅作为骨架和批评展示。' }}
                       </NAlert>
                       <NEmpty v-if="suggestions.length === 0 && previewSections.length === 0" description="暂无 diff 或建议结果" />
                       <div v-for="section in previewSections" :key="`preview-${section.id}`" class="paper-diff-card">
-                        <div class="paper-diff-card__title">{{ section.orderIndex + 1 }}. {{ section.title }} · {{ section.polishStatus || 'NOT_POLISHED' }}</div>
+                        <div class="paper-diff-card__title">{{ section.orderIndex + 1 }}. {{ section.title }} 路 {{ section.polishStatus || 'NOT_POLISHED' }}</div>
                         <pre v-if="section.diffJson" class="paper-code-preview">{{ prettyJson(section.diffJson) }}</pre>
                         <pre v-else-if="section.reviewJson" class="paper-code-preview">{{ prettyJson(section.reviewJson) }}</pre>
                       </div>
@@ -692,11 +692,11 @@
                           </NCheckbox>
                           <NTag :type="suggestion.honestyGrade === 'A' ? 'success' : 'warning'" size="small">{{ suggestion.honestyGrade }} 类</NTag>
                         </div>
-                        <strong>{{ suggestion.category }} · {{ suggestion.severity || '-' }}</strong>
+                        <strong>{{ suggestion.category }} 路 {{ suggestion.severity || '-' }}</strong>
                         <p>{{ suggestion.statement }}</p>
-                        <small>{{ suggestion.honestyReason }} · evidence {{ suggestion.evidenceCount }} · {{ suggestion.track }} · {{ suggestion.status }}</small>
+                        <small>{{ suggestion.honestyReason }} 路 evidence {{ suggestion.evidenceCount }} 路 {{ suggestion.track }} 路 {{ suggestion.status }}</small>
                         <pre v-if="suggestion.patchJson && previewMode === 'advanced'" class="paper-code-preview">{{ prettyJson(suggestion.patchJson) }}</pre>
-                        <NButton v-if="suggestion.status !== 'REJECTED'" size="tiny" tertiary @click="updateSuggestionStatus(suggestion, 'REJECTED')">拒绝</NButton>
+                          <NButton v-if="suggestion.status !== 'REJECTED'" size="tiny" tertiary @click="updateSuggestionStatus(suggestion, 'REJECTED')">拒绝</NButton>
                       </div>
                     </div>
                   </div>
@@ -715,7 +715,7 @@
                         <div v-for="(slot, slotIndex) in citationSlots" :key="slot.id || slotIndex" class="paper-bib-card">
                           <strong>{{ slot.category || `Slot ${slotIndex + 1}` }}</strong>
                           <p>{{ slot.claim }}</p>
-                          <small>需要：{{ slot.citationNeed || 'NEEDS_SUPPORT' }} · 原有引用：{{ Array.isArray(slot.existingCitationKeys) && slot.existingCitationKeys.length ? slot.existingCitationKeys.join(', ') : '无/未识别' }}</small>
+                          <small>需要：{{ slot.citationNeed || 'NEEDS_SUPPORT' }} · 原有引用：{{ Array.isArray(slot.existingCitationKeys) && slot.existingCitationKeys.length ? slot.existingCitationKeys.join(', ') : '尚未识别' }}</small>
                           <div class="paper-bib-card__links">
                             <span v-for="query in (slot.queries || [])" :key="query">{{ query }}</span>
                           </div>
@@ -738,7 +738,7 @@
                         <div class="paper-panel-heading"><strong>推荐文献列表</strong><span>请投稿前逐条核验</span></div>
                         <div v-for="card in bibliographyCards" :key="`bib-${card.id}`" class="paper-bib-card">
                           <strong>{{ card.title }}</strong>
-                          <small>{{ card.authors || 'Unknown authors' }} · {{ card.publicationYear || '-' }} · {{ card.venue || '-' }}</small>
+                          <small>{{ card.authors || 'Unknown authors' }} 路 {{ card.publicationYear || '-' }} 路 {{ card.venue || '-' }}</small>
                           <div class="paper-bib-card__links">
                             <a v-if="card.doi" :href="doiUrl(card.doi)" target="_blank" rel="noreferrer">DOI: {{ card.doi }}</a>
                             <a v-if="card.url" :href="card.url" target="_blank" rel="noreferrer">URL</a>
@@ -804,7 +804,6 @@ import {
   getPaperTasks,
   pausePaperTask,
   resumePaperTask,
-  stopPaperTask,
   updatePaperSectionRole,
   updatePaperSuggestionStatus,
   type PaperAnalysisResponse,
@@ -816,6 +815,7 @@ import {
   type PaperTaskHistoryResponse,
   type PaperTaskResponse,
 } from '@/api/paper';
+import { cancelTask, getTaskStatus, type TaskStatusResponse } from '@/api/task';
 import { ui } from '@/ui';
 
 const route = useRoute();
@@ -841,6 +841,7 @@ const suggestionSubmitting = ref<number | null>(null);
 const clarificationAnswers = reactive<Record<number, string>>({});
 const clarificationSubmitting = ref(false);
 const sseStatus = ref<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle');
+const taskStatus = ref<TaskStatusResponse | null>(null);
 let abortController: AbortController | null = null;
 
 const form = reactive({
@@ -875,7 +876,12 @@ const sectionRoleOptions = [
 const currentTaskId = computed(() => currentTask.value?.id ?? null);
 const canPause = computed(() => currentTask.value?.status === 'RUNNING');
 const canResume = computed(() => currentTask.value?.status === 'PAUSED');
-const canStop = computed(() => ['PENDING', 'RUNNING', 'PAUSED'].includes(currentTask.value?.status || ''));
+const canStop = computed(() => {
+  if (taskStatus.value) {
+    return taskStatus.value.cancellable;
+  }
+  return ['PENDING', 'RUNNING', 'PAUSED', 'CANCEL_REQUESTED', 'CANCELLING'].includes(currentTask.value?.status || '');
+});
 const downloadableArtifactTypes = ['polished_tex', 'suggested_bib', 'suggested_bib_novel', 'review_report', 'retrieved_literature_json', 'retrieved_literature_md'];
 const hasDownloadableArtifacts = computed(() => artifacts.value.some((item) => downloadableArtifactTypes.includes(item.type)));
 const canDownload = computed(() => (Boolean(currentTask.value?.finalObjectKey) || hasDownloadableArtifacts.value) && !downloading.value);
@@ -982,6 +988,7 @@ async function startNewPaperTask() {
   abortController?.abort();
   abortController = null;
   currentTask.value = null;
+  taskStatus.value = null;
   events.value = [];
   clarifications.value = [];
   sections.value = [];
@@ -1090,8 +1097,15 @@ async function loadTask(taskId: number, autoConnect = false) {
   try {
     const { data } = await getPaperTask(taskId);
     currentTask.value = data;
+    try {
+      const unified = await getTaskStatus(taskId, 'paper_polish');
+      taskStatus.value = unified.data;
+    } catch {
+      taskStatus.value = null;
+    }
     await loadClarificationsAndSections(taskId);
-    if (autoConnect && ['PENDING', 'RUNNING', 'PAUSED', 'WAITING_INPUT'].includes(data.status)) {
+    const effectiveStatus = taskStatus.value?.status || data.status;
+    if (autoConnect && ['PENDING', 'RUNNING', 'PAUSED', 'WAITING_INPUT', 'CANCEL_REQUESTED', 'CANCELLING'].includes(effectiveStatus)) {
       connectSse();
     }
   } catch (error: any) {
@@ -1227,8 +1241,22 @@ async function handleResume() {
 
 async function handleStop() {
   if (!currentTaskId.value) return;
-  await stopPaperTask(currentTaskId.value);
-  await refreshTask();
+  try {
+    const { data } = await cancelTask(currentTaskId.value, {
+      taskType: 'paper_polish',
+      cancelReason: 'user requested stop',
+    });
+    if (data.cancelAccepted) {
+      ui.message.success(`停止请求已提交 (${data.beforeStatus} -> ${data.afterStatus})`);
+    } else {
+      ui.message.info(data.message || '任务已处于终态，无法再次停止');
+    }
+    abortController?.abort();
+    sseStatus.value = 'closed';
+    await refreshTask();
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '停止请求失败');
+  }
 }
 
 async function handleDownload() {
@@ -1292,7 +1320,8 @@ function formatFileSize(value: number) {
 
 function statusTagType(status: string) {
   if (status === 'COMPLETED') return 'success';
-  if (status === 'FAILED' || status === 'STOPPED') return 'error';
+  if (status === 'FAILED' || status === 'STOPPED' || status === 'CANCELLED') return 'error';
+  if (status === 'CANCEL_REQUESTED' || status === 'CANCELLING') return 'warning';
   if (status === 'RUNNING' || status === 'PENDING') return 'info';
   if (status === 'PAUSED' || status === 'WAITING_INPUT') return 'warning';
   return 'default';
@@ -1500,3 +1529,4 @@ function formatDateTime(value: string) {
   return new Date(value).toLocaleString('zh-CN');
 }
 </script>
+

@@ -2,6 +2,7 @@ package com.yanban.api.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -100,6 +101,42 @@ class AgentTaskEventServiceTest {
         assertThat(service.listEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, null, 999)).isEmpty();
 
         verify(events).listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, null, 500);
+    }
+
+    @Test
+    void streamEventsRejectsInvalidPollIntervalBeforeStartingStream() {
+        when(literatureTasks.getTask(USER_ID, TASK_ID)).thenReturn(mock(LiteratureSearchTask.class));
+        assertThatThrownBy(() -> service.streamEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, null, 20, 10L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void streamEventsRejectsInvalidCursorBeforeOwnershipLookup() {
+        assertThatThrownBy(() -> service.streamEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, -1L, 20, 1000L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verifyNoInteractions(literatureTasks);
+        verifyNoInteractions(paperTasks);
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void streamEventsStartsWithHistoricalQueryAfterOwnershipCheck() {
+        AgentTaskEvent created = event(1L, "TASK_CREATED", Instant.parse("2026-07-04T01:00:00Z"));
+        when(literatureTasks.getTask(USER_ID, TASK_ID)).thenReturn(mock(LiteratureSearchTask.class));
+        when(events.listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID)).thenReturn(List.of(created));
+        when(events.listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, 1L, 100))
+                .thenReturn(List.of());
+
+        service.streamEvents(USER_ID, "literature-search", TASK_ID, null, null, null);
+
+        verify(events, timeout(1000)).listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID);
     }
 
     @Test
