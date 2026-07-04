@@ -27,6 +27,19 @@ export interface TaskCancelRequest {
   cancelReason?: string;
 }
 
+export interface TaskEventResponse {
+  id: number;
+  taskType: string;
+  taskId: number;
+  userId: number;
+  eventType: string;
+  stage: string | null;
+  status: string;
+  message: string | null;
+  payloadJson: string | null;
+  createdAt: string;
+}
+
 export function cancelTask(taskId: number, request?: TaskCancelRequest) {
   return http.post<TaskCancelResponse>(`/tasks/${taskId}/cancel`, request ?? {});
 }
@@ -34,6 +47,15 @@ export function cancelTask(taskId: number, request?: TaskCancelRequest) {
 export function getTaskStatus(taskId: number, taskType?: string) {
   return http.get<TaskStatusResponse>(`/tasks/${taskId}/status`, {
     params: taskType ? { taskType } : undefined,
+  });
+}
+
+export function listTaskEvents(taskId: number, taskType: string, afterEventId?: number, limit?: number) {
+  return http.get<TaskEventResponse[]>(`/agent/tasks/${taskType}/${taskId}/events`, {
+    params: {
+      ...(afterEventId != null ? { afterEventId } : {}),
+      ...(limit != null ? { limit } : {}),
+    },
   });
 }
 

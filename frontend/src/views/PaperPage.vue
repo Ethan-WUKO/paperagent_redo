@@ -811,15 +811,16 @@ import {
   type PaperClarificationResponse,
   type PaperSectionResponse,
   type PaperSuggestionResponse,
-  type PaperSseEvent,
   type PaperTaskHistoryResponse,
   type PaperTaskResponse,
 } from '@/api/paper';
-import { cancelTask, getTaskStatus, type TaskStatusResponse } from '@/api/task';
+import { cancelTask, getTaskStatus, listTaskEvents, type TaskEventResponse, type TaskStatusResponse } from '@/api/task';
 import { ui } from '@/ui';
 
 const route = useRoute();
 const router = useRouter();
+const PAPER_TASK_TYPE = 'paper_polish';
+const TERMINAL_TASK_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT']);
 const texInputRef = ref<HTMLInputElement | null>(null);
 const bibInputRef = ref<HTMLInputElement | null>(null);
 const selectedTexFile = ref<File | null>(null);
@@ -827,7 +828,7 @@ const selectedBibFile = ref<File | null>(null);
 const submitting = ref(false);
 const downloading = ref(false);
 const currentTask = ref<PaperTaskResponse | null>(null);
-const events = ref<PaperSseEvent[]>([]);
+const events = ref<PaperTimelineEvent[]>([]);
 const clarifications = ref<PaperClarificationResponse[]>([]);
 const sections = ref<PaperSectionResponse[]>([]);
 const suggestions = ref<PaperSuggestionResponse[]>([]);
@@ -842,6 +843,7 @@ const clarificationAnswers = reactive<Record<number, string>>({});
 const clarificationSubmitting = ref(false);
 const sseStatus = ref<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle');
 const taskStatus = ref<TaskStatusResponse | null>(null);
+const lastTaskEventId = ref<number | null>(null);
 let abortController: AbortController | null = null;
 
 const form = reactive({
@@ -930,13 +932,13 @@ const legacyStageAlias: Record<string, string> = {
 };
 const progressPercent = computed(() => {
   if (currentTask.value?.status === 'COMPLETED') return 100;
-  if (currentTask.value?.status === 'FAILED' || currentTask.value?.status === 'STOPPED') return latestProgressEvent.value?.progressPercent ?? 0;
+  if (currentTask.value?.status === 'FAILED' || currentTask.value?.status === 'STOPPED' || currentTask.value?.status === 'CANCELLED') return latestProgressEvent.value?.progressPercent ?? 0;
   if (latestProgressEvent.value?.progressPercent != null) return clampProgress(latestProgressEvent.value.progressPercent);
   const index = stageSteps.findIndex((step) => step.stage === normalizedCurrentStage.value);
   return index >= 0 ? Math.round((index / Math.max(stageSteps.length - 1, 1)) * 100) : 0;
 });
 const normalizedCurrentStage = computed(() => normalizeStage(latestProgressEvent.value?.stage || currentTask.value?.currentStage || null));
-const currentStageLabel = computed(() => stageLabel(currentTask.value?.currentStage || latestProgressEvent.value?.stage || null));
+const currentStageLabel = computed(() => stageLabel(normalizedCurrentStage.value));
 const sectionProgressText = computed(() => {
   const event = latestProgressEvent.value;
   if (!event?.currentSection || !event.totalSections) return '暂无章节进度';
@@ -974,7 +976,7 @@ watch(
   async (value) => {
     const taskId = Number(value);
     if (!Number.isNaN(taskId) && taskId > 0 && taskId !== currentTaskId.value) {
-      events.value = [];
+      resetTaskEvents();
       await loadTask(taskId, true);
     }
   },
@@ -989,7 +991,7 @@ async function startNewPaperTask() {
   abortController = null;
   currentTask.value = null;
   taskStatus.value = null;
-  events.value = [];
+  resetTaskEvents();
   clarifications.value = [];
   sections.value = [];
   suggestions.value = [];
@@ -1042,7 +1044,7 @@ async function handleSubmit() {
     formData.append('literatureOnly', String(form.literatureOnly));
     const { data } = await createPaperTask(formData);
     currentTask.value = data;
-    events.value = [];
+    resetTaskEvents();
     clarifications.value = [];
     sections.value = [];
     suggestions.value = [];
@@ -1098,10 +1100,13 @@ async function loadTask(taskId: number, autoConnect = false) {
     const { data } = await getPaperTask(taskId);
     currentTask.value = data;
     try {
-      const unified = await getTaskStatus(taskId, 'paper_polish');
+      const unified = await getTaskStatus(taskId, PAPER_TASK_TYPE);
       taskStatus.value = unified.data;
     } catch {
       taskStatus.value = null;
+    }
+    if (events.value.length === 0) {
+      await loadTaskEventHistory(taskId);
     }
     await loadClarificationsAndSections(taskId);
     const effectiveStatus = taskStatus.value?.status || data.status;
@@ -1161,13 +1166,16 @@ function connectSse() {
     ui.message.error('未登录');
     return;
   }
-  void streamPaperEvents(currentTaskId.value, token, abortController.signal);
+  void streamTaskEvents(currentTaskId.value, token, abortController.signal, lastTaskEventId.value);
 }
 
-async function streamPaperEvents(taskId: number, token: string, signal: AbortSignal) {
+async function streamTaskEvents(taskId: number, token: string, signal: AbortSignal, afterEventId: number | null) {
   try {
-    const response = await fetch(`/api/v1/paper/events?taskId=${taskId}`, {
-      headers: { Authorization: `Bearer ${token}` },
+    const response = await fetch(`/api/v1/agent/tasks/${PAPER_TASK_TYPE}/${taskId}/events/stream`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(afterEventId != null ? { 'Last-Event-ID': String(afterEventId) } : {}),
+      },
       signal,
     });
     if (!response.ok || !response.body) {
@@ -1184,14 +1192,12 @@ async function streamPaperEvents(taskId: number, token: string, signal: AbortSig
       const chunks = buffer.split('\n\n');
       buffer = chunks.pop() || '';
       for (const chunk of chunks) {
-        const event = parseSseChunk(chunk);
+        const event = parseTaskEventChunk(chunk);
         if (event) {
-          events.value.push(event);
+          appendTaskEvents([event]);
+          applyTaskEventToTaskState(event);
           await loadTask(taskId, false);
-          if (['clarification_needed', 'clarification_resolved'].includes(event.type)) {
-            await loadClarificationsAndSections(taskId);
-          }
-          if (['complete', 'error', 'paused'].includes(event.type)) {
+          if (isTerminalTaskEvent(event)) {
             await loadHistory();
             abortController?.abort();
             sseStatus.value = 'closed';
@@ -1200,6 +1206,7 @@ async function streamPaperEvents(taskId: number, token: string, signal: AbortSig
         }
       }
     }
+    sseStatus.value = signal.aborted ? 'closed' : 'closed';
   } catch (error: any) {
     if (error.name !== 'AbortError') {
       sseStatus.value = 'error';
@@ -1210,17 +1217,28 @@ async function streamPaperEvents(taskId: number, token: string, signal: AbortSig
   }
 }
 
-function parseSseChunk(chunk: string): PaperSseEvent | null {
+function parseTaskEventChunk(chunk: string): PaperTimelineEvent | null {
   const lines = chunk.split('\n');
+  let idText = '';
   let data = '';
   for (const line of lines) {
+    if (line.startsWith(':')) {
+      continue;
+    }
+    if (line.startsWith('id:')) {
+      idText = line.slice(3).trim();
+    }
     if (line.startsWith('data:')) {
       data += line.slice(5).trim();
     }
   }
   if (!data) return null;
   try {
-    return JSON.parse(data) as PaperSseEvent;
+    const parsed = JSON.parse(data) as TaskEventResponse;
+    if (idText && parsed.id == null) {
+      parsed.id = Number(idText);
+    }
+    return normalizeTaskEvent(parsed);
   } catch {
     return null;
   }
@@ -1243,7 +1261,7 @@ async function handleStop() {
   if (!currentTaskId.value) return;
   try {
     const { data } = await cancelTask(currentTaskId.value, {
-      taskType: 'paper_polish',
+      taskType: PAPER_TASK_TYPE,
       cancelReason: 'user requested stop',
     });
     if (data.cancelAccepted) {
@@ -1251,9 +1269,15 @@ async function handleStop() {
     } else {
       ui.message.info(data.message || '任务已处于终态，无法再次停止');
     }
-    abortController?.abort();
-    sseStatus.value = 'closed';
     await refreshTask();
+    if (data.cancelAccepted && !TERMINAL_TASK_STATUSES.has(data.afterStatus)) {
+      if (sseStatus.value !== 'connected') {
+        connectSse();
+      }
+    } else {
+      abortController?.abort();
+      sseStatus.value = 'closed';
+    }
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || '停止请求失败');
   }
@@ -1445,7 +1469,7 @@ function formatConfidence(value: number | null) {
   return `${Math.round(value * 100)}%`;
 }
 
-function hasProgressMeta(event: PaperSseEvent) {
+function hasProgressMeta(event: PaperTimelineEvent) {
   return event.progressPercent != null || event.currentSection != null || event.attempt != null || Boolean(event.stage);
 }
 
@@ -1465,6 +1489,9 @@ function stageLabel(stage: string | null) {
     POLISH: '分章润色',
     ASSEMBLE: '三件套组装',
     COMPLETE: '完成',
+    CANCEL_REQUESTED: '等待取消',
+    CANCELLING: '正在取消',
+    CANCELLED: '已取消',
     STOPPED: '已停止',
     FAILED: '失败',
     PENDING: '等待中',
@@ -1475,27 +1502,21 @@ function stageLabel(stage: string | null) {
 
 function eventDisplayType(type: string) {
   const labels: Record<string, string> = {
-    log: '日志',
-    summary_ready: '摘要完成',
-    sections: '章节开始',
-    outer_round: '外层轮次',
-    section_loop_start: '章节开始',
-    section_attempt: '章节尝试',
-    section_polished: '章节润色完成',
-    section_review_done: '章节审查完成',
-    paper_review_done: '跨章审查完成',
-    review: '审查/摘要',
-    references_ready: '文献结果',
-    clarification_needed: '需要结构确认',
-    clarification_resolved: '结构确认完成',
-    paused: '已暂停',
-    complete: '完成',
-    error: '异常',
+    TASK_CREATED: '任务已创建',
+    STAGE_CHANGED: '阶段变更',
+    TASK_PAUSED: '已暂停',
+    TASK_RESUMED: '继续执行',
+    TASK_CANCEL_REQUESTED: '已提交停止',
+    TASK_CANCELLING: '正在安全停止',
+    TASK_CANCELLED: '已取消',
+    TASK_COMPLETED: '已完成',
+    TASK_FAILED: '执行失败',
+    ARTIFACT_MARKED_PARTIAL: '产物标记为部分结果',
   };
   return labels[type] || type;
 }
 
-function eventProgressHint(event: PaperSseEvent) {
+function eventProgressHint(event: PaperTimelineEvent) {
   const parts: string[] = [];
   if (event.currentSection && event.totalSections) {
     parts.push(`章节 ${event.currentSection}/${event.totalSections}`);
@@ -1527,6 +1548,111 @@ function clampProgress(value: number) {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('zh-CN');
+}
+
+type PaperTimelineEvent = {
+  id: number;
+  taskType: string;
+  taskId: number;
+  userId: number;
+  type: string;
+  stage: string | null;
+  status: string;
+  message: string;
+  payloadJson: string | null;
+  timestamp: string;
+  progressPercent: number | null;
+  currentSection: number | null;
+  totalSections: number | null;
+  sectionTitle: string | null;
+  attempt: number | null;
+  maxAttempts: number | null;
+};
+
+async function loadTaskEventHistory(taskId: number) {
+  try {
+    const { data } = await listTaskEvents(taskId, PAPER_TASK_TYPE);
+    appendTaskEvents(data.map(normalizeTaskEvent));
+  } catch {
+    // Keep the page usable even if the unified event history endpoint is temporarily unavailable.
+  }
+}
+
+function resetTaskEvents() {
+  events.value = [];
+  lastTaskEventId.value = null;
+}
+
+function appendTaskEvents(incoming: PaperTimelineEvent[]) {
+  if (incoming.length === 0) {
+    return;
+  }
+  const merged = new Map<number, PaperTimelineEvent>();
+  for (const event of events.value) {
+    merged.set(event.id, event);
+  }
+  for (const event of incoming) {
+    const existing = merged.get(event.id);
+    if (!existing || event.timestamp >= existing.timestamp) {
+      merged.set(event.id, event);
+    }
+  }
+  events.value = Array.from(merged.values()).sort((left, right) => left.id - right.id);
+  lastTaskEventId.value = events.value.at(-1)?.id ?? null;
+}
+
+function applyTaskEventToTaskState(event: PaperTimelineEvent) {
+  if (currentTask.value && currentTask.value.id === event.taskId) {
+    currentTask.value = {
+      ...currentTask.value,
+      status: event.status || currentTask.value.status,
+      currentStage: event.stage || currentTask.value.currentStage,
+      errorMessage: event.status === 'FAILED' ? event.message : currentTask.value.errorMessage,
+    };
+  }
+  if (taskStatus.value && taskStatus.value.taskId === event.taskId) {
+    taskStatus.value = {
+      ...taskStatus.value,
+      status: event.status || taskStatus.value.status,
+      currentStage: event.stage || taskStatus.value.currentStage,
+      terminal: TERMINAL_TASK_STATUSES.has(event.status),
+      cancellable: !TERMINAL_TASK_STATUSES.has(event.status) && !['CANCEL_REQUESTED', 'CANCELLING'].includes(event.status),
+    };
+  }
+}
+
+function normalizeTaskEvent(event: TaskEventResponse): PaperTimelineEvent {
+  const payload = parseJson<Record<string, unknown>>(event.payloadJson || '', {});
+  return {
+    id: event.id,
+    taskType: event.taskType,
+    taskId: event.taskId,
+    userId: event.userId,
+    type: event.eventType,
+    stage: event.stage,
+    status: event.status,
+    message: event.message || event.eventType,
+    payloadJson: event.payloadJson,
+    timestamp: event.createdAt,
+    progressPercent: numericPayloadValue(payload.progressPercent),
+    currentSection: numericPayloadValue(payload.currentSection),
+    totalSections: numericPayloadValue(payload.totalSections),
+    sectionTitle: stringPayloadValue(payload.sectionTitle),
+    attempt: numericPayloadValue(payload.attempt),
+    maxAttempts: numericPayloadValue(payload.maxAttempts),
+  };
+}
+
+function isTerminalTaskEvent(event: PaperTimelineEvent) {
+  return TERMINAL_TASK_STATUSES.has(event.status);
+}
+
+function numericPayloadValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function stringPayloadValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : null;
 }
 </script>
 
