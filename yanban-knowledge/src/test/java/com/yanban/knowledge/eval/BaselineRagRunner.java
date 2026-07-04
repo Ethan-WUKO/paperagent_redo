@@ -16,8 +16,14 @@ import java.util.Set;
 public class BaselineRagRunner {
 
     private final BaselineSearchBackend searchBackend;
+    private final String runnerName;
 
     public BaselineRagRunner(BaselineSearchBackend searchBackend) {
+        this("current-rag-baseline", searchBackend);
+    }
+
+    public BaselineRagRunner(String runnerName, BaselineSearchBackend searchBackend) {
+        this.runnerName = runnerName;
         this.searchBackend = searchBackend;
     }
 
@@ -27,7 +33,7 @@ public class BaselineRagRunner {
             results.add(evaluateCase(evalCase, searchBackend.search(evalCase)));
         }
         return new BaselineRagEvaluationResult(
-                "current-rag-baseline",
+                runnerName,
                 Instant.now(),
                 summarize(results),
                 results

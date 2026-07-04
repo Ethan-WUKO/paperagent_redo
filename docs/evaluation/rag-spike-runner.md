@@ -61,3 +61,25 @@ metadataPreservationRate
 ```
 
 后续 #15 的 LangChain4j adapter-only runner 必须输出兼容结构，方便 #16 汇总对照报告。
+
+## LangChain4j adapter-only runner
+
+`LangChain4jAdapterRagRunner` 位于同一 test/eval 包中，只用于 spike，不进入生产链路。
+
+当前实现：
+
+```text
+KnowledgeSearchService
+  -> KnowledgeSearchServiceContentRetriever
+  -> LangChain4j Content/TextSegment
+  -> LangChain4jAdapterRagRunner
+  -> BaselineRagEvaluationResult compatible JSON shape
+```
+
+该 runner 只验证 LangChain4j RAG adapter 层是否能保留 metadata 和统一结果结构，不做生产替换，也不重建 Elasticsearch index。
+
+验证命令：
+
+```powershell
+mvn -pl yanban-knowledge -am '-Dtest=BaselineRagRunnerTest,LangChain4jAdapterRagRunnerTest' '-Dsurefire.failIfNoSpecifiedTests=false' test
+```
