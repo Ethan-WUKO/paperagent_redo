@@ -3,9 +3,12 @@ package com.yanban.paper.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.yanban.core.agent.AgentTaskEventCreateRequest;
+import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.paper.domain.PaperSectionRepository;
 import com.yanban.paper.domain.PaperTask;
 import com.yanban.paper.domain.PaperTaskArtifactRepository;
@@ -32,12 +35,14 @@ class PaperOrchestratorCancellationTest {
 
     private PaperTaskRepository tasks;
     private PaperEventStreamService eventStreamService;
+    private AgentTaskEventRecorder taskEvents;
     private PaperOrchestrator orchestrator;
 
     @BeforeEach
     void setUp() {
         tasks = mock(PaperTaskRepository.class);
         eventStreamService = mock(PaperEventStreamService.class);
+        taskEvents = mock(AgentTaskEventRecorder.class);
         orchestrator = new PaperOrchestrator(
                 tasks,
                 mock(PaperTaskRoundRepository.class),
@@ -55,7 +60,8 @@ class PaperOrchestratorCancellationTest {
                 mock(PaperGapAnalysisService.class),
                 mock(PaperSectionPolishService.class),
                 mock(PaperAssembleService.class),
-                directExecutor()
+                directExecutor(),
+                taskEvents
         );
     }
 
@@ -70,6 +76,7 @@ class PaperOrchestratorCancellationTest {
         assertThat(task.getCurrentStage()).isEqualTo(PaperOrchestrator.STAGE_CANCELLED);
         assertThat(task.getErrorMessage()).isEqualTo("任务已取消");
         assertEventTypes("cancel_requested", "cancelled");
+        assertRecordedEventTypes("TASK_CANCEL_REQUESTED", "TASK_CANCELLED");
     }
 
     @Test
@@ -84,6 +91,7 @@ class PaperOrchestratorCancellationTest {
         assertThat(task.getCurrentStage()).isEqualTo("RETRIEVE");
         assertThat(task.getErrorMessage()).isNull();
         assertEventTypes("cancel_requested");
+        assertRecordedEventTypes("TASK_CANCEL_REQUESTED");
     }
 
     @Test
@@ -101,6 +109,7 @@ class PaperOrchestratorCancellationTest {
         assertThat(task.getStatus()).isEqualTo(PaperOrchestrator.STATUS_CANCELLING);
         assertThat(task.getCurrentStage()).isEqualTo("RETRIEVE");
         assertEventTypes("cancel_requested", "cancelling");
+        assertRecordedEventTypes("TASK_CANCEL_REQUESTED", "TASK_CANCELLING");
     }
 
     @Test
@@ -114,6 +123,7 @@ class PaperOrchestratorCancellationTest {
         assertThat(task.getCurrentStage()).isEqualTo(PaperOrchestrator.STAGE_CANCELLED);
         assertThat(task.getErrorMessage()).isEqualTo("任务已取消");
         assertEventTypes("cancelled");
+        assertRecordedEventTypes("TASK_CANCELLED");
     }
 
     @Test
@@ -126,6 +136,7 @@ class PaperOrchestratorCancellationTest {
         assertThat(task.getStatus()).isEqualTo(PaperOrchestrator.STATUS_COMPLETED);
         assertThat(task.getCurrentStage()).isEqualTo("COMPLETE");
         assertNoEvents();
+        verify(taskEvents, never()).recordSafely(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -157,6 +168,17 @@ class PaperOrchestratorCancellationTest {
         assertThat(captor.getAllValues())
                 .extracting(PaperSseEvent::type)
                 .containsExactly(types);
+    }
+
+    private void assertRecordedEventTypes(String... types) {
+        ArgumentCaptor<AgentTaskEventCreateRequest> captor = ArgumentCaptor.forClass(AgentTaskEventCreateRequest.class);
+        verify(taskEvents, org.mockito.Mockito.times(types.length)).recordSafely(captor.capture());
+        assertThat(captor.getAllValues())
+                .extracting(AgentTaskEventCreateRequest::eventType)
+                .containsExactly(types);
+        assertThat(captor.getAllValues())
+                .extracting(AgentTaskEventCreateRequest::taskType)
+                .containsOnly(AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH);
     }
 
     private void assertNoEvents() {

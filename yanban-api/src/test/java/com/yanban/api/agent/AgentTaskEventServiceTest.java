@@ -10,9 +10,12 @@ import static org.mockito.Mockito.when;
 import com.yanban.core.agent.AgentTaskEvent;
 import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.paper.domain.LiteratureSearchTask;
+import com.yanban.paper.domain.PaperTask;
+import com.yanban.paper.domain.PaperTaskRepository;
 import com.yanban.paper.literature.LiteratureSearchTaskService;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -26,13 +29,15 @@ class AgentTaskEventServiceTest {
 
     private AgentTaskEventRecorder events;
     private LiteratureSearchTaskService literatureTasks;
+    private PaperTaskRepository paperTasks;
     private AgentTaskEventService service;
 
     @BeforeEach
     void setUp() {
         events = mock(AgentTaskEventRecorder.class);
         literatureTasks = mock(LiteratureSearchTaskService.class);
-        service = new AgentTaskEventService(events, literatureTasks);
+        paperTasks = mock(PaperTaskRepository.class);
+        service = new AgentTaskEventService(events, literatureTasks, paperTasks);
     }
 
     @Test
@@ -63,13 +68,44 @@ class AgentTaskEventServiceTest {
 
     @Test
     void listEventsRejectsUnsupportedTaskType() {
-        assertThatThrownBy(() -> service.listEvents(USER_ID, "PAPER_POLISH", TASK_ID))
+        assertThatThrownBy(() -> service.listEvents(USER_ID, "UNKNOWN_TASK", TASK_ID))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
                 .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(literatureTasks, never()).getTask(USER_ID, TASK_ID);
         verify(events, never()).listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID);
+    }
+
+    @Test
+    void listEventsReturnsOwnedPaperPolishEvents() {
+        when(paperTasks.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(Optional.of(mock(PaperTask.class)));
+        AgentTaskEvent created = event(1L, AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH, "TASK_CREATED",
+                Instant.parse("2026-07-04T01:00:00Z"));
+        AgentTaskEvent completed = event(2L, AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH, "TASK_COMPLETED",
+                Instant.parse("2026-07-04T01:01:00Z"));
+        when(events.listEvents(AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH, TASK_ID, USER_ID))
+                .thenReturn(List.of(created, completed));
+
+        List<AgentTaskEventResponse> responses = service.listEvents(USER_ID, "paper-polish", TASK_ID);
+
+        assertThat(responses).extracting(AgentTaskEventResponse::eventType)
+                .containsExactly("TASK_CREATED", "TASK_COMPLETED");
+        assertThat(responses.get(0).taskType()).isEqualTo(AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH);
+        verify(paperTasks).findByIdAndUserId(TASK_ID, USER_ID);
+        verify(literatureTasks, never()).getTask(USER_ID, TASK_ID);
+    }
+
+    @Test
+    void listEventsPropagatesNotFoundWhenPaperTaskIsNotOwned() {
+        when(paperTasks.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.listEvents(USER_ID, "PAPER_POLISH", TASK_ID))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+        verify(events, never()).listEvents(AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH, TASK_ID, USER_ID);
     }
 
     @Test
@@ -86,8 +122,12 @@ class AgentTaskEventServiceTest {
     }
 
     private AgentTaskEvent event(Long id, String eventType, Instant createdAt) {
+        return event(id, AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, eventType, createdAt);
+    }
+
+    private AgentTaskEvent event(Long id, String taskType, String eventType, Instant createdAt) {
         AgentTaskEvent event = new AgentTaskEvent(
-                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                taskType,
                 TASK_ID,
                 USER_ID,
                 eventType,

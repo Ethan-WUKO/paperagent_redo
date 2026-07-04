@@ -1,5 +1,7 @@
 package com.yanban.paper.service;
 
+import com.yanban.core.agent.AgentTaskEventCreateRequest;
+import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.paper.domain.PaperSection;
 import com.yanban.paper.domain.PaperSectionRepository;
 import com.yanban.paper.domain.PaperTask;
@@ -66,6 +68,7 @@ public class PaperOrchestrator {
     private final PaperSectionPolishService sectionPolishService;
     private final PaperAssembleService assembleService;
     private final Executor paperTaskExecutor;
+    private final AgentTaskEventRecorder taskEvents;
     private final Map<Long, ControlState> controlStates = new ConcurrentHashMap<>();
     private final java.util.Set<Long> runningTasks = ConcurrentHashMap.newKeySet();
 
@@ -85,7 +88,8 @@ public class PaperOrchestrator {
                              PaperGapAnalysisService gapAnalysisService,
                              PaperSectionPolishService sectionPolishService,
                              PaperAssembleService assembleService,
-                             @Qualifier("paperTaskExecutor") Executor paperTaskExecutor) {
+                             @Qualifier("paperTaskExecutor") Executor paperTaskExecutor,
+                             AgentTaskEventRecorder taskEvents) {
         this.tasks = tasks;
         this.rounds = rounds;
         this.sections = sections;
@@ -103,6 +107,7 @@ public class PaperOrchestrator {
         this.sectionPolishService = sectionPolishService;
         this.assembleService = assembleService;
         this.paperTaskExecutor = paperTaskExecutor;
+        this.taskEvents = taskEvents;
     }
 
     public void startTask(Long taskId) {
@@ -130,6 +135,7 @@ public class PaperOrchestrator {
         task.setStatus(STATUS_PAUSED);
         task.setCurrentStage(task.getCurrentStage() == null ? STATUS_PAUSED : task.getCurrentStage());
         eventStreamService.publish(PaperSseEvent.of("paused", taskId, "任务已暂停", task.getCurrentStage()));
+        recordEvent(task, "TASK_PAUSED", task.getCurrentStage(), STATUS_PAUSED, "论文润色任务已暂停");
     }
 
     @Transactional
@@ -142,6 +148,7 @@ public class PaperOrchestrator {
         state.paused = false;
         task.setStatus(STATUS_RUNNING);
         eventStreamService.publish(PaperSseEvent.of("log", taskId, "任务继续执行", task.getCurrentStage()));
+        recordEvent(task, "TASK_RESUMED", task.getCurrentStage(), STATUS_RUNNING, "论文润色任务继续执行");
     }
 
     @Transactional
@@ -155,6 +162,7 @@ public class PaperOrchestrator {
         state.paused = false;
         String currentStage = task.getCurrentStage() == null ? STATUS_CANCEL_REQUESTED : task.getCurrentStage();
         eventStreamService.publish(PaperSseEvent.of("cancel_requested", taskId, "任务停止请求已受理，正在等待安全检查点", currentStage));
+        recordEvent(task, "TASK_CANCEL_REQUESTED", currentStage, STATUS_CANCEL_REQUESTED, "论文润色任务停止请求已受理");
         if (runningTasks.contains(taskId)) {
             task.setStatus(STATUS_CANCEL_REQUESTED);
             task.setCurrentStage(currentStage);
@@ -165,6 +173,7 @@ public class PaperOrchestrator {
         task.setCurrentStage(STAGE_CANCELLED);
         task.setErrorMessage("任务已取消");
         eventStreamService.publish(PaperSseEvent.of("cancelled", taskId, "任务已取消", STAGE_CANCELLED));
+        recordEvent(task, "TASK_CANCELLED", STAGE_CANCELLED, STATUS_CANCELLED, "论文润色任务已取消");
     }
 
     private void runTask(Long taskId) {
@@ -232,6 +241,7 @@ public class PaperOrchestrator {
                 checkpoint(taskId);
                 publishProgress("assemble_start", taskId, "仅文献推荐模式：生成 recommended bib 与检索报告", "ASSEMBLE", selectedLiterature.size(), literatureLimit, null, null, null, 92);
                 assembleService.assemble(taskId, document, false);
+                recordTaskEvent(taskId, "TASK_COMPLETED", "COMPLETE", STATUS_COMPLETED, "论文润色任务已完成");
                 checkpoint(taskId);
                 publishProgress("complete", taskId, "文献推荐已完成：未执行 Gap 分析、章节润色和全文改写", "COMPLETE", selectedLiterature.size(), 8, null, null, null, 100);
                 return;
@@ -257,6 +267,7 @@ public class PaperOrchestrator {
             checkpoint(taskId);
             publishProgress("assemble_start", taskId, "开始生成完整产物", "ASSEMBLE", document.sections().size(), document.sections().size(), null, null, null, 92);
             assembleService.assemble(taskId, document, true);
+            recordTaskEvent(taskId, "TASK_COMPLETED", "COMPLETE", STATUS_COMPLETED, "论文润色任务已完成");
             checkpoint(taskId);
             publishProgress("complete", taskId, "论文任务已完成：已生成润色文本、推荐文献与审查报告", "COMPLETE", document.sections().size(), document.sections().size(), null, null, null, 100);
         } catch (TaskStoppedException ex) {
@@ -404,6 +415,9 @@ public class PaperOrchestrator {
         task.setCurrentStage(stage);
         task.setErrorMessage(errorMessage);
         tasks.save(task);
+        String eventType = STATUS_FAILED.equals(status) ? "TASK_FAILED" : "STAGE_CHANGED";
+        String message = STATUS_FAILED.equals(status) ? errorMessage : "论文润色任务进入阶段: " + stage;
+        recordEvent(task, eventType, stage, status, message);
     }
 
     @Transactional
@@ -417,6 +431,7 @@ public class PaperOrchestrator {
         task.setErrorMessage(message);
         tasks.save(task);
         publish("cancelled", taskId, message, STAGE_CANCELLED);
+        recordEvent(task, "TASK_CANCELLED", STAGE_CANCELLED, STATUS_CANCELLED, message);
     }
 
     @Transactional
@@ -501,6 +516,7 @@ public class PaperOrchestrator {
             task.setErrorMessage(null);
             tasks.save(task);
             publish("cancelling", taskId, "任务正在安全停止", task.getCurrentStage());
+            recordEvent(task, "TASK_CANCELLING", task.getCurrentStage(), STATUS_CANCELLING, "论文润色任务正在安全停止");
         }
         return true;
     }
@@ -526,6 +542,23 @@ public class PaperOrchestrator {
         return STATUS_CANCEL_REQUESTED.equals(status)
                 || STATUS_CANCELLING.equals(status)
                 || STATUS_CANCELLED.equals(status);
+    }
+
+    private void recordTaskEvent(Long taskId, String eventType, String stage, String status, String message) {
+        tasks.findById(taskId).ifPresent(task -> recordEvent(task, eventType, stage, status, message));
+    }
+
+    private void recordEvent(PaperTask task, String eventType, String stage, String status, String message) {
+        taskEvents.recordSafely(new AgentTaskEventCreateRequest(
+                AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH,
+                task.getId(),
+                task.getUserId(),
+                eventType,
+                stage,
+                status,
+                message,
+                null
+        ));
     }
 
     private void sleep(long millis) {

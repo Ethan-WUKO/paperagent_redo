@@ -11,6 +11,7 @@ import org.springframework.util.StringUtils;
 public class AgentTaskEventRecorder {
 
     public static final String TASK_TYPE_LITERATURE_SEARCH = "LITERATURE_SEARCH";
+    public static final String TASK_TYPE_PAPER_POLISH = "PAPER_POLISH";
 
     private static final Logger log = LoggerFactory.getLogger(AgentTaskEventRecorder.class);
 

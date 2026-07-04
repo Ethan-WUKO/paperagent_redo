@@ -1,5 +1,7 @@
 package com.yanban.paper.service;
 
+import com.yanban.core.agent.AgentTaskEventCreateRequest;
+import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.core.user.UserAccountPolicy;
 import com.yanban.paper.domain.PaperTask;
 import com.yanban.paper.domain.PaperTaskArtifact;
@@ -34,17 +36,20 @@ public class PaperTaskService {
     private final PaperStorageService paperStorageService;
     private final PaperOrchestrator paperOrchestrator;
     private final ObjectProvider<UserAccountPolicy> accountPolicy;
+    private final AgentTaskEventRecorder taskEvents;
 
     public PaperTaskService(PaperTaskRepository paperTaskRepository,
                             PaperTaskArtifactRepository artifactRepository,
                             PaperStorageService paperStorageService,
                             PaperOrchestrator paperOrchestrator,
-                            ObjectProvider<UserAccountPolicy> accountPolicy) {
+                            ObjectProvider<UserAccountPolicy> accountPolicy,
+                            AgentTaskEventRecorder taskEvents) {
         this.paperTaskRepository = paperTaskRepository;
         this.artifactRepository = artifactRepository;
         this.paperStorageService = paperStorageService;
         this.paperOrchestrator = paperOrchestrator;
         this.accountPolicy = accountPolicy;
+        this.taskEvents = taskEvents;
     }
 
     @Transactional
@@ -85,8 +90,35 @@ public class PaperTaskService {
         if (bibObjectKey != null) {
             saveSourceArtifact(task.getId(), "source_bib", bibObjectKey, request.bibFile().getOriginalFilename());
         }
+        recordTaskCreatedAfterCommit(task);
         startTaskAfterCommit(task.getId());
         return PaperTaskResponse.from(task, request.scoreThreshold(), request.maxRounds(), request.innerMaxAttempts(), task.getLiteratureCount());
+    }
+
+    private void recordTaskCreatedAfterCommit(PaperTask task) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            recordTaskCreated(task);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                recordTaskCreated(task);
+            }
+        });
+    }
+
+    private void recordTaskCreated(PaperTask task) {
+        taskEvents.recordSafely(new AgentTaskEventCreateRequest(
+                AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH,
+                task.getId(),
+                task.getUserId(),
+                "TASK_CREATED",
+                task.getCurrentStage(),
+                task.getStatus(),
+                "论文润色任务已创建",
+                null
+        ));
     }
 
     private Integer normalizeLiteratureCount(Integer literatureCount) {
