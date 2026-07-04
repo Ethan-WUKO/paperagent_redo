@@ -1,0 +1,19 @@
+FROM maven:3.9.9-eclipse-temurin-17 AS build
+WORKDIR /workspace
+COPY pom.xml ./
+COPY yanban-core ./yanban-core
+COPY yanban-knowledge ./yanban-knowledge
+COPY yanban-paper ./yanban-paper
+COPY yanban-mcp ./yanban-mcp
+COPY yanban-skills ./yanban-skills
+COPY yanban-api ./yanban-api
+COPY yanban-cli ./yanban-cli
+RUN mvn -pl yanban-api -am -DskipTests package
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+ENV SPRING_PROFILES_ACTIVE=dev
+COPY --from=build /workspace/yanban-api/target/yanban-api-*.jar /app/yanban-api.jar
+COPY skills /app/skills
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/yanban-api.jar"]

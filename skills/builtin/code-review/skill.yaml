@@ -1,0 +1,6 @@
+name: code-review
+description: 使用 filesystem MCP 读取本地文件并进行结构化代码审查
+allowed_tools:
+  - mcp_fs__read_file
+  - mcp_fs__list_directory
+  - mcp_fs__read_multiple_files

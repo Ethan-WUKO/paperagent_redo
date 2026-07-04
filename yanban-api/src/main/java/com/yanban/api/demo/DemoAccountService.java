@@ -1,0 +1,192 @@
+package com.yanban.api.demo;
+
+import com.yanban.api.settings.UserSettingsService;
+import com.yanban.api.user.SysUser;
+import com.yanban.api.user.SysUserRepository;
+import com.yanban.core.agent.AgentSessionRepository;
+import com.yanban.knowledge.domain.KbChunkRepository;
+import com.yanban.knowledge.domain.KbChunkUploadRepository;
+import com.yanban.knowledge.domain.KbDocument;
+import com.yanban.knowledge.domain.KbDocumentRepository;
+import com.yanban.knowledge.service.KnowledgeIndexService;
+import com.yanban.knowledge.service.KnowledgeIngestionService;
+import com.yanban.paper.domain.PaperTaskRepository;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class DemoAccountService {
+
+    private static final Logger log = LoggerFactory.getLogger(DemoAccountService.class);
+    private static final List<SeedDocument> SEED_DOCUMENTS = List.of(
+            new SeedDocument("yanban-demo-project.md", "demo/kb/yanban-demo-project.md"),
+            new SeedDocument("yanban-demo-rag-notes.md", "demo/kb/yanban-demo-rag-notes.md"),
+            new SeedDocument("yanban-demo-lab-schedule.md", "demo/kb/yanban-demo-lab-schedule.md")
+    );
+
+    private final DemoProperties properties;
+    private final SysUserRepository users;
+    private final PasswordEncoder passwordEncoder;
+    private final UserSettingsService userSettingsService;
+    private final KnowledgeIngestionService ingestionService;
+    private final KbDocumentRepository documents;
+    private final KbChunkRepository chunks;
+    private final KbChunkUploadRepository chunkUploads;
+    private final KnowledgeIndexService indexService;
+    private final AgentSessionRepository sessions;
+    private final PaperTaskRepository paperTasks;
+
+    public DemoAccountService(DemoProperties properties,
+                              SysUserRepository users,
+                              PasswordEncoder passwordEncoder,
+                              UserSettingsService userSettingsService,
+                              KnowledgeIngestionService ingestionService,
+                              KbDocumentRepository documents,
+                              KbChunkRepository chunks,
+                              KbChunkUploadRepository chunkUploads,
+                              KnowledgeIndexService indexService,
+                              AgentSessionRepository sessions,
+                              PaperTaskRepository paperTasks) {
+        this.properties = properties;
+        this.users = users;
+        this.passwordEncoder = passwordEncoder;
+        this.userSettingsService = userSettingsService;
+        this.ingestionService = ingestionService;
+        this.documents = documents;
+        this.chunks = chunks;
+        this.chunkUploads = chunkUploads;
+        this.indexService = indexService;
+        this.sessions = sessions;
+        this.paperTasks = paperTasks;
+    }
+
+    @Transactional
+    public SysUser ensureDemoUserReady() {
+        if (!properties.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Demo 入口未开启。");
+        }
+        SysUser user = ensureDemoUser();
+        userSettingsService.getOrCreate(user.getId());
+        ensureSeedDocuments(user.getId());
+        return user;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void initializeOnStartup() {
+        if (!properties.isEnabled() || !properties.isSeedOnStartup()) {
+            return;
+        }
+        try {
+            ensureDemoUserReady();
+            log.info("Demo account initialized username={}", properties.getUsername());
+        } catch (Exception ex) {
+            log.error("Failed to initialize demo account. Demo login will retry on demand.", ex);
+        }
+    }
+
+    @Scheduled(cron = "${yanban.demo.reset-cron:0 30 3 * * *}")
+    @Transactional
+    public void scheduledReset() {
+        if (!properties.isEnabled()) {
+            return;
+        }
+        SysUser user = ensureDemoUser();
+        resetDemoData(user.getId());
+        log.info("Demo account reset userId={}", user.getId());
+    }
+
+    @Transactional
+    public void resetDemoData(Long userId) {
+        sessions.deleteAll(sessions.findByUserIdOrderByUpdatedAtDesc(userId));
+        paperTasks.deleteAll(paperTasks.findByUserIdOrderByCreatedAtDesc(userId));
+        chunkUploads.deleteByUserId(userId);
+        deleteDocuments(documents.findByUserIdOrderByCreatedAtDesc(userId));
+        seedDocuments(userId);
+    }
+
+    private SysUser ensureDemoUser() {
+        String username = normalizeUsername(properties.getUsername());
+        return users.findByUsername(username)
+                .map(existing -> {
+                    if (!DemoAccessService.ACCOUNT_TYPE_DEMO.equalsIgnoreCase(existing.getAccountType())) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT, "Demo 用户名已被普通账号占用：" + username);
+                    }
+                    return existing;
+                })
+                .orElseGet(() -> users.saveAndFlush(new SysUser(
+                        username,
+                        passwordEncoder.encode(UUID.randomUUID().toString()),
+                        null,
+                        DemoAccessService.ACCOUNT_TYPE_DEMO
+                )));
+    }
+
+    private void ensureSeedDocuments(Long userId) {
+        if (documents.countByUserIdAndSourceType(userId, DemoAccessService.SOURCE_TYPE_DEMO_SEED) == SEED_DOCUMENTS.size()) {
+            return;
+        }
+        deleteDocuments(documents.findByUserIdAndSourceType(userId, DemoAccessService.SOURCE_TYPE_DEMO_SEED));
+        seedDocuments(userId);
+    }
+
+    private void seedDocuments(Long userId) {
+        for (SeedDocument seed : SEED_DOCUMENTS) {
+            ingestionService.ingestText(
+                    userId,
+                    seed.filename(),
+                    readResource(seed.resourcePath()),
+                    false,
+                    DemoAccessService.SOURCE_TYPE_DEMO_SEED,
+                    "text/markdown"
+            );
+        }
+    }
+
+    private void deleteDocuments(List<KbDocument> userDocuments) {
+        for (KbDocument document : userDocuments) {
+            chunks.deleteByDocumentId(document.getId());
+            try {
+                indexService.deleteByDocumentId(document.getId());
+            } catch (Exception ex) {
+                log.warn("Failed to delete index entries for demo document id={}", document.getId(), ex);
+            }
+            documents.delete(document);
+        }
+        documents.flush();
+    }
+
+    private String readResource(String resourcePath) {
+        try {
+            ClassPathResource resource = new ClassPathResource(resourcePath);
+            try (InputStream in = resource.getInputStream()) {
+                return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取 Demo 文档失败：" + resourcePath, ex);
+        }
+    }
+
+    private String normalizeUsername(String username) {
+        if (username == null || username.isBlank()) {
+            return "demo";
+        }
+        return username.trim();
+    }
+
+    private record SeedDocument(String filename, String resourcePath) {
+    }
+}
