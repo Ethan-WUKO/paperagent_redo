@@ -35,6 +35,7 @@ class AgentRepositoryTest {
     private final AgentTurnRepository turns;
     private final AgentContextSnapshotRepository contextSnapshots;
     private final AgentLongTermMemoryRepository longTermMemories;
+    private final AgentTaskEventRepository taskEvents;
 
     @Autowired
     AgentRepositoryTest(AgentSessionRepository sessions,
@@ -43,7 +44,8 @@ class AgentRepositoryTest {
                         AgentSessionSummaryRepository summaries,
                         AgentTurnRepository turns,
                         AgentContextSnapshotRepository contextSnapshots,
-                        AgentLongTermMemoryRepository longTermMemories) {
+                        AgentLongTermMemoryRepository longTermMemories,
+                        AgentTaskEventRepository taskEvents) {
         this.sessions = sessions;
         this.messages = messages;
         this.toolRuns = toolRuns;
@@ -51,6 +53,7 @@ class AgentRepositoryTest {
         this.turns = turns;
         this.contextSnapshots = contextSnapshots;
         this.longTermMemories = longTermMemories;
+        this.taskEvents = taskEvents;
     }
 
     @Test
@@ -189,5 +192,45 @@ class AgentRepositoryTest {
                 PageRequest.of(0, 10)
         )).containsExactly(memory);
         assertThat(memory.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    void insertTaskEventsThenQueryByTaskAndUserInCreatedOrder() {
+        AgentTaskEvent first = taskEvents.saveAndFlush(new AgentTaskEvent(
+                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                2001L,
+                1005L,
+                "TASK_CREATED",
+                "QUEUED",
+                "PENDING",
+                "created",
+                "{\"source\":\"test\"}"
+        ));
+        AgentTaskEvent second = taskEvents.saveAndFlush(new AgentTaskEvent(
+                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                2001L,
+                1005L,
+                "TASK_RUNNING",
+                "SEARCHING",
+                "RUNNING",
+                "running",
+                null
+        ));
+        taskEvents.saveAndFlush(new AgentTaskEvent(
+                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                2002L,
+                1005L,
+                "TASK_CREATED",
+                "QUEUED",
+                "PENDING",
+                "other task",
+                null
+        ));
+
+        assertThat(taskEvents.findByTaskTypeAndTaskIdAndUserIdOrderByCreatedAtAsc(
+                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                2001L,
+                1005L
+        )).containsExactly(first, second);
     }
 }

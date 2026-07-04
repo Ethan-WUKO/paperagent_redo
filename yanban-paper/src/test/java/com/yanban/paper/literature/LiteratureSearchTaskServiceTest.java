@@ -2,13 +2,14 @@ package com.yanban.paper.literature;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.paper.domain.LiteratureSearchTask;
 import com.yanban.paper.domain.LiteratureSearchTaskRepository;
 import java.time.Duration;
@@ -35,7 +36,7 @@ class LiteratureSearchTaskServiceTest {
         tasks = mock(LiteratureSearchTaskRepository.class);
         @SuppressWarnings("unchecked")
         ObjectProvider<LiteratureSearchTaskPublisher> provider = mock(ObjectProvider.class);
-        service = new LiteratureSearchTaskService(tasks, provider);
+        service = new LiteratureSearchTaskService(tasks, provider, eventProvider(null));
     }
 
     @Test
@@ -68,7 +69,7 @@ class LiteratureSearchTaskServiceTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<LiteratureSearchTaskPublisher> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(publisher);
-        service = new LiteratureSearchTaskService(tasks, provider);
+        service = new LiteratureSearchTaskService(tasks, provider, eventProvider(null));
         when(tasks.findByIdempotencyKey(any())).thenReturn(Optional.empty());
         when(tasks.save(any(LiteratureSearchTask.class))).thenAnswer(invocation -> {
             LiteratureSearchTask task = invocation.getArgument(0);
@@ -83,6 +84,29 @@ class LiteratureSearchTaskServiceTest {
 
         assertThat(result.idempotent()).isFalse();
         verify(publisher).publishTaskCreated(result.task());
+    }
+
+    @Test
+    void createTaskRecordsCreatedEvent() {
+        AgentTaskEventRecorder eventRecorder = mock(AgentTaskEventRecorder.class);
+        service = new LiteratureSearchTaskService(tasks, publisherProvider(null), eventProvider(eventRecorder));
+        when(tasks.findByIdempotencyKey(any())).thenReturn(Optional.empty());
+        when(tasks.save(any(LiteratureSearchTask.class))).thenAnswer(invocation -> {
+            LiteratureSearchTask task = invocation.getArgument(0);
+            ReflectionTestUtils.setField(task, "id", TASK_ID);
+            return task;
+        });
+
+        service.createTask(USER_ID, new LiteratureSearchTaskRequest("hybrid RAG", 8, null, true, "req-1", null));
+
+        verify(eventRecorder).recordSafely(argThat(event ->
+                event.taskType().equals(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH)
+                        && event.taskId().equals(TASK_ID)
+                        && event.userId().equals(USER_ID)
+                        && event.eventType().equals("TASK_CREATED")
+                        && event.stage().equals("QUEUED")
+                        && event.status().equals(LiteratureSearchTaskService.STATUS_PENDING)
+        ));
     }
 
     @Test
@@ -106,7 +130,7 @@ class LiteratureSearchTaskServiceTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<LiteratureSearchTaskPublisher> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(publisher);
-        service = new LiteratureSearchTaskService(tasks, provider);
+        service = new LiteratureSearchTaskService(tasks, provider, eventProvider(null));
         LiteratureSearchTask existing = task(LiteratureSearchTaskService.STATUS_PENDING);
         when(tasks.findByIdempotencyKey(any())).thenReturn(Optional.of(existing));
 
@@ -182,7 +206,8 @@ class LiteratureSearchTaskServiceTest {
     @Test
     void scanStalledTasksRequeuesOldPendingTasks() {
         LiteratureSearchTaskPublisher publisher = mock(LiteratureSearchTaskPublisher.class);
-        service = new LiteratureSearchTaskService(tasks, provider(publisher));
+        AgentTaskEventRecorder eventRecorder = mock(AgentTaskEventRecorder.class);
+        service = new LiteratureSearchTaskService(tasks, publisherProvider(publisher), eventProvider(eventRecorder));
         LiteratureSearchTask pending = task(LiteratureSearchTaskService.STATUS_PENDING);
         when(tasks.findByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(
                 eq(LiteratureSearchTaskService.STATUS_PENDING),
@@ -204,12 +229,18 @@ class LiteratureSearchTaskServiceTest {
         assertThat(pending.getStatus()).isEqualTo(LiteratureSearchTaskService.STATUS_PENDING);
         assertThat(pending.getCurrentStage()).isEqualTo("REQUEUED");
         verify(publisher).publishTaskCreated(pending);
+        verify(eventRecorder).recordSafely(argThat(event ->
+                event.eventType().equals("TASK_REQUEUED")
+                        && event.stage().equals("REQUEUED")
+                        && event.status().equals(LiteratureSearchTaskService.STATUS_PENDING)
+        ));
     }
 
     @Test
     void scanStalledTasksMarksOldRunningTasksFailed() {
         LiteratureSearchTaskPublisher publisher = mock(LiteratureSearchTaskPublisher.class);
-        service = new LiteratureSearchTaskService(tasks, provider(publisher));
+        AgentTaskEventRecorder eventRecorder = mock(AgentTaskEventRecorder.class);
+        service = new LiteratureSearchTaskService(tasks, publisherProvider(publisher), eventProvider(eventRecorder));
         LiteratureSearchTask running = task(LiteratureSearchTaskService.STATUS_RUNNING);
         when(tasks.findByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(
                 eq(LiteratureSearchTaskService.STATUS_PENDING),
@@ -233,12 +264,17 @@ class LiteratureSearchTaskServiceTest {
         assertThat(running.getErrorMessage()).contains("超时");
         assertThat(running.getFinishedAt()).isNotNull();
         verify(publisher, never()).publishTaskCreated(any());
+        verify(eventRecorder).recordSafely(argThat(event ->
+                event.eventType().equals("TASK_TIMED_OUT")
+                        && event.stage().equals("TIMEOUT")
+                        && event.status().equals(LiteratureSearchTaskService.STATUS_FAILED)
+        ));
     }
 
     @Test
     void scanStalledTasksDoesNothingWhenNoPendingOrRunningMatches() {
         LiteratureSearchTaskPublisher publisher = mock(LiteratureSearchTaskPublisher.class);
-        service = new LiteratureSearchTaskService(tasks, provider(publisher));
+        service = new LiteratureSearchTaskService(tasks, publisherProvider(publisher), eventProvider(null));
         when(tasks.findByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(
                 eq(LiteratureSearchTaskService.STATUS_PENDING),
                 any(Instant.class),
@@ -289,10 +325,17 @@ class LiteratureSearchTaskServiceTest {
         return task;
     }
 
-    private ObjectProvider<LiteratureSearchTaskPublisher> provider(LiteratureSearchTaskPublisher publisher) {
+    private ObjectProvider<LiteratureSearchTaskPublisher> publisherProvider(LiteratureSearchTaskPublisher publisher) {
         @SuppressWarnings("unchecked")
         ObjectProvider<LiteratureSearchTaskPublisher> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(publisher);
+        return provider;
+    }
+
+    private ObjectProvider<AgentTaskEventRecorder> eventProvider(AgentTaskEventRecorder eventRecorder) {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentTaskEventRecorder> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(eventRecorder);
         return provider;
     }
 }

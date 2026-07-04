@@ -1,5 +1,7 @@
 package com.yanban.paper.literature;
 
+import com.yanban.core.agent.AgentTaskEventCreateRequest;
+import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.paper.domain.LiteratureSearchTask;
 import com.yanban.paper.domain.LiteratureSearchTaskRepository;
 import java.nio.charset.StandardCharsets;
@@ -37,14 +39,18 @@ public class LiteratureSearchTaskService {
     private static final Duration DEFAULT_RUNNING_TIMEOUT = Duration.ofMinutes(10);
     private static final int DEFAULT_SCAN_BATCH_SIZE = 50;
     private static final int MAX_SCAN_BATCH_SIZE = 200;
+    private static final int MAX_EVENT_MESSAGE_LENGTH = 500;
 
     private final LiteratureSearchTaskRepository tasks;
     private final LiteratureSearchTaskPublisher publisher;
+    private final AgentTaskEventRecorder eventRecorder;
 
     public LiteratureSearchTaskService(LiteratureSearchTaskRepository tasks,
-                                       ObjectProvider<LiteratureSearchTaskPublisher> publisherProvider) {
+                                       ObjectProvider<LiteratureSearchTaskPublisher> publisherProvider,
+                                       ObjectProvider<AgentTaskEventRecorder> eventRecorderProvider) {
         this.tasks = tasks;
         this.publisher = publisherProvider == null ? null : publisherProvider.getIfAvailable();
+        this.eventRecorder = eventRecorderProvider == null ? null : eventRecorderProvider.getIfAvailable();
     }
 
     @Transactional
@@ -80,6 +86,7 @@ public class LiteratureSearchTaskService {
                             clientRequestId,
                             idempotencyKey
                     ));
+                    recordEvent(saved, "TASK_CREATED", "文献检索任务已创建", null);
                     publishAfterCommit(saved);
                     return new TaskStartResult(saved, false);
                 });
@@ -99,7 +106,9 @@ public class LiteratureSearchTaskService {
         task.setStatus(STATUS_CANCEL_REQUESTED);
         task.setCurrentStage("CANCEL_REQUESTED");
         task.setCancelReason(trimToNull(cancelReason));
-        return tasks.save(task);
+        LiteratureSearchTask saved = tasks.save(task);
+        recordEvent(saved, "TASK_CANCEL_REQUESTED", "用户请求停止文献检索任务", null);
+        return saved;
     }
 
     @Transactional
@@ -125,7 +134,9 @@ public class LiteratureSearchTaskService {
         task.setStatus(STATUS_COMPLETED);
         task.setCurrentStage("COMPLETE");
         task.setFinishedAt(Instant.now());
-        return tasks.save(task);
+        LiteratureSearchTask saved = tasks.save(task);
+        recordEvent(saved, "TASK_COMPLETED", "文献检索任务已完成", null);
+        return saved;
     }
 
     @Transactional
@@ -141,8 +152,9 @@ public class LiteratureSearchTaskService {
                 pendingBefore,
                 PageRequest.of(0, limit))) {
             task.setCurrentStage("REQUEUED");
-            tasks.save(task);
-            publishAfterCommit(task);
+            LiteratureSearchTask saved = tasks.save(task);
+            recordEvent(saved, "TASK_REQUEUED", "文献检索任务超时未领取，已重新投递唤醒消息", null);
+            publishAfterCommit(saved);
             requeued++;
         }
 
@@ -155,7 +167,8 @@ public class LiteratureSearchTaskService {
             task.setCurrentStage("TIMEOUT");
             task.setErrorMessage("文献检索任务运行超时，已停止等待并标记失败");
             task.setFinishedAt(now);
-            tasks.save(task);
+            LiteratureSearchTask saved = tasks.save(task);
+            recordEvent(saved, "TASK_TIMED_OUT", "文献检索任务运行超时，已标记失败", null);
             timedOut++;
         }
 
@@ -176,13 +189,16 @@ public class LiteratureSearchTaskService {
             task.setStatus(STATUS_RUNNING);
             task.setCurrentStage("SEARCHING");
             task.setStartedAt(Instant.now());
-            return Optional.of(tasks.save(task));
+            LiteratureSearchTask saved = tasks.save(task);
+            recordEvent(saved, "TASK_RUNNING", "文献检索任务开始执行", null);
+            return Optional.of(saved);
         }
         if (STATUS_CANCEL_REQUESTED.equals(task.getStatus()) || STATUS_CANCELLING.equals(task.getStatus())) {
             task.setStatus(STATUS_CANCELLED);
             task.setCurrentStage("CANCELLED");
             task.setFinishedAt(Instant.now());
-            tasks.save(task);
+            LiteratureSearchTask saved = tasks.save(task);
+            recordEvent(saved, "TASK_CANCELLED", "文献检索任务已取消", null);
             return Optional.empty();
         }
         return Optional.empty();
@@ -201,7 +217,9 @@ public class LiteratureSearchTaskService {
         task.setStatus(STATUS_CANCELLED);
         task.setCurrentStage("CANCELLED");
         task.setFinishedAt(Instant.now());
-        return tasks.save(task);
+        LiteratureSearchTask saved = tasks.save(task);
+        recordEvent(saved, "TASK_CANCELLED", "文献检索任务已取消", null);
+        return saved;
     }
 
     @Transactional
@@ -214,7 +232,9 @@ public class LiteratureSearchTaskService {
         task.setCurrentStage("FAILED");
         task.setErrorMessage(trimToLength(errorMessage, 1000));
         task.setFinishedAt(Instant.now());
-        return tasks.save(task);
+        LiteratureSearchTask saved = tasks.save(task);
+        recordEvent(saved, "TASK_FAILED", trimToLength(errorMessage, MAX_EVENT_MESSAGE_LENGTH), null);
+        return saved;
     }
 
     public boolean isTerminal(String status) {
@@ -278,6 +298,22 @@ public class LiteratureSearchTaskService {
             return;
         }
         publisher.publishTaskCreated(task);
+    }
+
+    private void recordEvent(LiteratureSearchTask task, String eventType, String message, String payloadJson) {
+        if (eventRecorder == null || task == null) {
+            return;
+        }
+        eventRecorder.recordSafely(new AgentTaskEventCreateRequest(
+                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                task.getId(),
+                task.getUserId(),
+                eventType,
+                task.getCurrentStage(),
+                task.getStatus(),
+                trimToLength(message, MAX_EVENT_MESSAGE_LENGTH),
+                payloadJson
+        ));
     }
 
     private String trimToLength(String value, int maxLength) {
