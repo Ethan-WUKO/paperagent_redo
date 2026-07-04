@@ -10,6 +10,9 @@ import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.agent.AgentSessionRepository;
+import com.yanban.core.agent.AgentSessionSummary;
+import com.yanban.core.agent.AgentSessionSummaryService;
+import com.yanban.core.agent.AgentSessionSummaryUpdate;
 import com.yanban.core.agent.AgentTurn;
 import com.yanban.core.agent.AgentTurnRepository;
 import com.yanban.core.harness.HarnessEngine;
@@ -44,6 +47,8 @@ public class AgentService {
     private static final int GENERATED_TITLE_MAX_LENGTH = 40;
     private static final int DEFAULT_VISIBLE_MESSAGE_LIMIT = 50;
     private static final int MAX_VISIBLE_MESSAGE_LIMIT = 100;
+    private static final int SESSION_SUMMARY_MAX_CHARACTERS = 4_000;
+    private static final int SUMMARY_TURN_SNIPPET_MAX_CHARACTERS = 1_200;
     private static final List<String> CHAT_VISIBLE_ROLES = List.of("user", "assistant");
 
     private final AgentSessionRepository sessions;
@@ -57,6 +62,7 @@ public class AgentService {
     private final SkillsService skillsService;
     private final AgentToolPolicyEngine toolPolicyEngine;
     private final AgentContextBuilder agentContextBuilder;
+    private final AgentSessionSummaryService sessionSummaryService;
     private final ChatModelProvider titleModelProvider;
     private final UserAccountPolicy accountPolicy;
 
@@ -71,6 +77,7 @@ public class AgentService {
                         SkillsService skillsService,
                         AgentToolPolicyEngine toolPolicyEngine,
                         AgentContextBuilder agentContextBuilder,
+                        AgentSessionSummaryService sessionSummaryService,
                         @Qualifier("chatModelProvider") ChatModelProvider titleModelProvider,
                         UserAccountPolicy accountPolicy) {
         this.sessions = sessions;
@@ -84,6 +91,7 @@ public class AgentService {
         this.skillsService = skillsService;
         this.toolPolicyEngine = toolPolicyEngine;
         this.agentContextBuilder = agentContextBuilder;
+        this.sessionSummaryService = sessionSummaryService;
         this.titleModelProvider = titleModelProvider;
         this.accountPolicy = accountPolicy;
     }
@@ -209,7 +217,7 @@ public class AgentService {
                 userId,
                 endpoint.providerKey(),
                 endpoint.modelName(),
-                null,
+                loadSessionSummaryText(session.getId(), userId),
                 null,
                 null
         ));
@@ -226,6 +234,15 @@ public class AgentService {
             saved.add(assistantMessage);
             completeTurn(turn, assistantMessage.getId());
             emitToken(tokenConsumer, assistantContent);
+            updateSessionSummaryAfterSuccess(
+                    session,
+                    userId,
+                    contextPackage,
+                    request.content(),
+                    assistantContent,
+                    assistantMessage.getId(),
+                    saved.size()
+            );
             touchAndMaybeGenerateTitle(session, userId, request.content(), shouldAutoGenerateTitle);
             return new SendMessageResponse(
                     true,
@@ -243,6 +260,15 @@ public class AgentService {
             saved.add(assistantMessage);
             completeTurn(turn, assistantMessage.getId());
             emitToken(tokenConsumer, intentAction.assistantMessage());
+            updateSessionSummaryAfterSuccess(
+                    session,
+                    userId,
+                    contextPackage,
+                    request.content(),
+                    intentAction.assistantMessage(),
+                    assistantMessage.getId(),
+                    saved.size()
+            );
             touchAndMaybeGenerateTitle(session, userId, request.content(), shouldAutoGenerateTitle);
             return new SendMessageResponse(
                     true,
@@ -277,6 +303,7 @@ public class AgentService {
                 effectiveHistory.size(),
                 contextPackage.estimatedCharacters(),
                 contextPackage.droppedItems());
+        log.debug("Agent context sections sessionId={} sections={}", session.getId(), contextPackage.sections());
         try {
             HarnessResult result = harnessEngine.run(new HarnessRequest(
                     effectiveHistory,
@@ -307,7 +334,17 @@ public class AgentService {
             saved.addAll(harnessMessages);
 
             if (result.success()) {
-                completeTurn(turn, lastAssistantMessageId(harnessMessages));
+                Long assistantMessageId = lastAssistantMessageId(harnessMessages);
+                completeTurn(turn, assistantMessageId);
+                updateSessionSummaryAfterSuccess(
+                        session,
+                        userId,
+                        contextPackage,
+                        request.content(),
+                        result.assistantContent(),
+                        assistantMessageId,
+                        1 + harnessMessages.size()
+                );
                 touchAndMaybeGenerateTitle(session, userId, request.content(), shouldAutoGenerateTitle);
                 return new SendMessageResponse(
                         true,
@@ -331,6 +368,69 @@ public class AgentService {
             log.warn("Agent send failed sessionId={} userId={}", session.getId(), userId, ex);
             return failTurn(session, userId, turn, saved, extractErrorMessage(ex), 0);
         }
+    }
+
+    private String loadSessionSummaryText(Long sessionId, Long userId) {
+        try {
+            return sessionSummaryService.findBySessionAndUser(sessionId, userId)
+                    .map(AgentSessionSummary::getSummaryText)
+                    .filter(StringUtils::hasText)
+                    .orElse(null);
+        } catch (Exception ex) {
+            log.warn("Failed to load agent session summary sessionId={} userId={}", sessionId, userId, ex);
+            return null;
+        }
+    }
+
+    private void updateSessionSummaryAfterSuccess(AgentSession session,
+                                                  Long userId,
+                                                  AgentContextPackage contextPackage,
+                                                  String userContent,
+                                                  String assistantContent,
+                                                  Long assistantMessageId,
+                                                  int newPersistedMessageCount) {
+        try {
+            String existingSummary = loadSessionSummaryText(session.getId(), userId);
+            String nextSummary = buildNextSessionSummary(existingSummary, userContent, assistantContent);
+            sessionSummaryService.upsert(new AgentSessionSummaryUpdate(
+                    session.getId(),
+                    userId,
+                    nextSummary,
+                    assistantMessageId,
+                    contextPackage.rawMessageCount() + Math.max(0, newPersistedMessageCount),
+                    session.getModelProviderSnapshot(),
+                    session.getModelSnapshot()
+            ));
+        } catch (Exception ex) {
+            log.warn("Failed to update agent session summary sessionId={} userId={}", session.getId(), userId, ex);
+        }
+    }
+
+    private String buildNextSessionSummary(String existingSummary, String userContent, String assistantContent) {
+        StringBuilder summary = new StringBuilder();
+        if (StringUtils.hasText(existingSummary)) {
+            summary.append(existingSummary.trim()).append("\n\n");
+        }
+        summary.append("Latest successful turn:\n")
+                .append("User: ")
+                .append(summarizeForSessionMemory(userContent))
+                .append("\nAssistant: ")
+                .append(summarizeForSessionMemory(assistantContent));
+        return trimToMax(summary.toString(), SESSION_SUMMARY_MAX_CHARACTERS);
+    }
+
+    private String summarizeForSessionMemory(String content) {
+        if (!StringUtils.hasText(content)) {
+            return "(empty)";
+        }
+        return trimToMax(content.trim().replaceAll("\\s+", " "), SUMMARY_TURN_SNIPPET_MAX_CHARACTERS);
+    }
+
+    private String trimToMax(String content, int maxCharacters) {
+        if (content == null || content.length() <= maxCharacters) {
+            return content;
+        }
+        return content.substring(content.length() - maxCharacters).trim();
     }
 
     private void emitToken(Consumer<String> tokenConsumer, String content) {
