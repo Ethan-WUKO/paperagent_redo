@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -18,6 +19,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
+import com.yanban.core.agent.AgentSessionSummaryService;
+import com.yanban.core.agent.AgentSessionSummaryUpdate;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
@@ -33,6 +36,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -60,6 +64,9 @@ class AgentControllerIntegrationTest {
 
     @Autowired
     AgentMessageRepository agentMessages;
+
+    @SpyBean
+    AgentSessionSummaryService sessionSummaryService;
 
     @MockBean(name = "chatModelProvider")
     ChatModelProvider chatModelProvider;
@@ -162,6 +169,85 @@ class AgentControllerIntegrationTest {
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[0].role").value("user"))
                 .andExpect(jsonPath("$[1].role").value("assistant"));
+    }
+
+    @Test
+    void ordinaryMessagesIncludeExistingSessionSummaryInModelRequest() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("summary aware answer"), "stop", null));
+        String token = registerAndGetToken("agent_user_summary_context");
+        long userId = currentUserId(token);
+        long sessionId = createSession(token, "Summary Context");
+        sessionSummaryService.upsert(new AgentSessionSummaryUpdate(
+                sessionId,
+                userId,
+                "User works on hybrid RAG for academic writing.",
+                null,
+                0,
+                "deepseek",
+                "deepseek-chat"
+        ));
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"continue my work\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModelProvider).chat(captor.capture());
+        assertThat(captor.getValue().messages())
+                .anySatisfy(message -> {
+                    assertThat(message.role()).isEqualTo("system");
+                    assertThat(message.content()).contains("Session summary");
+                    assertThat(message.content()).contains("hybrid RAG");
+                });
+    }
+
+    @Test
+    void successfulMessageUpdatesSessionSummary() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("I will remember FDA-MIMO."), "stop", null));
+        String token = registerAndGetToken("agent_user_summary_update");
+        long userId = currentUserId(token);
+        long sessionId = createSession(token, "Summary Update");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"My paper is about FDA-MIMO jamming.\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        assertThat(sessionSummaryService.findBySessionAndUser(sessionId, userId))
+                .hasValueSatisfying(summary -> {
+                    assertThat(summary.getSummaryText()).contains("FDA-MIMO jamming", "I will remember FDA-MIMO");
+                    assertThat(summary.getCoveredMessageId()).isNotNull();
+                    assertThat(summary.getMessageCount()).isEqualTo(2);
+                });
+    }
+
+    @Test
+    void summaryUpdateFailureDoesNotFailSuccessfulReply() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("main reply survived"), "stop", null));
+        doThrow(new IllegalStateException("summary store failed"))
+                .when(sessionSummaryService).upsert(any());
+        String token = registerAndGetToken("agent_user_summary_failure");
+        long sessionId = createSession(token, "Summary Failure");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"please continue\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.assistantContent").value("main reply survived"))
+                .andExpect(jsonPath("$.messages.length()").value(2));
     }
 
     @Test
