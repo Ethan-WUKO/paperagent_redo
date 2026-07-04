@@ -1,50 +1,50 @@
-# Local Merge Gate
+# 本地 Merge Gate
 
-This document defines the default local checks before a change is merged.
+本文档定义 PR 合并前默认需要执行的本地检查。
 
-The goal is not to run every possible test for every small change. The goal is to make each issue verifiable, repeatable, and honest about risk.
+目标不是让每个小改动都跑完整测试，而是让每个 issue 都能被验证、复现，并诚实说明风险。
 
-## Always Run
+## 每个 PR 都要执行
 
-Run these for every PR:
+每个 PR 都应执行：
 
 ```powershell
 git status --short
 git diff --check
 ```
 
-Before pushing, also confirm the target repository:
+push 前还要确认目标仓库：
 
 ```powershell
 git remote -v
 git branch --show-current
 ```
 
-The expected remote for this project is:
+本项目预期 remote 为：
 
 ```text
 https://github.com/Ethan-WOKO/paperagent_redo.git
 ```
 
-## Docs-only Changes
+## 仅文档变更
 
-For Markdown, GitHub templates, process docs, and planning docs:
+适用于 Markdown、GitHub 模板、流程文档和规划文档：
 
 ```powershell
 git diff --check
 ```
 
-Full backend or frontend builds are optional for docs-only changes. If skipped, the PR must say they were skipped because no runtime code changed.
+仅文档变更可以不跑完整后端或前端构建。如果跳过，PR 中必须说明原因是没有修改运行时代码。
 
-## Backend Baseline
+## 后端基线检查
 
-For backend code, Maven config, migrations, model/runtime logic, RAG, paper, knowledge, auth, or API changes:
+适用于后端代码、Maven 配置、migration、模型/runtime 逻辑、RAG、论文、知识库、认证或 API 变更：
 
 ```powershell
 mvn -q -DskipTests validate
 ```
 
-Run focused tests for the changed module:
+根据影响模块运行 focused tests：
 
 ```powershell
 mvn -pl yanban-core test
@@ -53,22 +53,22 @@ mvn -pl yanban-paper test
 mvn -pl yanban-api test
 ```
 
-For broad or cross-module changes, run:
+如果是大范围或跨模块改动，运行：
 
 ```powershell
 mvn test
 ```
 
-If full `mvn test` cannot run, the PR must include:
+如果完整 `mvn test` 无法执行，PR 必须写明：
 
-1. The exact failure or reason it was skipped.
-2. The focused tests that did run.
-3. The residual risk.
-4. The follow-up plan.
+1. 精确失败信息或跳过原因。
+2. 已执行的 focused tests。
+3. 剩余风险。
+4. 后续补验证计划。
 
-## Frontend Baseline
+## 前端基线检查
 
-For frontend code, route, UI state, API client, or build config changes:
+适用于前端代码、路由、UI 状态、API client 或构建配置变更：
 
 ```powershell
 cd frontend
@@ -76,67 +76,67 @@ $env:CI='true'
 pnpm build
 ```
 
-`CI=true` avoids non-interactive pnpm failures when dependencies need to be recreated.
+`CI=true` 可以避免 pnpm 在非交互环境中重建依赖时失败。
 
-If a UI workflow changes, include manual verification notes or screenshots when useful.
+如果 UI 工作流发生变化，应补充手动验证说明；必要时提供截图。
 
-## Database and Migration Changes
+## 数据库和 Migration 变更
 
-For Flyway migrations or entity/repository changes:
+适用于 Flyway migration、entity 或 repository 变更：
 
 ```powershell
 mvn -pl yanban-api test
 ```
 
-At minimum, verify:
+至少需要确认：
 
-1. MySQL migration naming and order.
-2. H2 test migration compatibility when applicable.
-3. Existing repository tests still pass.
-4. Rollback or forward-fix plan is documented.
+1. MySQL migration 命名和顺序正确。
+2. 需要时同步 H2 test migration。
+3. 现有 repository 测试仍然通过。
+4. PR 中说明回滚或 forward-fix 方案。
 
-## Agent, RAG, Tool, and Memory Changes
+## Agent、RAG、Tool 和 Memory 变更
 
-For Agent, Harness, tool calling, RAG, literature recommendation, paper polishing quality, or memory changes, unit tests are not enough.
+涉及 Agent、Harness、工具调用、RAG、文献推荐、论文润色质量或记忆系统时，单元测试不够。
 
-Required checks should include:
+必要检查包括：
 
-1. Focused unit or integration tests for touched services.
-2. Eval cases when behavior quality can change.
-3. Verification that the final user-visible answer is not duplicated.
-4. Verification that tool trace does not pollute chat bubbles.
-5. Verification that failure/degraded output is understandable.
+1. 覆盖被修改 service 的 focused unit/integration tests。
+2. 行为质量可能变化时执行 eval case。
+3. 验证最终用户可见回答不会重复。
+4. 验证工具 trace 不会污染聊天气泡。
+5. 验证失败或 degraded 输出能被用户理解。
 
-Until a formal eval runner exists, include a small manual eval table in the PR.
+在正式 eval runner 建立前，PR 中应包含一张小型手动 eval 表。
 
-## Long-running Task Changes
+## 长任务变更
 
-For paper polishing, literature search, Kafka task dispatch, task lifecycle, cancellation, or event-stream changes, verify:
+涉及论文润色、文献检索、Kafka 任务分发、任务生命周期、取消或事件流时，需要验证：
 
-1. Task creation returns a task id.
-2. Task status can be queried.
-3. Cancel or stop request is accepted.
-4. Cancelled tasks do not retry automatically.
-5. Partial artifacts are marked as partial or cancelled.
-6. Reconnect or refresh does not create duplicate final answers.
+1. 创建任务会返回 task id。
+2. 任务状态可以查询。
+3. 取消或停止请求会被受理。
+4. 已取消任务不会自动重试。
+5. 部分产物会标记为 partial 或 cancelled。
+6. 重连或刷新不会产生重复最终回答。
 
-## PR Reporting
+## PR 报告要求
 
-Every PR must report:
+每个 PR 都必须报告：
 
 ```text
-Commands run:
+执行的命令：
 - ...
 
-Skipped checks:
+跳过的检查：
 - ...
 
-Reason:
+原因：
 - ...
 
-Residual risk:
+剩余风险：
 - ...
 ```
 
-Do not write "tests passed" without listing the exact commands.
+不要只写“测试通过”，必须列出精确命令。
 

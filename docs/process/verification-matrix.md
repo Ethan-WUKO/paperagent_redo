@@ -1,40 +1,40 @@
-# Verification Matrix
+# 验证矩阵
 
-Use this matrix to choose checks for each issue. A PR may add stronger checks when risk is higher.
+使用本矩阵为每个 issue 选择检查项。风险更高的 PR 可以增加更强的验证。
 
-| Change type | Required verification | Optional or risk-based verification |
+| 变更类型 | 必须验证 | 可选或按风险增加 |
 | --- | --- | --- |
-| Docs only | `git diff --check` | Link preview or manual read-through |
-| GitHub templates | `git diff --check` | Create a test issue/PR only if necessary |
+| 仅文档 | `git diff --check` | 链接预览或人工阅读 |
+| GitHub 模板 | `git diff --check` | 必要时创建测试 issue/PR |
 | Maven pom/config | `mvn -q -DskipTests validate` | `mvn test` |
-| Backend service | Focused module tests | Full `mvn test` |
-| API/controller | Controller or integration tests | Manual API smoke test |
-| Flyway migration | API module tests and H2 compatibility when applicable | Real MySQL migration check |
-| Frontend UI | `$env:CI='true'; pnpm build` | Browser/manual workflow check |
-| Frontend state machine | Build plus focused logic/manual state verification | Screenshot or short screen recording |
-| Agent runtime | Focused service tests and manual/eval cases | End-to-end chat run |
-| RAG retrieval | Retrieval eval cases | Real ES/embedding environment test |
-| Literature recommendation | Authenticity and dedup eval cases | External source smoke test |
-| Paper polishing | Focused paper tests and artifact checks | End-to-end paper task run |
-| Kafka task dispatch | Producer/consumer focused tests | Local Docker Kafka smoke test |
-| SSE/event stream | Event sequence and terminal-state tests | Reconnect/manual browser check |
-| Cancellation | Cancel status and partial artifact checks | Long-running manual cancel scenario |
+| 后端 service | focused module tests | 完整 `mvn test` |
+| API/controller | controller 或 integration tests | 手动 API smoke test |
+| Flyway migration | API 模块测试和必要的 H2 兼容验证 | 真实 MySQL migration 检查 |
+| 前端 UI | `$env:CI='true'; pnpm build` | 浏览器/手动工作流检查 |
+| 前端状态机 | build + focused logic 或手动状态验证 | 截图或短录屏 |
+| Agent runtime | focused service tests + 手动/eval cases | 端到端聊天运行 |
+| RAG 检索 | 检索 eval cases | 真实 ES/embedding 环境测试 |
+| 文献推荐 | 真实性和去重 eval cases | 外部来源 smoke test |
+| 论文润色 | focused paper tests + artifact 检查 | 端到端论文任务运行 |
+| Kafka 任务分发 | producer/consumer focused tests | 本地 Docker Kafka smoke test |
+| SSE/event stream | 事件 sequence 和终态测试 | 重连/浏览器手动检查 |
+| 取消能力 | cancel 状态和 partial artifact 检查 | 长任务手动取消场景 |
 
-## Default Commands
+## 默认命令
 
-Backend validation:
+后端 validate：
 
 ```powershell
 mvn -q -DskipTests validate
 ```
 
-Backend full test:
+后端完整测试：
 
 ```powershell
 mvn test
 ```
 
-Frontend build:
+前端 build：
 
 ```powershell
 cd frontend
@@ -42,24 +42,24 @@ $env:CI='true'
 pnpm build
 ```
 
-Whitespace check:
+空白检查：
 
 ```powershell
 git diff --check
 ```
 
-## Merge Rule
+## 合并规则
 
-A PR can merge only when one of these is true:
+PR 只有满足以下任一条件才可以合并：
 
-1. The required verification passed.
-2. A skipped check is explicitly justified, the risk is acceptable, and a follow-up issue exists when needed.
+1. 必须验证项已通过。
+2. 跳过的检查已有明确理由，风险可接受，并在需要时创建了后续 issue。
 
-## Phase Discipline
+## 阶段纪律
 
-Before implementation starts, confirm:
+开始实现前必须确认：
 
-1. Which roadmap phase the issue belongs to.
-2. Whether it is a design, spike, implementation, test, or docs issue.
-3. Which non-goals prevent scope creep.
+1. issue 属于 roadmap 的哪个阶段。
+2. issue 是设计、spike、实现、测试还是文档任务。
+3. 哪些非目标用于防止范围膨胀。
 
