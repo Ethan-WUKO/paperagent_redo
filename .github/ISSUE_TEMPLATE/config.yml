@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Roadmap baseline
+    url: https://github.com/Ethan-WOKO/paperagent_redo/blob/main/memory-bank/agent-product-reconstruction-roadmap.md
+    about: Read this before opening implementation, design, or spike issues.
+
