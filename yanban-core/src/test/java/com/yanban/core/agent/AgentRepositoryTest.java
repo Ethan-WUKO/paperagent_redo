@@ -30,14 +30,17 @@ class AgentRepositoryTest {
     private final AgentSessionRepository sessions;
     private final AgentMessageRepository messages;
     private final AgentToolRunRepository toolRuns;
+    private final AgentSessionSummaryRepository summaries;
 
     @Autowired
     AgentRepositoryTest(AgentSessionRepository sessions,
                         AgentMessageRepository messages,
-                        AgentToolRunRepository toolRuns) {
+                        AgentToolRunRepository toolRuns,
+                        AgentSessionSummaryRepository summaries) {
         this.sessions = sessions;
         this.messages = messages;
         this.toolRuns = toolRuns;
+        this.summaries = summaries;
     }
 
     @Test
@@ -63,5 +66,44 @@ class AgentRepositoryTest {
         assertThat(savedToolRuns).hasSize(1);
         assertThat(savedToolRuns.get(0).getToolName()).isEqualTo("echo");
         assertThat(sessions.findByIdAndUserId(session.getId(), 1001L)).isPresent();
+    }
+
+    @Test
+    void upsertSessionSummaryThenQueryBySessionAndUser() {
+        AgentSession session = sessions.save(new AgentSession(
+                1002L,
+                "summary session",
+                "deepseek",
+                "deepseek-chat",
+                20,
+                false
+        ));
+        AgentMessage message = messages.save(new AgentMessage(
+                session.getId(),
+                1002L,
+                "user",
+                "long context",
+                null,
+                null
+        ));
+        AgentSessionSummary summary = summaries.saveAndFlush(new AgentSessionSummary(
+                session.getId(),
+                1002L,
+                "User studies GraphRAG.",
+                message.getId(),
+                1,
+                "deepseek",
+                "deepseek-chat"
+        ));
+
+        assertThat(summaries.findBySessionIdAndUserId(session.getId(), 1002L)).contains(summary);
+
+        summary.update("User studies GraphRAG and citation coverage.", message.getId(), 2, "glm", "glm-4");
+        summaries.saveAndFlush(summary);
+
+        AgentSessionSummary updated = summaries.findBySessionIdAndUserId(session.getId(), 1002L).orElseThrow();
+        assertThat(updated.getSummaryText()).isEqualTo("User studies GraphRAG and citation coverage.");
+        assertThat(updated.getMessageCount()).isEqualTo(2);
+        assertThat(updated.getModelProviderSnapshot()).isEqualTo("glm");
     }
 }
