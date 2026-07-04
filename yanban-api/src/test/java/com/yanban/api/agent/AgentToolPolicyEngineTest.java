@@ -47,12 +47,33 @@ class AgentToolPolicyEngineTest {
     }
 
     @Test
-    void literatureRequestUsesLiteratureSearch() {
+    void literatureRequestStartsLiteratureSearchTask() {
         AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry());
 
         AgentToolPolicyEngine.Decision decision = engine.decide("\u627e 5 \u7bc7 RAG \u76f8\u5173\u8bba\u6587\uff0c\u5e26 DOI", false, null);
 
-        assertThat(decision.allowedTools()).containsExactly("search_literature");
+        assertThat(decision.allowedTools()).containsExactly("literature_search_start");
+        assertThat(decision.allowedTools()).doesNotContain("search_literature");
+    }
+
+    @Test
+    void literatureTaskStatusRequestUsesLiteratureStatusToolOnly() {
+        AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry());
+
+        AgentToolPolicyEngine.Decision decision = engine.decide("\u67e5\u4e00\u4e0b\u6587\u732e\u68c0\u7d22\u4efb\u52a1 101 \u7684\u8fdb\u5ea6", false, null);
+
+        assertThat(decision.allowedTools()).containsExactly("literature_search_status");
+        assertThat(decision.reason()).contains("literature_task_intent");
+    }
+
+    @Test
+    void literatureTaskCancelRequestUsesStatusAndCancelWithoutSyncSearch() {
+        AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry());
+
+        AgentToolPolicyEngine.Decision decision = engine.decide("\u5e2e\u6211\u53d6\u6d88\u6587\u732e\u68c0\u7d22\u4efb\u52a1 101", false, null);
+
+        assertThat(decision.allowedTools()).containsExactly("literature_search_status", "literature_search_cancel");
+        assertThat(decision.allowedTools()).doesNotContain("search_literature");
     }
 
     @Test
@@ -109,6 +130,10 @@ class AgentToolPolicyEngineTest {
                 .register(new StubTool("search_web"))
                 .register(new StubTool("search_literature"))
                 .register(new StubTool("search_knowledge"))
+                .register(new StubTool("literature_search_start"))
+                .register(new StubTool("literature_search_status"))
+                .register(new StubTool("literature_search_result"))
+                .register(new StubTool("literature_search_cancel"))
                 .register(new StubTool("paper_polish_status"))
                 .register(new StubTool("paper_polish_result"))
                 .register(new StubTool("paper_task_cancel"));

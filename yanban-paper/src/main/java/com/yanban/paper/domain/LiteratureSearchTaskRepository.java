@@ -1,0 +1,13 @@
+package com.yanban.paper.domain;
+
+import java.util.List;
+import java.util.Optional;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface LiteratureSearchTaskRepository extends JpaRepository<LiteratureSearchTask, Long> {
+    Optional<LiteratureSearchTask> findByIdAndUserId(Long id, Long userId);
+
+    Optional<LiteratureSearchTask> findByIdempotencyKey(String idempotencyKey);
+
+    List<LiteratureSearchTask> findByUserIdOrderByCreatedAtDesc(Long userId);
+}
