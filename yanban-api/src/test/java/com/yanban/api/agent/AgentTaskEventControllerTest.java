@@ -9,6 +9,7 @@ import com.yanban.api.security.JwtUser;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 class AgentTaskEventControllerTest {
 
@@ -48,5 +49,47 @@ class AgentTaskEventControllerTest {
 
         assertThat(actual).isEmpty();
         verify(service).listEvents(11L, "paper-polish", 101L, 99L, 20);
+    }
+
+    @Test
+    void streamEventsPassesQueryParameters() {
+        AgentTaskEventService service = mock(AgentTaskEventService.class);
+        AgentTaskEventController controller = new AgentTaskEventController(service);
+        SseEmitter expected = new SseEmitter(0L);
+        when(service.streamEvents(11L, "literature-search", 101L, 99L, 20, 1500L)).thenReturn(expected);
+
+        SseEmitter actual = controller.streamEvents(
+                new JwtUser(11L, "alice"),
+                "literature-search",
+                101L,
+                99L,
+                20,
+                1500L,
+                null
+        );
+
+        assertThat(actual).isSameAs(expected);
+        verify(service).streamEvents(11L, "literature-search", 101L, 99L, 20, 1500L);
+    }
+
+    @Test
+    void streamEventsParsesLastEventIdHeader() {
+        AgentTaskEventService service = mock(AgentTaskEventService.class);
+        AgentTaskEventController controller = new AgentTaskEventController(service);
+        SseEmitter expected = new SseEmitter(0L);
+        when(service.streamEvents(11L, "paper-polish", 101L, 99L, null, null)).thenReturn(expected);
+
+        SseEmitter actual = controller.streamEvents(
+                new JwtUser(11L, "alice"),
+                "paper-polish",
+                101L,
+                null,
+                null,
+                null,
+                "99"
+        );
+
+        assertThat(actual).isSameAs(expected);
+        verify(service).streamEvents(11L, "paper-polish", 101L, 99L, null, null);
     }
 }
