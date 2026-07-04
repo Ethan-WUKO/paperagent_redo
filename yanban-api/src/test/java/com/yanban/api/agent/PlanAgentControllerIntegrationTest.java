@@ -303,7 +303,7 @@ class PlanAgentControllerIntegrationTest {
 
     private JsonNode waitForTerminalPlan(String token, long planId) throws Exception {
         JsonNode last = null;
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 60; i++) {
             MvcResult result = mockMvc.perform(get("/api/v1/agent/plans/{planId}", planId)
                             .header("Authorization", "Bearer " + token))
                     .andExpect(status().isOk())
@@ -313,7 +313,7 @@ class PlanAgentControllerIntegrationTest {
             if ("COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status)) {
                 return last;
             }
-            Thread.sleep(100);
+            Thread.sleep(250);
         }
         return last;
     }

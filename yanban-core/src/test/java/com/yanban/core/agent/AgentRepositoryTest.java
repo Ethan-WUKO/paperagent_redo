@@ -34,6 +34,7 @@ class AgentRepositoryTest {
     private final AgentSessionSummaryRepository summaries;
     private final AgentTurnRepository turns;
     private final AgentContextSnapshotRepository contextSnapshots;
+    private final AgentLongTermMemoryRepository longTermMemories;
 
     @Autowired
     AgentRepositoryTest(AgentSessionRepository sessions,
@@ -41,13 +42,15 @@ class AgentRepositoryTest {
                         AgentToolRunRepository toolRuns,
                         AgentSessionSummaryRepository summaries,
                         AgentTurnRepository turns,
-                        AgentContextSnapshotRepository contextSnapshots) {
+                        AgentContextSnapshotRepository contextSnapshots,
+                        AgentLongTermMemoryRepository longTermMemories) {
         this.sessions = sessions;
         this.messages = messages;
         this.toolRuns = toolRuns;
         this.summaries = summaries;
         this.turns = turns;
         this.contextSnapshots = contextSnapshots;
+        this.longTermMemories = longTermMemories;
     }
 
     @Test
@@ -153,5 +156,38 @@ class AgentRepositoryTest {
                 1003L,
                 PageRequest.of(0, 10)
         )).containsExactly(snapshot);
+    }
+
+    @Test
+    void insertLongTermMemoryThenSoftDeleteAndQueryByStatus() {
+        AgentLongTermMemory memory = longTermMemories.saveAndFlush(new AgentLongTermMemory(
+                1004L,
+                null,
+                "USER",
+                "PREFERENCE",
+                "User prefers concise academic prose.",
+                "[\"style\"]",
+                "USER_CONFIRMED",
+                null,
+                java.math.BigDecimal.valueOf(0.85),
+                null
+        ));
+
+        assertThat(longTermMemories.findByIdAndUserId(memory.getId(), 1004L)).contains(memory);
+        assertThat(longTermMemories.findByUserIdAndStatusOrderByUpdatedAtDesc(
+                1004L,
+                AgentLongTermMemory.STATUS_ACTIVE,
+                PageRequest.of(0, 10)
+        )).containsExactly(memory);
+
+        memory.markDeleted();
+        longTermMemories.saveAndFlush(memory);
+
+        assertThat(longTermMemories.findByUserIdAndStatusOrderByUpdatedAtDesc(
+                1004L,
+                AgentLongTermMemory.STATUS_DELETED,
+                PageRequest.of(0, 10)
+        )).containsExactly(memory);
+        assertThat(memory.getDeletedAt()).isNotNull();
     }
 }
