@@ -6,6 +6,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -21,7 +22,9 @@ public class AgentTaskEventController {
     @GetMapping("/{taskType}/{taskId}/events")
     public List<AgentTaskEventResponse> listEvents(@AuthenticationPrincipal JwtUser currentUser,
                                                    @PathVariable String taskType,
-                                                   @PathVariable Long taskId) {
-        return taskEventService.listEvents(currentUser.id(), taskType, taskId);
+                                                   @PathVariable Long taskId,
+                                                   @RequestParam(required = false) Long afterEventId,
+                                                   @RequestParam(required = false) Integer limit) {
+        return taskEventService.listEvents(currentUser.id(), taskType, taskId, afterEventId, limit);
     }
 }

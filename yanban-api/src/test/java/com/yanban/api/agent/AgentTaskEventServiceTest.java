@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.yanban.core.agent.AgentTaskEvent;
@@ -64,6 +65,57 @@ class AgentTaskEventServiceTest {
                 .thenReturn(List.of());
 
         assertThat(service.listEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID)).isEmpty();
+    }
+
+    @Test
+    void listEventsUsesAfterEventIdAndLimitForIncrementalRecovery() {
+        when(literatureTasks.getTask(USER_ID, TASK_ID)).thenReturn(mock(LiteratureSearchTask.class));
+        AgentTaskEvent running = event(2L, "TASK_RUNNING", Instant.parse("2026-07-04T01:00:01Z"));
+        when(events.listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, 1L, 20))
+                .thenReturn(List.of(running));
+
+        List<AgentTaskEventResponse> responses = service.listEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, 1L, 20);
+
+        assertThat(responses).extracting(AgentTaskEventResponse::id).containsExactly(2L);
+        verify(events).listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, 1L, 20);
+    }
+
+    @Test
+    void listEventsDefaultsIncrementalLimitWhenOnlyCursorIsProvided() {
+        when(literatureTasks.getTask(USER_ID, TASK_ID)).thenReturn(mock(LiteratureSearchTask.class));
+        when(events.listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, 1L, 100))
+                .thenReturn(List.of());
+
+        assertThat(service.listEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, 1L, null)).isEmpty();
+
+        verify(events).listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, 1L, 100);
+    }
+
+    @Test
+    void listEventsClampsLimitToMaximum() {
+        when(literatureTasks.getTask(USER_ID, TASK_ID)).thenReturn(mock(LiteratureSearchTask.class));
+        when(events.listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, null, 500))
+                .thenReturn(List.of());
+
+        assertThat(service.listEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, null, 999)).isEmpty();
+
+        verify(events).listEvents(AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH, TASK_ID, USER_ID, null, 500);
+    }
+
+    @Test
+    void listEventsRejectsInvalidCursorParametersBeforeOwnershipLookup() {
+        assertThatThrownBy(() -> service.listEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, -1L, 20))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        assertThatThrownBy(() -> service.listEvents(USER_ID, "LITERATURE_SEARCH", TASK_ID, null, 0))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verifyNoInteractions(literatureTasks);
+        verifyNoInteractions(events);
     }
 
     @Test

@@ -232,5 +232,20 @@ class AgentRepositoryTest {
                 2001L,
                 1005L
         )).containsExactly(first, second);
+
+        assertThat(taskEvents.findByTaskTypeAndTaskIdAndUserIdAndIdGreaterThanOrderByIdAsc(
+                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                2001L,
+                1005L,
+                first.getId(),
+                PageRequest.of(0, 10)
+        )).containsExactly(second);
+
+        assertThat(taskEvents.findByTaskTypeAndTaskIdAndUserIdOrderByIdAsc(
+                AgentTaskEventRecorder.TASK_TYPE_LITERATURE_SEARCH,
+                2001L,
+                1005L,
+                PageRequest.of(0, 1)
+        )).containsExactly(first);
     }
 }

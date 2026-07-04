@@ -1,6 +1,7 @@
 package com.yanban.core.agent;
 
 import java.util.List;
+import org.springframework.data.domain.PageRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -44,6 +45,24 @@ public class AgentTaskEventRecorder {
             return List.of();
         }
         return events.findByTaskTypeAndTaskIdAndUserIdOrderByCreatedAtAsc(taskType, taskId, userId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentTaskEvent> listEvents(String taskType, Long taskId, Long userId, Long afterEventId, int limit) {
+        if (!StringUtils.hasText(taskType) || taskId == null || userId == null) {
+            return List.of();
+        }
+        PageRequest page = PageRequest.of(0, limit);
+        if (afterEventId == null) {
+            return events.findByTaskTypeAndTaskIdAndUserIdOrderByIdAsc(taskType, taskId, userId, page);
+        }
+        return events.findByTaskTypeAndTaskIdAndUserIdAndIdGreaterThanOrderByIdAsc(
+                taskType,
+                taskId,
+                userId,
+                afterEventId,
+                page
+        );
     }
 
     private boolean isRecordable(AgentTaskEventCreateRequest request) {

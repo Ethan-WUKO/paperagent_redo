@@ -13,6 +13,9 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class AgentTaskEventService {
 
+    private static final int DEFAULT_INCREMENTAL_LIMIT = 100;
+    private static final int MAX_INCREMENTAL_LIMIT = 500;
+
     private final AgentTaskEventRecorder events;
     private final LiteratureSearchTaskService literatureTasks;
     private final PaperTaskRepository paperTasks;
@@ -26,11 +29,39 @@ public class AgentTaskEventService {
     }
 
     public List<AgentTaskEventResponse> listEvents(Long userId, String taskType, Long taskId) {
+        return listEvents(userId, taskType, taskId, null, null);
+    }
+
+    public List<AgentTaskEventResponse> listEvents(Long userId,
+                                                   String taskType,
+                                                   Long taskId,
+                                                   Long afterEventId,
+                                                   Integer limit) {
         String normalizedTaskType = normalizeTaskType(taskType);
+        validateCursor(afterEventId, limit);
         validateTaskOwnership(userId, normalizedTaskType, taskId, taskType);
-        return events.listEvents(normalizedTaskType, taskId, userId).stream()
+        List<com.yanban.core.agent.AgentTaskEvent> taskEvents = afterEventId == null && limit == null
+                ? events.listEvents(normalizedTaskType, taskId, userId)
+                : events.listEvents(normalizedTaskType, taskId, userId, afterEventId, normalizeLimit(limit));
+        return taskEvents.stream()
                 .map(AgentTaskEventResponse::from)
                 .toList();
+    }
+
+    private void validateCursor(Long afterEventId, Integer limit) {
+        if (afterEventId != null && afterEventId < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "afterEventId 不能小于 0");
+        }
+        if (limit != null && limit <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "limit 必须大于 0");
+        }
+    }
+
+    private int normalizeLimit(Integer limit) {
+        if (limit == null) {
+            return DEFAULT_INCREMENTAL_LIMIT;
+        }
+        return Math.min(limit, MAX_INCREMENTAL_LIMIT);
     }
 
     private void validateTaskOwnership(Long userId, String normalizedTaskType, Long taskId, String rawTaskType) {
