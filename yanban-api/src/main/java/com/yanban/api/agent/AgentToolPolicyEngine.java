@@ -15,6 +15,10 @@ public class AgentToolPolicyEngine {
     private static final String SEARCH_WEB = "search_web";
     private static final String SEARCH_LITERATURE = "search_literature";
     private static final String SEARCH_KNOWLEDGE = "search_knowledge";
+    private static final String LITERATURE_SEARCH_START = "literature_search_start";
+    private static final String LITERATURE_SEARCH_STATUS = "literature_search_status";
+    private static final String LITERATURE_SEARCH_RESULT = "literature_search_result";
+    private static final String LITERATURE_SEARCH_CANCEL = "literature_search_cancel";
     private static final String PAPER_POLISH_STATUS = "paper_polish_status";
     private static final String PAPER_POLISH_RESULT = "paper_polish_result";
     private static final String PAPER_TASK_CANCEL = "paper_task_cancel";
@@ -40,6 +44,18 @@ public class AgentToolPolicyEngine {
         boolean literatureIntent = containsAny(normalized,
                 "\u8bba\u6587", "\u6587\u732e", "\u671f\u520a", "doi", "arxiv", "bibtex", "openalex", "scholar",
                 "paper", "literature", "citation", "bibliography");
+        boolean literatureTaskIntent = containsAny(normalized,
+                "\u6587\u732e\u4efb\u52a1", "\u6587\u732e\u68c0\u7d22\u4efb\u52a1", "\u68c0\u7d22\u4efb\u52a1",
+                "\u6587\u732e\u68c0\u7d22\u8fdb\u5ea6", "\u6587\u732e\u8fdb\u5ea6", "\u6587\u732e\u7ed3\u679c",
+                "\u68c0\u7d22\u7ed3\u679c", "\u6587\u732e\u68c0\u7d22\u7ed3\u679c",
+                "literature task", "literature search task", "literature status", "literature result");
+        boolean literatureCancelIntent = literatureTaskIntent && containsAny(normalized,
+                "\u53d6\u6d88", "\u505c\u6b62", "\u7ec8\u6b62", "\u4e0d\u8981\u7ee7\u7eed",
+                "cancel", "stop", "abort");
+        boolean literatureResultIntent = literatureTaskIntent && containsAny(normalized,
+                "\u7ed3\u679c", "\u4ea7\u7269", "\u5019\u9009", "\u4e0b\u8f7d", "\u5bfc\u51fa", "\u62a5\u544a",
+                "result", "artifact", "candidate", "download", "export", "report");
+        boolean literatureStatusIntent = literatureTaskIntent && !literatureCancelIntent && !literatureResultIntent;
         boolean lookupTokenIntent = !ragDisabled && containsAny(normalized,
                 "_lookup", "lookup_", "mentor_lookup", "weekly_meeting", "lab_location", "weekly_deadline",
                 "file_type_lookup", "paper_final_step", "rag_quality_metric", "rag_architecture", "rerank_policy");
@@ -79,8 +95,15 @@ public class AgentToolPolicyEngine {
             literatureIntent = false;
         }
 
+        boolean literatureTaskToolsAvailable = registeredTools.contains(LITERATURE_SEARCH_START);
         addIfRegistered(allowed, registeredTools, knowledgeIntent, SEARCH_KNOWLEDGE);
-        addIfRegistered(allowed, registeredTools, literatureIntent, SEARCH_LITERATURE);
+        addIfRegistered(allowed, registeredTools, literatureIntent && !literatureTaskToolsAvailable, SEARCH_LITERATURE);
+        addIfRegistered(allowed, registeredTools, literatureIntent && literatureTaskToolsAvailable && !literatureTaskIntent, LITERATURE_SEARCH_START);
+        addIfRegistered(allowed, registeredTools, literatureStatusIntent, LITERATURE_SEARCH_STATUS);
+        addIfRegistered(allowed, registeredTools, literatureResultIntent, LITERATURE_SEARCH_STATUS);
+        addIfRegistered(allowed, registeredTools, literatureResultIntent, LITERATURE_SEARCH_RESULT);
+        addIfRegistered(allowed, registeredTools, literatureCancelIntent, LITERATURE_SEARCH_STATUS);
+        addIfRegistered(allowed, registeredTools, literatureCancelIntent, LITERATURE_SEARCH_CANCEL);
         addIfRegistered(allowed, registeredTools, (explicitSearch || currentIntent || healthIntent) && !literatureIntent && !paperTaskIntent, SEARCH_WEB);
         addIfRegistered(allowed, registeredTools, paperTaskIntent, PAPER_POLISH_STATUS);
         addIfRegistered(allowed, registeredTools, paperResultIntent, PAPER_POLISH_RESULT);
@@ -88,9 +111,9 @@ public class AgentToolPolicyEngine {
 
         int maxToolCalls = allowed.isEmpty()
                 ? 0
-                : allowed.stream().anyMatch(tool -> tool.startsWith("paper_")) ? Math.min(3, allowed.size())
+                : allowed.stream().anyMatch(tool -> tool.startsWith("paper_") || tool.startsWith("literature_search_")) ? Math.min(3, allowed.size())
                 : allowed.contains(SEARCH_WEB) && allowed.size() == 1 ? 1 : 2;
-        return new Decision(List.copyOf(allowed), maxToolCalls, 1, reason(allowed, explicitSearch, currentIntent, literatureIntent, knowledgeIntent, healthIntent, paperTaskIntent));
+        return new Decision(List.copyOf(allowed), maxToolCalls, 1, reason(allowed, explicitSearch, currentIntent, literatureIntent, knowledgeIntent, healthIntent, paperTaskIntent, literatureTaskIntent));
     }
 
     private void addIfRegistered(Set<String> allowed, Set<String> registeredTools, boolean condition, String toolName) {
@@ -105,7 +128,8 @@ public class AgentToolPolicyEngine {
                           boolean literatureIntent,
                           boolean knowledgeIntent,
                           boolean healthIntent,
-                          boolean paperTaskIntent) {
+                          boolean paperTaskIntent,
+                          boolean literatureTaskIntent) {
         if (allowed.isEmpty()) {
             return "direct_answer_no_tools";
         }
@@ -127,6 +151,9 @@ public class AgentToolPolicyEngine {
         }
         if (paperTaskIntent) {
             reasons.add("paper_task_intent");
+        }
+        if (literatureTaskIntent) {
+            reasons.add("literature_task_intent");
         }
         return String.join("+", reasons);
     }
