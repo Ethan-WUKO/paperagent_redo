@@ -7,11 +7,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.core.agent.AgentTask;
+import com.yanban.core.agent.AgentTaskRepository;
 import com.yanban.api.user.SysUser;
 import com.yanban.api.user.SysUserRepository;
 import com.yanban.paper.domain.LiteratureSearchTask;
 import com.yanban.paper.domain.LiteratureSearchTaskRepository;
 import com.yanban.paper.domain.PaperTask;
+import com.yanban.paper.domain.PaperTaskArtifact;
+import com.yanban.paper.domain.PaperTaskArtifactRepository;
 import com.yanban.paper.domain.PaperTaskRepository;
 import io.minio.MinioClient;
 import java.util.Map;
@@ -49,7 +53,13 @@ class TaskControlControllerIntegrationTest {
     PaperTaskRepository paperTaskRepository;
 
     @Autowired
+    PaperTaskArtifactRepository paperTaskArtifactRepository;
+
+    @Autowired
     LiteratureSearchTaskRepository literatureTaskRepository;
+
+    @Autowired
+    AgentTaskRepository agentTaskRepository;
 
     @Autowired
     SysUserRepository sysUserRepository;
@@ -111,8 +121,30 @@ class TaskControlControllerIntegrationTest {
                 .andExpect(jsonPath("$.taskType").value("paper_polish"))
                 .andExpect(jsonPath("$.taskId").value(taskId))
                 .andExpect(jsonPath("$.status").value("RUNNING"))
+                .andExpect(jsonPath("$.partialResultAvailable").value(false))
+                .andExpect(jsonPath("$.completedArtifactCount").value(0))
+                .andExpect(jsonPath("$.partialArtifactCount").value(0))
                 .andExpect(jsonPath("$.cancellable").value(true))
                 .andExpect(jsonPath("$.terminal").value(false));
+    }
+
+    @Test
+    void queryPaperTaskStatusIncludesPartialArtifactSignals() throws Exception {
+        String username = "task_control_owner_status_partial";
+        String token = registerAndGetToken(username);
+        Long userId = sysUserRepository.findByUsername(username).orElseThrow().getId();
+        PaperTask paperTask = createPaperTask(userId, "CANCELLED", "CANCELLED");
+        paperTaskArtifactRepository.save(partialArtifact(paperTask.getId(), "polished_tex", 1));
+        Long taskId = paperTask.getId();
+
+        mockMvc.perform(get("/api/v1/tasks/{taskId}/status", taskId)
+                        .header("Authorization", "Bearer " + token)
+                        .queryParam("taskType", "paper_polish"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.partialResultAvailable").value(true))
+                .andExpect(jsonPath("$.completedArtifactCount").value(0))
+                .andExpect(jsonPath("$.partialArtifactCount").value(1));
     }
 
     @Test
@@ -130,8 +162,41 @@ class TaskControlControllerIntegrationTest {
                 .andExpect(jsonPath("$.taskType").value("literature_search"))
                 .andExpect(jsonPath("$.taskId").value(taskId))
                 .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.startedAt").exists())
+                .andExpect(jsonPath("$.finishedAt").exists())
+                .andExpect(jsonPath("$.cancellationReason").value("manual stop"))
                 .andExpect(jsonPath("$.cancellable").value(false))
                 .andExpect(jsonPath("$.terminal").value(true));
+    }
+
+    @Test
+    void queryStatusFromUnifiedMirrorWhenLegacyRowIsMissing() throws Exception {
+        String username = "task_control_owner_status_mirror";
+        String token = registerAndGetToken(username);
+        Long userId = sysUserRepository.findByUsername(username).orElseThrow().getId();
+        Long sourceTaskId = 9999L;
+        AgentTask mirror = new AgentTask(
+                userId,
+                "PAPER_POLISH",
+                "PAPER_TASK",
+                sourceTaskId,
+                "CANCELLING"
+        );
+        mirror.setCurrentStage("POLISH");
+        mirror.setStartedAt(java.time.Instant.parse("2026-07-05T02:00:00Z"));
+        agentTaskRepository.save(mirror);
+
+        mockMvc.perform(get("/api/v1/tasks/{taskId}/status", sourceTaskId)
+                        .header("Authorization", "Bearer " + token)
+                        .queryParam("taskType", "paper_polish"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.taskType").value("paper_polish"))
+                .andExpect(jsonPath("$.taskId").value(sourceTaskId))
+                .andExpect(jsonPath("$.status").value("CANCELLING"))
+                .andExpect(jsonPath("$.currentStage").value("POLISH"))
+                .andExpect(jsonPath("$.startedAt").exists())
+                .andExpect(jsonPath("$.cancellable").value(false))
+                .andExpect(jsonPath("$.terminal").value(false));
     }
 
     private PaperTask createPaperTask(Long userId, String status, String stage) {
@@ -162,7 +227,16 @@ class TaskControlControllerIntegrationTest {
                 "req-1",
                 "idem-" + userId
         );
+        task.setStartedAt(java.time.Instant.parse("2026-07-05T01:00:00Z"));
+        task.setFinishedAt(java.time.Instant.parse("2026-07-05T01:05:00Z"));
+        task.setCancelReason("manual stop");
         return literatureTaskRepository.save(task);
+    }
+
+    private PaperTaskArtifact partialArtifact(Long taskId, String type, int version) {
+        PaperTaskArtifact artifact = new PaperTaskArtifact(taskId, type, "paper/" + type, version);
+        artifact.setArtifactStatus(PaperTaskArtifact.STATUS_PARTIAL);
+        return artifact;
     }
 
     private String registerAndGetToken(String username) throws Exception {

@@ -23,15 +23,18 @@ public class TaskControlService {
     private final PaperOrchestrator paperOrchestrator;
     private final LiteratureSearchTaskRepository literatureTasks;
     private final LiteratureSearchTaskService literatureTaskService;
+    private final AgentTaskService agentTaskService;
 
     public TaskControlService(PaperTaskRepository paperTasks,
                               PaperOrchestrator paperOrchestrator,
                               LiteratureSearchTaskRepository literatureTasks,
-                              LiteratureSearchTaskService literatureTaskService) {
+                              LiteratureSearchTaskService literatureTaskService,
+                              AgentTaskService agentTaskService) {
         this.paperTasks = paperTasks;
         this.paperOrchestrator = paperOrchestrator;
         this.literatureTasks = literatureTasks;
         this.literatureTaskService = literatureTaskService;
+        this.agentTaskService = agentTaskService;
     }
 
     public TaskCancelResponse cancel(Long userId, Long taskId, String requestedTaskType, String cancelReason) {
@@ -47,31 +50,7 @@ public class TaskControlService {
     }
 
     public TaskStatusResponse getStatus(Long userId, Long taskId, String requestedTaskType) {
-        TaskType taskType = resolveTaskType(requestedTaskType);
-        if (taskType != null) {
-            return switch (taskType) {
-                case PAPER_POLISH -> getPaperStatus(userId, taskId);
-                case LITERATURE_SEARCH -> getLiteratureStatus(userId, taskId);
-            };
-        }
-        return getStatusAutoDetect(userId, taskId);
-    }
-
-    private TaskStatusResponse getStatusAutoDetect(Long userId, Long taskId) {
-        PaperTask paperTask = paperTasks.findByIdAndUserId(taskId, userId).orElse(null);
-        LiteratureSearchTask literatureTask = literatureTasks.findByIdAndUserId(taskId, userId).orElse(null);
-
-        if (paperTask != null && literatureTask != null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "taskId matches both paper and literature task types; please specify taskType");
-        }
-        if (paperTask != null) {
-            return taskStatusFromPaper(paperTask);
-        }
-        if (literatureTask != null) {
-            return taskStatusFromLiterature(literatureTask);
-        }
-        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "task not found");
+        return agentTaskService.getStatus(userId, taskId, requestedTaskType);
     }
 
     private TaskCancelResponse cancelAutoDetect(Long userId, Long taskId, String cancelReason) {
@@ -113,26 +92,6 @@ public class TaskControlService {
         );
     }
 
-    private TaskStatusResponse getPaperStatus(Long userId, Long taskId) {
-        PaperTask paperTask = paperTasks.findByIdAndUserId(taskId, userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "paper task not found"));
-        return taskStatusFromPaper(paperTask);
-    }
-
-    private TaskStatusResponse taskStatusFromPaper(PaperTask paperTask) {
-        String status = paperTask.getStatus();
-        return new TaskStatusResponse(
-                "paper_polish",
-                paperTask.getId(),
-                status,
-                paperTask.getCurrentStage(),
-                paperTask.getCreatedAt(),
-                paperTask.getUpdatedAt(),
-                isPaperTerminal(status),
-                canCancel(status)
-        );
-    }
-
     private TaskCancelResponse cancelLiteratureTask(Long userId, Long taskId, String cancelReason) {
         LiteratureSearchTask before = literatureTasks.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "literature search task not found"));
@@ -149,26 +108,6 @@ public class TaskControlService {
                 after.getStatus(),
                 after.getCurrentStage(),
                 messageForCancel(before.getStatus(), cancelAccepted, "literature search task")
-        );
-    }
-
-    private TaskStatusResponse getLiteratureStatus(Long userId, Long taskId) {
-        LiteratureSearchTask literatureTask = literatureTasks.findByIdAndUserId(taskId, userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "literature search task not found"));
-        return taskStatusFromLiterature(literatureTask);
-    }
-
-    private TaskStatusResponse taskStatusFromLiterature(LiteratureSearchTask literatureTask) {
-        String status = literatureTask.getStatus();
-        return new TaskStatusResponse(
-                "literature_search",
-                literatureTask.getId(),
-                status,
-                literatureTask.getCurrentStage(),
-                literatureTask.getCreatedAt(),
-                literatureTask.getUpdatedAt(),
-                literatureTaskService.isTerminal(status),
-                canCancel(status)
         );
     }
 

@@ -9,6 +9,14 @@ public record TaskStatusResponse(
         String currentStage,
         Instant createdAt,
         Instant updatedAt,
+        Instant startedAt,
+        Instant finishedAt,
+        Integer progressPercent,
+        String errorMessage,
+        String cancellationReason,
+        boolean partialResultAvailable,
+        int completedArtifactCount,
+        int partialArtifactCount,
         boolean terminal,
         boolean cancellable
 ) {

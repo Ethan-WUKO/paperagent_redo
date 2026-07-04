@@ -29,6 +29,7 @@ class TaskControlServiceTest {
     private PaperOrchestrator paperOrchestrator;
     private LiteratureSearchTaskRepository literatureTaskRepository;
     private LiteratureSearchTaskService literatureTaskService;
+    private AgentTaskService agentTaskService;
     private TaskControlService service;
 
     @BeforeEach
@@ -37,11 +38,13 @@ class TaskControlServiceTest {
         paperOrchestrator = mock(PaperOrchestrator.class);
         literatureTaskRepository = mock(LiteratureSearchTaskRepository.class);
         literatureTaskService = mock(LiteratureSearchTaskService.class);
+        agentTaskService = mock(AgentTaskService.class);
         service = new TaskControlService(
                 paperTaskRepository,
                 paperOrchestrator,
                 literatureTaskRepository,
-                literatureTaskService
+                literatureTaskService,
+                agentTaskService
         );
     }
 
@@ -136,58 +139,42 @@ class TaskControlServiceTest {
 
     @Test
     void getPaperTaskStatusByType() {
-        PaperTask paperTask = paperTask("RUNNING", "POLISH");
-        when(paperTaskRepository.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(java.util.Optional.of(paperTask));
+        TaskStatusResponse expected = status("paper_polish", "RUNNING", "POLISH", false, true);
+        when(agentTaskService.getStatus(USER_ID, TASK_ID, "paper_polish")).thenReturn(expected);
 
         TaskStatusResponse response = service.getStatus(USER_ID, TASK_ID, "paper_polish");
 
-        assertThat(response.taskType()).isEqualTo("paper_polish");
-        assertThat(response.taskId()).isEqualTo(TASK_ID);
-        assertThat(response.status()).isEqualTo("RUNNING");
-        assertThat(response.currentStage()).isEqualTo("POLISH");
-        assertThat(response.terminal()).isFalse();
-        assertThat(response.cancellable()).isTrue();
+        assertThat(response).isEqualTo(expected);
     }
 
     @Test
     void getPaperTaskStatusCancellingIsNotCancellable() {
-        PaperTask paperTask = paperTask("CANCEL_REQUESTED", "POLISH");
-        when(paperTaskRepository.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(java.util.Optional.of(paperTask));
+        TaskStatusResponse expected = status("paper_polish", "CANCEL_REQUESTED", "POLISH", false, false);
+        when(agentTaskService.getStatus(USER_ID, TASK_ID, "paper_polish")).thenReturn(expected);
 
         TaskStatusResponse response = service.getStatus(USER_ID, TASK_ID, "paper_polish");
 
-        assertThat(response.taskType()).isEqualTo("paper_polish");
-        assertThat(response.status()).isEqualTo("CANCEL_REQUESTED");
-        assertThat(response.terminal()).isFalse();
-        assertThat(response.cancellable()).isFalse();
+        assertThat(response).isEqualTo(expected);
     }
 
     @Test
     void getLiteratureTaskStatusAutoDetect() {
-        when(paperTaskRepository.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(java.util.Optional.empty());
-        LiteratureSearchTask literatureTask = literatureSearchTask("CANCELLED", "CANCELLED");
-        when(literatureTaskRepository.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(java.util.Optional.of(literatureTask));
-        when(literatureTaskService.isTerminal("CANCELLED")).thenReturn(true);
+        TaskStatusResponse expected = status("literature_search", "CANCELLED", "CANCELLED", true, false);
+        when(agentTaskService.getStatus(USER_ID, TASK_ID, null)).thenReturn(expected);
 
         TaskStatusResponse response = service.getStatus(USER_ID, TASK_ID, null);
 
-        assertThat(response.taskType()).isEqualTo("literature_search");
-        assertThat(response.status()).isEqualTo("CANCELLED");
-        assertThat(response.terminal()).isTrue();
-        assertThat(response.cancellable()).isFalse();
+        assertThat(response).isEqualTo(expected);
     }
 
     @Test
     void getLiteratureTaskStatusCancellingIsNotCancellable() {
-        when(paperTaskRepository.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(java.util.Optional.empty());
-        LiteratureSearchTask literatureTask = literatureSearchTask("CANCELLING", "CANCELLING");
-        when(literatureTaskRepository.findByIdAndUserId(TASK_ID, USER_ID)).thenReturn(java.util.Optional.of(literatureTask));
+        TaskStatusResponse expected = status("literature_search", "CANCELLING", "CANCELLING", false, false);
+        when(agentTaskService.getStatus(USER_ID, TASK_ID, "literature_search")).thenReturn(expected);
 
         TaskStatusResponse response = service.getStatus(USER_ID, TASK_ID, "literature_search");
 
-        assertThat(response.status()).isEqualTo("CANCELLING");
-        assertThat(response.terminal()).isFalse();
-        assertThat(response.cancellable()).isFalse();
+        assertThat(response).isEqualTo(expected);
     }
 
     @Test
@@ -236,5 +223,26 @@ class TaskControlServiceTest {
         );
         ReflectionTestUtils.setField(task, "id", TASK_ID);
         return task;
+    }
+
+    private TaskStatusResponse status(String taskType, String status, String stage, boolean terminal, boolean cancellable) {
+        return new TaskStatusResponse(
+                taskType,
+                TASK_ID,
+                status,
+                stage,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                0,
+                0,
+                terminal,
+                cancellable
+        );
     }
 }
