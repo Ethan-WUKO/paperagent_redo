@@ -12,8 +12,8 @@ public class PaperAsyncConfig {
     public Executor paperTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setThreadNamePrefix("yanban-paper-");
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
         executor.setQueueCapacity(20);
         executor.initialize();
         return executor;
