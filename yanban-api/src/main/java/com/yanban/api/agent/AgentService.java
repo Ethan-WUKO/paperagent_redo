@@ -6,6 +6,7 @@ import com.yanban.api.settings.SysUserSettings;
 import com.yanban.api.settings.UserSettingsService;
 import com.yanban.api.skills.ResolvedSkill;
 import com.yanban.api.skills.SkillsService;
+import com.yanban.api.observability.TraceIdFilter;
 import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSession;
@@ -31,6 +32,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -62,6 +64,7 @@ public class AgentService {
     private final SkillsService skillsService;
     private final AgentToolPolicyEngine toolPolicyEngine;
     private final AgentContextBuilder agentContextBuilder;
+    private final AgentContextSnapshotService contextSnapshotService;
     private final AgentSessionSummaryService sessionSummaryService;
     private final ChatModelProvider titleModelProvider;
     private final UserAccountPolicy accountPolicy;
@@ -77,6 +80,7 @@ public class AgentService {
                         SkillsService skillsService,
                         AgentToolPolicyEngine toolPolicyEngine,
                         AgentContextBuilder agentContextBuilder,
+                        AgentContextSnapshotService contextSnapshotService,
                         AgentSessionSummaryService sessionSummaryService,
                         @Qualifier("chatModelProvider") ChatModelProvider titleModelProvider,
                         UserAccountPolicy accountPolicy) {
@@ -91,6 +95,7 @@ public class AgentService {
         this.skillsService = skillsService;
         this.toolPolicyEngine = toolPolicyEngine;
         this.agentContextBuilder = agentContextBuilder;
+        this.contextSnapshotService = contextSnapshotService;
         this.sessionSummaryService = sessionSummaryService;
         this.titleModelProvider = titleModelProvider;
         this.accountPolicy = accountPolicy;
@@ -227,6 +232,7 @@ public class AgentService {
         AgentMessage userMessage = saveAndCacheMessage(session.getId(), userId, ChatMessage.user(request.content()));
         saved.add(userMessage);
         AgentTurn turn = createRunningTurn(session.getId(), userId, userMessage.getId());
+        saveContextSnapshot(turn, contextPackage);
 
         if (isRuntimeIdentityQuestion(request.content())) {
             String assistantContent = buildRuntimeIdentityAnswer(endpoint);
@@ -379,6 +385,24 @@ public class AgentService {
         } catch (Exception ex) {
             log.warn("Failed to load agent session summary sessionId={} userId={}", sessionId, userId, ex);
             return null;
+        }
+    }
+
+    private void saveContextSnapshot(AgentTurn turn, AgentContextPackage contextPackage) {
+        if (turn == null) {
+            return;
+        }
+        try {
+            contextSnapshotService.saveSnapshot(
+                    turn.getId(),
+                    turn.getSessionId(),
+                    turn.getUserId(),
+                    MDC.get(TraceIdFilter.TRACE_ID_MDC_KEY),
+                    contextPackage
+            );
+        } catch (Exception ex) {
+            log.warn("Failed to save agent context snapshot turnId={} sessionId={} userId={}",
+                    turn.getId(), turn.getSessionId(), turn.getUserId(), ex);
         }
     }
 

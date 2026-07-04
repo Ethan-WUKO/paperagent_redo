@@ -21,9 +21,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class AgentController {
 
     private final AgentService agentService;
+    private final AgentContextSnapshotService contextSnapshotService;
 
-    public AgentController(AgentService agentService) {
+    public AgentController(AgentService agentService,
+                           AgentContextSnapshotService contextSnapshotService) {
         this.agentService = agentService;
+        this.contextSnapshotService = contextSnapshotService;
     }
 
     @PostMapping
@@ -66,5 +69,19 @@ public class AgentController {
                                            @PathVariable Long sessionId,
                                            @Valid @RequestBody SendMessageRequest request) {
         return agentService.sendMessage(currentUser.id(), sessionId, request);
+    }
+
+    @GetMapping("/{sessionId}/context-snapshots")
+    public List<AgentContextSnapshotResponse> listContextSnapshots(@AuthenticationPrincipal JwtUser currentUser,
+                                                                   @PathVariable Long sessionId,
+                                                                   @RequestParam(defaultValue = "20") Integer limit) {
+        return contextSnapshotService.listSessionSnapshots(currentUser.id(), sessionId, limit);
+    }
+
+    @GetMapping("/{sessionId}/turns/{turnId}/context-snapshot")
+    public AgentContextSnapshotResponse getContextSnapshot(@AuthenticationPrincipal JwtUser currentUser,
+                                                          @PathVariable Long sessionId,
+                                                          @PathVariable Long turnId) {
+        return contextSnapshotService.getTurnSnapshot(currentUser.id(), sessionId, turnId);
     }
 }

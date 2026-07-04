@@ -9,6 +9,7 @@ import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
@@ -31,16 +32,22 @@ class AgentRepositoryTest {
     private final AgentMessageRepository messages;
     private final AgentToolRunRepository toolRuns;
     private final AgentSessionSummaryRepository summaries;
+    private final AgentTurnRepository turns;
+    private final AgentContextSnapshotRepository contextSnapshots;
 
     @Autowired
     AgentRepositoryTest(AgentSessionRepository sessions,
                         AgentMessageRepository messages,
                         AgentToolRunRepository toolRuns,
-                        AgentSessionSummaryRepository summaries) {
+                        AgentSessionSummaryRepository summaries,
+                        AgentTurnRepository turns,
+                        AgentContextSnapshotRepository contextSnapshots) {
         this.sessions = sessions;
         this.messages = messages;
         this.toolRuns = toolRuns;
         this.summaries = summaries;
+        this.turns = turns;
+        this.contextSnapshots = contextSnapshots;
     }
 
     @Test
@@ -105,5 +112,46 @@ class AgentRepositoryTest {
         assertThat(updated.getSummaryText()).isEqualTo("User studies GraphRAG and citation coverage.");
         assertThat(updated.getMessageCount()).isEqualTo(2);
         assertThat(updated.getModelProviderSnapshot()).isEqualTo("glm");
+    }
+
+    @Test
+    void insertContextSnapshotThenQueryByTurnAndSession() {
+        AgentSession session = sessions.save(new AgentSession(
+                1003L,
+                "context snapshot session",
+                "deepseek",
+                "deepseek-chat",
+                20,
+                false
+        ));
+        AgentMessage userMessage = messages.save(new AgentMessage(
+                session.getId(),
+                1003L,
+                "user",
+                "debug context",
+                null,
+                null
+        ));
+        AgentTurn turn = turns.saveAndFlush(new AgentTurn(session.getId(), 1003L, userMessage.getId()));
+        AgentContextSnapshot snapshot = contextSnapshots.saveAndFlush(new AgentContextSnapshot(
+                turn.getId(),
+                session.getId(),
+                1003L,
+                "trace-context",
+                "[{\"type\":\"recent_messages\",\"itemCount\":1,\"estimatedCharacters\":10,\"note\":\"recent\"}]",
+                "[]",
+                1,
+                1,
+                2,
+                120
+        ));
+
+        assertThat(contextSnapshots.findByTurnIdAndSessionIdAndUserId(turn.getId(), session.getId(), 1003L))
+                .contains(snapshot);
+        assertThat(contextSnapshots.findBySessionIdAndUserIdOrderByCreatedAtDesc(
+                session.getId(),
+                1003L,
+                PageRequest.of(0, 10)
+        )).containsExactly(snapshot);
     }
 }

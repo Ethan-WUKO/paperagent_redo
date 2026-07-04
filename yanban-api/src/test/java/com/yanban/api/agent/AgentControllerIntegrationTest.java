@@ -68,6 +68,9 @@ class AgentControllerIntegrationTest {
     @SpyBean
     AgentSessionSummaryService sessionSummaryService;
 
+    @SpyBean
+    AgentContextSnapshotService contextSnapshotService;
+
     @MockBean(name = "chatModelProvider")
     ChatModelProvider chatModelProvider;
 
@@ -247,6 +250,65 @@ class AgentControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.assistantContent").value("main reply survived"))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+    }
+
+    @Test
+    void sendMessagePersistsContextSnapshotAndDebugApiReturnsMetadataOnly() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("debug reply"), "stop", null));
+        String token = registerAndGetToken("agent_user_context_snapshot");
+        long sessionId = createSession(token, "Context Snapshot");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Trace-Id", "trace-context-debug")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"secret draft paragraph for context debugging\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        MvcResult listResult = mockMvc.perform(get("/api/v1/agent/sessions/{id}/context-snapshots", sessionId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].traceId").value("trace-context-debug"))
+                .andExpect(jsonPath("$[0].sections.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$[0].estimatedCharacters").value(org.hamcrest.Matchers.greaterThan(0)))
+                .andReturn();
+
+        JsonNode snapshots = objectMapper.readTree(listResult.getResponse().getContentAsString());
+        JsonNode snapshot = snapshots.get(0);
+        assertThat(snapshot.toString()).contains("runtime_identity_guard");
+        assertThat(snapshot.toString()).doesNotContain("secret draft paragraph");
+
+        long turnId = snapshot.get("turnId").asLong();
+        mockMvc.perform(get("/api/v1/agent/sessions/{sessionId}/turns/{turnId}/context-snapshot", sessionId, turnId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.turnId").value(turnId))
+                .andExpect(jsonPath("$.sessionId").value(sessionId))
+                .andExpect(jsonPath("$.traceId").value("trace-context-debug"));
+    }
+
+    @Test
+    void contextSnapshotFailureDoesNotFailSuccessfulReply() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("snapshot failure survived"), "stop", null));
+        doThrow(new IllegalStateException("snapshot store failed"))
+                .when(contextSnapshotService).saveSnapshot(any(), any(), any(), any(), any());
+        String token = registerAndGetToken("agent_user_context_snapshot_failure");
+        long sessionId = createSession(token, "Context Snapshot Failure");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"please keep replying\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.assistantContent").value("snapshot failure survived"))
                 .andExpect(jsonPath("$.messages.length()").value(2));
     }
 
