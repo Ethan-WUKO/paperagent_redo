@@ -1,7 +1,6 @@
 package com.yanban.paper.literature;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.paper.domain.LiteratureSearchTask;
 import java.util.Optional;
 import java.util.concurrent.Executor;
@@ -17,16 +16,16 @@ public class LiteratureSearchTaskWorker {
 
     private final LiteratureSearchTaskService taskService;
     private final AdHocLiteratureSearchService searchService;
-    private final ObjectMapper objectMapper;
+    private final LiteratureSearchTaskResultMaterializer resultMaterializer;
     private final Executor literatureTaskExecutor;
 
     public LiteratureSearchTaskWorker(LiteratureSearchTaskService taskService,
                                       AdHocLiteratureSearchService searchService,
-                                      ObjectMapper objectMapper,
+                                      LiteratureSearchTaskResultMaterializer resultMaterializer,
                                       @Qualifier("literatureTaskExecutor") Executor literatureTaskExecutor) {
         this.taskService = taskService;
         this.searchService = searchService;
-        this.objectMapper = objectMapper;
+        this.resultMaterializer = resultMaterializer;
         this.literatureTaskExecutor = literatureTaskExecutor;
     }
 
@@ -52,15 +51,9 @@ public class LiteratureSearchTaskWorker {
                 taskService.markCancelled(userId, taskId);
                 return;
             }
-            taskService.saveResult(
-                    userId,
-                    taskId,
-                    objectMapper.writeValueAsString(result),
-                    result.rawCandidateCount(),
-                    result.uniqueCandidateCount(),
-                    result.sourceAttempts(),
-                    objectMapper.writeValueAsString(result.sourceFailures())
-            );
+            resultMaterializer.materializeAndSave(userId, taskId, result);
+        } catch (LiteratureSearchTaskResultMaterializer.LiteratureSearchTaskCancelledException ex) {
+            taskService.markCancelled(userId, taskId);
         } catch (Exception ex) {
             if (taskService.isCancellationRequested(userId, taskId)) {
                 taskService.markCancelled(userId, taskId);

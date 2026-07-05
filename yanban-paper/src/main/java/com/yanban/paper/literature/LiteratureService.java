@@ -26,7 +26,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -37,6 +36,7 @@ public class LiteratureService {
 
     private final List<LiteratureSource> sources;
     private final LiteratureCardRepository cards;
+    private final LiteratureCardCatalogService cardCatalogService;
     private final PaperTaskLiteratureRepository taskLiterature;
     private final PaperTaskAnalysisRepository analyses;
     private final PaperTaskArtifactRepository artifacts;
@@ -54,6 +54,7 @@ public class LiteratureService {
                              PaperTaskArtifactRepository artifacts,
                              PaperTaskRepository tasks,
                              LiteratureQueryPlanner queryPlanner,
+                             LiteratureCardCatalogService cardCatalogService,
                              LiteratureCardAnalysisService cardAnalysisService,
                              LiteratureRerankService rerankService,
                              PaperStorageService storageService,
@@ -65,6 +66,7 @@ public class LiteratureService {
         this.artifacts = artifacts;
         this.tasks = tasks;
         this.queryPlanner = queryPlanner;
+        this.cardCatalogService = cardCatalogService;
         this.cardAnalysisService = cardAnalysisService;
         this.rerankService = rerankService;
         this.storageService = storageService;
@@ -310,7 +312,7 @@ public class LiteratureService {
     }
 
     private LiteratureSearchResult toResult(Long taskId, LiteratureCandidate candidate, double score, SlotQuery slot) {
-        LiteratureCard card = upsertCard(candidate);
+        LiteratureCard card = cardCatalogService.upsertCard(candidate);
         String ladderNode = slot == null ? "general" : slot.id();
         String role = slot == null ? narrativeRole(score) : normalizedCategory(slot.category(), slot.query());
         return new LiteratureSearchResult(card, score, safeDbValue(role, 32), ladderNode, false, candidate.sourceQuery());
@@ -320,63 +322,6 @@ public class LiteratureService {
         if (value == null || value.isBlank()) return "general";
         String normalized = value.trim();
         return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
-    }
-
-    private LiteratureCard upsertCard(LiteratureCandidate candidate) {
-        LiteratureCard card = findExisting(candidate).orElseGet(() -> new LiteratureCard(titleHash(candidate.title()), candidate.title()));
-        enrich(card, candidate);
-        return cards.save(card);
-    }
-
-    private Optional<LiteratureCard> findExisting(LiteratureCandidate candidate) {
-        if (notBlank(candidate.doi())) {
-            Optional<LiteratureCard> hit = cards.findByDoi(normalizeDoi(candidate.doi()));
-            if (hit.isPresent()) return hit;
-        }
-        if (notBlank(candidate.arxivId())) {
-            Optional<LiteratureCard> hit = cards.findByArxivId(candidate.arxivId());
-            if (hit.isPresent()) return hit;
-        }
-        if (notBlank(candidate.openAlexId())) {
-            Optional<LiteratureCard> hit = cards.findByOpenAlexId(candidate.openAlexId());
-            if (hit.isPresent()) return hit;
-        }
-        if (notBlank(candidate.s2Id())) {
-            Optional<LiteratureCard> hit = cards.findByS2Id(candidate.s2Id());
-            if (hit.isPresent()) return hit;
-        }
-        return cards.findFirstByTitleHash(titleHash(candidate.title()));
-    }
-
-    private void enrich(LiteratureCard card, LiteratureCandidate candidate) {
-        card.setDoi(firstNonBlank(card.getDoi(), normalizeDoi(candidate.doi())));
-        card.setArxivId(firstNonBlank(card.getArxivId(), candidate.arxivId()));
-        card.setOpenAlexId(firstNonBlank(card.getOpenAlexId(), candidate.openAlexId()));
-        card.setS2Id(firstNonBlank(card.getS2Id(), candidate.s2Id()));
-        card.setTitle(firstNonBlank(card.getTitle(), candidate.title()));
-        card.setTitleHash(titleHash(card.getTitle()));
-        card.setAuthors(toJson(candidate.authors()));
-        card.setPublicationYear(candidate.year());
-        card.setVenue(candidate.venue());
-        card.setAbstractText(candidate.abstractText());
-        card.setUrl(candidate.url());
-        card.setPdfUrl(candidate.pdfUrl());
-        card.setCitationCount(candidate.citationCount());
-        card.setReferencedWorksJson(toJson(candidate.referencedWorks()));
-        card.setFieldsOfStudyJson(toJson(candidate.fieldsOfStudy()));
-        card.setSourcesJson(mergeSource(card.getSourcesJson(), candidate.source()));
-        if (card.getAnalysisJson() == null || card.getAnalysisJson().isBlank()) {
-            card.setAnalysisJson(toJson(Map.of(
-                    "claim", firstSentence(candidate.abstractText()),
-                    "tasks", safeList(candidate.fieldsOfStudy()),
-                    "methods", keywordHits(candidate.abstractText()),
-                    "limitations", List.of(),
-                    "evidenceSource", "retrieved-abstract-rule-based"
-            )));
-            card.setAnalyzedAt(Instant.now());
-            card.setAnalysisModelVersion("rule-based-l3c-v1");
-        }
-        card.setFetchedAt(Instant.now());
     }
 
     private double score(LiteratureCandidate candidate, ResearchProfileResult profile, SlotQuery slot, Set<String> taskCoreTerms) {
@@ -756,6 +701,19 @@ public class LiteratureService {
         return "title:" + titleHash(candidate.title());
     }
 
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value == null ? List.of() : value);
+        } catch (JsonProcessingException ex) {
+            return "[]";
+        }
+    }
+
+    private String normalizeDoi(String doi) {
+        if (doi == null) return null;
+        return doi.trim().toLowerCase(Locale.ROOT).replace("https://doi.org/", "").replace("http://doi.org/", "");
+    }
+
     private String titleHash(String title) {
         try {
             String normalized = title == null ? "" : title.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\p{IsHan}]", "");
@@ -766,52 +724,6 @@ public class LiteratureService {
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to hash title", ex);
         }
-    }
-
-    private String normalizeDoi(String doi) {
-        if (doi == null) return null;
-        return doi.trim().toLowerCase(Locale.ROOT).replace("https://doi.org/", "").replace("http://doi.org/", "");
-    }
-
-    private String firstSentence(String text) {
-        if (text == null || text.isBlank()) return "";
-        String normalized = text.replaceAll("\\s+", " ").trim();
-        int dot = normalized.indexOf('.');
-        return dot > 20 ? normalized.substring(0, dot + 1) : normalized;
-    }
-
-    private List<String> keywordHits(String text) {
-        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
-        List<String> hits = new ArrayList<>();
-        for (String keyword : List.of("retrieval", "generation", "ranking", "classification", "optimization", "transformer", "graph", "contrastive")) {
-            if (lower.contains(keyword)) hits.add(keyword);
-        }
-        return hits;
-    }
-
-    private String mergeSource(String existingJson, String source) {
-        Set<String> values = new LinkedHashSet<>();
-        if (existingJson != null && !existingJson.isBlank()) {
-            try {
-                objectMapper.readTree(existingJson).forEach(node -> values.add(node.asText()));
-            } catch (Exception ignored) {
-                values.add(existingJson);
-            }
-        }
-        if (source != null && !source.isBlank()) values.add(source);
-        return toJson(values);
-    }
-
-    private String toJson(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value == null ? List.of() : value);
-        } catch (JsonProcessingException ex) {
-            return "[]";
-        }
-    }
-
-    private String firstNonBlank(String current, String incoming) {
-        return notBlank(current) ? current : incoming;
     }
 
     private List<String> safeList(List<String> values) {

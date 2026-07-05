@@ -1,5 +1,6 @@
 package com.yanban.paper.literature;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -7,7 +8,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.paper.domain.LiteratureSearchTask;
 import java.util.List;
 import java.util.Optional;
@@ -22,17 +22,19 @@ class LiteratureSearchTaskWorkerTest {
 
     private LiteratureSearchTaskService taskService;
     private AdHocLiteratureSearchService searchService;
+    private LiteratureSearchTaskResultMaterializer resultMaterializer;
     private LiteratureSearchTaskWorker worker;
 
     @BeforeEach
     void setUp() {
         taskService = mock(LiteratureSearchTaskService.class);
         searchService = mock(AdHocLiteratureSearchService.class);
-        worker = new LiteratureSearchTaskWorker(taskService, searchService, new ObjectMapper(), Runnable::run);
+        resultMaterializer = mock(LiteratureSearchTaskResultMaterializer.class);
+        worker = new LiteratureSearchTaskWorker(taskService, searchService, resultMaterializer, Runnable::run);
     }
 
     @Test
-    void processRunsSearchAndPersistsResult() {
+    void processRunsSearchAndPersistsResult() throws Exception {
         LiteratureSearchTask task = task(LiteratureSearchTaskService.STATUS_RUNNING);
         when(taskService.claimForRun(TASK_ID)).thenReturn(Optional.of(task));
         when(taskService.isCancellationRequested(USER_ID, TASK_ID)).thenReturn(false, false);
@@ -40,7 +42,7 @@ class LiteratureSearchTaskWorkerTest {
 
         worker.process(TASK_ID);
 
-        verify(taskService).saveResult(eq(USER_ID), eq(TASK_ID), anyString(), eq(2), eq(1), eq(1), eq("[\"openalex: timeout\"]"));
+        verify(resultMaterializer).materializeAndSave(eq(USER_ID), eq(TASK_ID), any());
     }
 
     @Test
@@ -68,7 +70,7 @@ class LiteratureSearchTaskWorkerTest {
     }
 
     @Test
-    void processDoesNotSaveResultWhenCancelledAfterSearch() {
+    void processDoesNotSaveResultWhenCancelledAfterSearch() throws Exception {
         LiteratureSearchTask task = task(LiteratureSearchTaskService.STATUS_RUNNING);
         when(taskService.claimForRun(TASK_ID)).thenReturn(Optional.of(task));
         when(taskService.isCancellationRequested(USER_ID, TASK_ID)).thenReturn(false, true);
@@ -77,7 +79,7 @@ class LiteratureSearchTaskWorkerTest {
         worker.process(TASK_ID);
 
         verify(taskService).markCancelled(USER_ID, TASK_ID);
-        verify(taskService, never()).saveResult(eq(USER_ID), eq(TASK_ID), anyString(), eq(2), eq(1), eq(1), anyString());
+        verify(resultMaterializer, never()).materializeAndSave(eq(USER_ID), eq(TASK_ID), any());
     }
 
     private AdHocLiteratureSearchService.AdHocLiteratureSearchResult result() {

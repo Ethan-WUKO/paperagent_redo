@@ -46,6 +46,11 @@ class LiteratureServiceTest {
         }
 
         @Bean
+        LiteratureCardCatalogService literatureCardCatalogService(LiteratureCardRepository cards, ObjectMapper objectMapper) {
+            return new LiteratureCardCatalogService(cards, objectMapper);
+        }
+
+        @Bean
         LiteratureSource fakeSource() {
             return new FakeLiteratureSource();
         }

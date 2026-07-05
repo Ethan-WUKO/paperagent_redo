@@ -191,6 +191,15 @@ public class AdHocLiteratureSearchService {
 
     public record AdHocLiteratureItem(String title, List<String> authors, Integer year, String venue, String doi,
                                       String arxivId, String openAlexId, String url, String abstractText, String source,
-                                      String sourceQuery, double score, String bibtex) {
+                                      String sourceQuery, double score, String bibtex, Long cardId) {
+        public AdHocLiteratureItem(String title, List<String> authors, Integer year, String venue, String doi,
+                                   String arxivId, String openAlexId, String url, String abstractText, String source,
+                                   String sourceQuery, double score, String bibtex) {
+            this(title, authors, year, venue, doi, arxivId, openAlexId, url, abstractText, source, sourceQuery, score, bibtex, null);
+        }
+
+        public AdHocLiteratureItem withCardId(Long value) {
+            return new AdHocLiteratureItem(title, authors, year, venue, doi, arxivId, openAlexId, url, abstractText, source, sourceQuery, score, bibtex, value);
+        }
     }
 }
