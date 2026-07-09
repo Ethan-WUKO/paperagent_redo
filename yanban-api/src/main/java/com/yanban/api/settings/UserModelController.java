@@ -7,7 +7,6 @@ import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
 import jakarta.validation.Valid;
 import java.util.List;
-import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -26,10 +25,14 @@ public class UserModelController {
 
     private final UserSettingsService userSettingsService;
     private final ChatModelProvider chatModelProvider;
+    private final ModelTestFailureClassifier failureClassifier;
 
-    public UserModelController(UserSettingsService userSettingsService, ChatModelProvider chatModelProvider) {
+    public UserModelController(UserSettingsService userSettingsService,
+                               ChatModelProvider chatModelProvider,
+                               ModelTestFailureClassifier failureClassifier) {
         this.userSettingsService = userSettingsService;
         this.chatModelProvider = chatModelProvider;
+        this.failureClassifier = failureClassifier;
     }
 
     @GetMapping
@@ -46,8 +49,8 @@ public class UserModelController {
 
     @PutMapping("/{id}")
     public UserModelResponse update(@AuthenticationPrincipal JwtUser currentUser,
-                                     @PathVariable Long id,
-                                     @Valid @RequestBody UserModelRequest request) {
+                                    @PathVariable Long id,
+                                    @Valid @RequestBody UserModelRequest request) {
         return userSettingsService.updateCustomModel(currentUser.id(), id, request);
     }
 
@@ -58,17 +61,21 @@ public class UserModelController {
     }
 
     @PostMapping("/{id}/test")
-    public Map<String, Object> test(@AuthenticationPrincipal JwtUser currentUser, @PathVariable Long id) {
+    public ModelTestResponse test(@AuthenticationPrincipal JwtUser currentUser, @PathVariable Long id) {
         List<UserModelResponse> models = userSettingsService.listCustomModels(currentUser.id());
         UserModelResponse model = models.stream()
                 .filter(m -> m.id().equals(id))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("模型不存在"));
+                .orElseThrow(() -> new IllegalArgumentException("Model does not exist"));
 
         UserSettingsService.ModelEndpoint resolved = userSettingsService.resolveModelEndpoint(
                 currentUser.id(), model.providerKey(), model.modelName());
         if (resolved.apiUrl() == null) {
-            return Map.of("success", false, "error", "该模型为内置模型，请通过设置页面配置 API Key");
+            return ModelTestResponse.failure(
+                    ModelTestErrorType.ADDRESS_ERROR,
+                    "This model does not have a custom chat-completions API URL configured.",
+                    resolved.providerKey(),
+                    resolved.modelName());
         }
         try {
             ChatResponse response = chatModelProvider.chat(new ChatRequest(
@@ -88,9 +95,9 @@ public class UserModelController {
                     null
             ));
             String content = response == null || response.message() == null ? "" : response.message().content();
-            return Map.of("success", true, "content", content == null ? "" : content);
+            return ModelTestResponse.success(content, resolved.providerKey(), resolved.modelName());
         } catch (Exception ex) {
-            return Map.of("success", false, "error", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+            return failureClassifier.classify(ex, resolved);
         }
     }
 }

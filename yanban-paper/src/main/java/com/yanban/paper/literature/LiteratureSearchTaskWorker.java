@@ -2,6 +2,7 @@ package com.yanban.paper.literature;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.yanban.paper.domain.LiteratureSearchTask;
+import com.yanban.paper.service.PaperModelExecutionContext;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import org.slf4j.Logger;
@@ -45,8 +46,10 @@ public class LiteratureSearchTaskWorker {
                 taskService.markCancelled(userId, taskId);
                 return;
             }
-            AdHocLiteratureSearchService.AdHocLiteratureSearchResult result =
-                    searchService.search(task.getQuery(), task.getTopK(), task.getYearFrom());
+            AdHocLiteratureSearchService.AdHocLiteratureSearchResult result;
+            try (PaperModelExecutionContext.Scope ignored = PaperModelExecutionContext.open(userId)) {
+                result = searchService.search(task.getQuery(), task.getTopK(), task.getYearFrom());
+            }
             if (taskService.isCancellationRequested(userId, taskId)) {
                 taskService.markCancelled(userId, taskId);
                 return;

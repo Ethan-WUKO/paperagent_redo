@@ -123,12 +123,16 @@ public class AgentService {
     @Transactional
     public AgentSessionResponse createSession(Long userId, CreateSessionRequest request) {
         SysUserSettings settings = userSettingsService.getOrCreate(userId);
+        String requestedProvider = StringUtils.hasText(request.modelProvider()) ? request.modelProvider().trim() : settings.getDefaultProvider();
+        UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
+                userId,
+                requestedProvider,
+                StringUtils.hasText(request.model()) ? request.model().trim() : null);
         AgentSession session = new AgentSession(
                 userId,
                 StringUtils.hasText(request.title()) ? request.title().trim() : "新会话",
-                StringUtils.hasText(request.modelProvider()) ? request.modelProvider().trim() : settings.getDefaultProvider(),
-                StringUtils.hasText(request.model()) ? request.model().trim() : resolveDefaultModel(settings,
-                        StringUtils.hasText(request.modelProvider()) ? request.modelProvider().trim() : settings.getDefaultProvider()),
+                endpoint.providerKey(),
+                endpoint.modelName(),
                 request.maxSteps() == null ? settings.getMaxSteps() : request.maxSteps(),
                 request.ragDisabled() != null ? request.ragDisabled() : !Boolean.TRUE.equals(settings.getRagDefaultEnabled())
         );
@@ -155,14 +159,14 @@ public class AgentService {
             session.updateTitle(title);
         }
         if (StringUtils.hasText(request.modelProvider()) || StringUtils.hasText(request.model())) {
-            SysUserSettings settings = userSettingsService.getOrCreate(userId);
             String provider = StringUtils.hasText(request.modelProvider())
                     ? request.modelProvider().trim()
                     : session.getModelProviderSnapshot();
-            String model = StringUtils.hasText(request.model())
-                    ? request.model().trim()
-                    : resolveDefaultModel(settings, provider);
-            session.updateModel(provider, model);
+            UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
+                    userId,
+                    provider,
+                    StringUtils.hasText(request.model()) ? request.model().trim() : null);
+            session.updateModel(endpoint.providerKey(), endpoint.modelName());
         }
         if (request.maxSteps() != null) {
             session.updateMaxSteps(request.maxSteps());
@@ -257,6 +261,7 @@ public class AgentService {
         AgentSession session = getOwnedSession(userId, sessionId);
         UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                 userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
+        ModelSourceDebug modelSource = toModelSource(endpoint);
         AgentExperimentContext experimentContext = agentExperimentService.prepare(
                 userId,
                 request.content(),
@@ -319,7 +324,8 @@ public class AgentService {
                     assistantContent,
                     true,
                     null,
-                    elapsedMillis(startedAtNanos)
+                    elapsedMillis(startedAtNanos),
+                    modelSource
             );
             return new SendMessageResponse(
                     true,
@@ -367,7 +373,8 @@ public class AgentService {
                     intentAction.assistantMessage(),
                     true,
                     null,
-                    elapsedMillis(startedAtNanos)
+                    elapsedMillis(startedAtNanos),
+                    modelSource
             );
             return new SendMessageResponse(
                     true,
@@ -390,10 +397,12 @@ public class AgentService {
                 runtimeRagDisabled,
                 resolvedSkill == null ? null : resolvedSkill.allowedTools()
         );
-        log.info("Agent tool policy sessionId={} provider={} model={} allowedTools={} reason={}",
+        log.info("Agent tool policy sessionId={} provider={} model={} sourceType={} sourceLabel={} allowedTools={} reason={}",
                 session.getId(),
                 endpoint.providerKey(),
                 endpoint.modelName(),
+                endpoint.sourceType(),
+                endpoint.sourceLabel(),
                 toolPolicy.allowedTools(),
                 toolPolicy.reason());
         List<ChatMessage> effectiveHistory = contextPackage.messages();
@@ -479,7 +488,8 @@ public class AgentService {
                     result.assistantContent(),
                     true,
                     null,
-                    elapsedMillis(startedAtNanos)
+                    elapsedMillis(startedAtNanos),
+                    modelSource
                 );
                 return new SendMessageResponse(
                         true,
@@ -504,7 +514,8 @@ public class AgentService {
                     result,
                     effectiveHistory,
                     request.clientRequestId(),
-                    elapsedMillis(startedAtNanos)
+                    elapsedMillis(startedAtNanos),
+                    modelSource
             );
         } catch (Exception ex) {
             log.warn("Agent send failed sessionId={} userId={}", session.getId(), userId, ex);
@@ -520,7 +531,8 @@ public class AgentService {
                     null,
                     effectiveHistory,
                     request.clientRequestId(),
-                    elapsedMillis(startedAtNanos)
+                    elapsedMillis(startedAtNanos),
+                    modelSource
             );
         }
     }
@@ -763,7 +775,8 @@ public class AgentService {
                                          AgentRuntimeResult runtimeResult,
                                          List<ChatMessage> effectiveHistory,
                                          String clientRequestId,
-                                         long latencyMs) {
+                                         long latencyMs,
+                                         ModelSourceDebug modelSource) {
         String safeError = StringUtils.hasText(errorMessage) ? errorMessage.trim() : "对话处理失败";
         AgentMessage assistantMessage = saveAndCacheMessage(
                 session.getId(),
@@ -799,7 +812,8 @@ public class AgentService {
                 assistantMessage.getContent(),
                 false,
                 safeError,
-                latencyMs
+                latencyMs,
+                modelSource
         );
         return new SendMessageResponse(
                 false,
@@ -822,7 +836,8 @@ public class AgentService {
                                                    String assistantContent,
                                                    boolean success,
                                                    String errorMessage,
-                                                   long latencyMs) {
+                                                   long latencyMs,
+                                                   ModelSourceDebug modelSource) {
         AgentDebugPayload basePayload = agentExperimentService.toDebugPayload(experimentContext);
         boolean showMemoryWindow = experimentContext != null && experimentContext.hasFlag(AgentDebugFlag.SHOW_MEMORY_WINDOW);
         boolean showRawPrompt = experimentContext != null && experimentContext.hasFlag(AgentDebugFlag.SHOW_RAW_PROMPT);
@@ -861,7 +876,8 @@ public class AgentService {
                     List.of(),
                     metrics,
                     null,
-                    fallbacks
+                    fallbacks,
+                    modelSource
             );
         }
         List<String> finalCitations = extractFinalCitations(assistantContent, basePayload.retrievedChunks());
@@ -878,7 +894,8 @@ public class AgentService {
                 finalCitations,
                 metrics,
                 memoryWindow,
-                fallbacks
+                fallbacks,
+                modelSource
         );
         Long evalRecordId = agentExperimentRecordService.persistIfEnabled(
                 userId,
@@ -914,7 +931,8 @@ public class AgentService {
                 debugPayload.finalCitations(),
                 updatedMetrics,
                 debugPayload.memoryWindow(),
-                debugPayload.fallbacks()
+                debugPayload.fallbacks(),
+                debugPayload.modelSource()
         );
     }
 
@@ -1217,6 +1235,17 @@ public class AgentService {
                     + " 作为模型能力。";
         }
         return "我是研伴 ScholarAI 的私有研究助手。当前这个会话使用已配置的模型作为模型能力。";
+    }
+
+    private ModelSourceDebug toModelSource(UserSettingsService.ModelEndpoint endpoint) {
+        if (endpoint == null) {
+            return null;
+        }
+        return new ModelSourceDebug(
+                endpoint.providerKey(),
+                endpoint.modelName(),
+                endpoint.sourceType(),
+                endpoint.sourceLabel());
     }
 
     private String formatProviderForUser(String providerKey) {

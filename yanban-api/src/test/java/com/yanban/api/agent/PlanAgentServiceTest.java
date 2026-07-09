@@ -100,7 +100,13 @@ class PlanAgentServiceTest {
         when(plans.findByIdAndUserId(PLAN_ID, USER_ID)).thenReturn(Optional.of(plan));
         when(agentService.getOwnedSession(USER_ID, SESSION_ID)).thenReturn(session);
         when(userSettingsService.resolveModelEndpoint(anyLong(), any(), any()))
-                .thenReturn(new UserSettingsService.ModelEndpoint(UserSettingsService.DEFAULT_PROVIDER, UserSettingsService.DEFAULT_DEEPSEEK_MODEL, null, "test-api-key"));
+                .thenReturn(new UserSettingsService.ModelEndpoint(
+                        UserSettingsService.DEFAULT_PROVIDER,
+                        UserSettingsService.DEFAULT_DEEPSEEK_MODEL,
+                        null,
+                        "test-api-key",
+                        "builtin",
+                        "DeepSeek"));
         when(plans.saveAndFlush(any(AgentPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(steps.saveAndFlush(any(AgentPlanStep.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(events.save(any(AgentPlanEvent.class))).thenAnswer(invocation -> invocation.getArgument(0));

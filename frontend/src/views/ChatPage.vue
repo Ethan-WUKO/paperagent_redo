@@ -2394,9 +2394,10 @@ function parseModelKey(key: string) {
 
 function defaultModelKeyFromSettings(currentSettings: UserSettingsResponse | null) {
   const provider = currentSettings?.defaultProvider || 'deepseek';
-  const model = provider === 'glm'
+  const customModel = currentSettings?.customModels?.find((item) => item.providerKey === provider);
+  const model = customModel?.modelName || (provider === 'glm'
     ? (currentSettings?.glmModel || DEFAULT_GLM_MODEL)
-    : (currentSettings?.deepseekModel || DEFAULT_DEEPSEEK_MODEL);
+    : (currentSettings?.deepseekModel || DEFAULT_DEEPSEEK_MODEL));
   return toModelKey(provider, model);
 }
 

@@ -105,7 +105,8 @@ class AgentExperimentRecordServiceTest {
                 List.of("cite-1", "cite-2"),
                 new AgentExperimentMetricsDebug("req-1", 2L, 321L, 2, 3, 11, 22, 33, 1, 2, null),
                 new AgentMemoryWindowDebug(AgentMemoryMode.CONTEXT_PACKER, List.of("1. user: hi")),
-                List.of()
+                List.of(),
+                new ModelSourceDebug("deepseek", "deepseek-chat", "builtin", "DeepSeek")
         );
     }
 }

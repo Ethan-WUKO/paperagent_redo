@@ -83,5 +83,13 @@ export function deleteModel(id: number) {
 }
 
 export function testModel(id: number) {
-  return http.post<{ success: boolean; content?: string; error?: string }>(`/models/${id}/test`, {});
+  return http.post<{
+    success: boolean;
+    content?: string;
+    errorType?: 'ADDRESS_ERROR' | 'API_KEY_ERROR' | 'MODEL_NAME_ERROR' | 'INTERFACE_INCOMPATIBLE' | 'UNKNOWN_ERROR';
+    errorMessage?: string;
+    error?: string;
+    providerKey: string;
+    modelName: string;
+  }>(`/models/${id}/test`, {});
 }

@@ -12,7 +12,8 @@ public record AgentDebugPayload(
         List<String> finalCitations,
         AgentExperimentMetricsDebug metrics,
         AgentMemoryWindowDebug memoryWindow,
-        List<String> fallbacks
+        List<String> fallbacks,
+        ModelSourceDebug modelSource
 ) {
     public AgentDebugPayload {
         retrievedChunks = retrievedChunks == null ? List.of() : List.copyOf(retrievedChunks);

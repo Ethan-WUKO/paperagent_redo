@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 
 import com.yanban.api.agent.AgentRuntimeRequest;
 import com.yanban.api.agent.LangChain4jChatModelAdapter;
+import com.yanban.api.settings.UserSettingsService;
+import com.yanban.paper.service.PaperModelExecutionContext;
 import com.yanban.paper.service.PaperModelClient;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -63,5 +65,39 @@ class PaperModelClientConfigTest {
         assertThat(runtime.model()).isEqualTo("tencent/hy3:free");
         assertThat(runtime.apiUrl()).isEqualTo("https://openrouter.ai/api/v1/chat/completions");
         assertThat(runtime.apiKey()).isEqualTo("or-key");
+    }
+
+    @Test
+    void paperModelClientResolvesCurrentUserDefaultModelFromExecutionContext() {
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        UserSettingsService settingsService = mock(UserSettingsService.class);
+        when(settingsService.resolveModelEndpoint(42L, null, null)).thenReturn(new UserSettingsService.ModelEndpoint(
+                "custom-paper",
+                "paper-model",
+                "https://paper.example.test/v1/chat/completions",
+                "paper-key",
+                "custom",
+                "Paper Custom"));
+        when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class))).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from("paper custom"))
+                .build());
+        PaperModelClient client = new PaperModelClientConfig().paperModelClient(
+                chatModel,
+                new PaperModelProperties(),
+                settingsService);
+
+        String result;
+        try (PaperModelExecutionContext.Scope ignored = PaperModelExecutionContext.open(42L)) {
+            result = client.complete("system prompt", "user prompt", 0.2, 1024);
+        }
+
+        assertThat(result).isEqualTo("paper custom");
+        ArgumentCaptor<AgentRuntimeRequest> runtimeCaptor = ArgumentCaptor.forClass(AgentRuntimeRequest.class);
+        verify(chatModel).chat(any(ChatRequest.class), runtimeCaptor.capture());
+        AgentRuntimeRequest runtime = runtimeCaptor.getValue();
+        assertThat(runtime.provider()).isEqualTo("custom-paper");
+        assertThat(runtime.model()).isEqualTo("paper-model");
+        assertThat(runtime.apiUrl()).isEqualTo("https://paper.example.test/v1/chat/completions");
+        assertThat(runtime.apiKey()).isEqualTo("paper-key");
     }
 }

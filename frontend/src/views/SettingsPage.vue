@@ -312,10 +312,14 @@ const DEFAULT_GLM_MODELS = [
   'glm-4-flash',
 ];
 
-const providerOptions = [
+const providerOptions = computed(() => [
   { label: 'DeepSeek', value: 'deepseek' },
   { label: 'GLM', value: 'glm' },
-];
+  ...customModels.value.map((model) => ({
+    label: `${model.label} / ${model.modelName}`,
+    value: model.providerKey,
+  })),
+]);
 
 const saving = ref(false);
 const authStore = useAuthStore();
@@ -456,6 +460,14 @@ function splitLines(value: string) {
   return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
 }
 
+function showModelTestResult(data: Awaited<ReturnType<typeof testModel>>['data']) {
+  if (data.success) {
+    ui.message.success(`Connection succeeded${data.content ? ': ' + data.content : ''}`);
+    return;
+  }
+  ui.message.error(`Connection failed [${data.errorType || 'UNKNOWN_ERROR'}]: ${data.errorMessage || data.error || 'Unknown error'}`);
+}
+
 // ===== Custom model management =====
 
 function openCreateModelModal() {
@@ -528,6 +540,8 @@ async function handleTestModel(model: UserModelResponse) {
   testingModelId.value = model.id;
   try {
     const { data } = await testModel(model.id);
+    showModelTestResult(data);
+    return;
     if (data.success) {
       ui.message.success(`连接成功${data.content ? '：' + data.content : ''}`);
     } else {

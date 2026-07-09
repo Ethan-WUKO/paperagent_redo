@@ -89,7 +89,7 @@ public class UserSettingsService {
         accountPolicy.assertSettingsMutable(userId);
         SysUserSettings settings = getOrCreate(userId);
         ensureOpenRouterModels(userId);
-        String provider = normalizeProvider(request.defaultProvider(), settings.getDefaultProvider());
+        String provider = resolveDefaultProviderForUpdate(userId, request.defaultProvider(), settings.getDefaultProvider());
         String deepseekModel = StringUtils.hasText(request.deepseekModel()) ? request.deepseekModel().trim() : settings.getDeepseekModel();
         String glmModel = StringUtils.hasText(request.glmModel()) ? request.glmModel().trim() : settings.getGlmModel();
         BigDecimal temperature = request.deepseekTemperature() != null ? request.deepseekTemperature() : settings.getDeepseekTemperature();
@@ -217,6 +217,7 @@ public class UserSettingsService {
     public void deleteCustomModel(Long userId, Long modelId) {
         accountPolicy.assertSettingsMutable(userId);
         UserModel model = findOwnedCustomModel(userId, modelId);
+        resetDefaultProviderIfNeeded(userId, model.getProviderKey());
         userModelRepository.delete(model);
         userModelRepository.flush();
     }
@@ -254,13 +255,17 @@ public class UserSettingsService {
             return new ModelEndpoint(resolvedProvider,
                     StringUtils.hasText(model) ? model : settings.getDeepseekModel(),
                     null,
-                    decryptDeepseekApiKey(settings));
+                    decryptDeepseekApiKey(settings),
+                    "builtin",
+                    "DeepSeek");
         }
         if (PROVIDER_GLM.equals(resolvedProvider)) {
             return new ModelEndpoint(resolvedProvider,
                     StringUtils.hasText(model) ? model : settings.getGlmModel(),
                     null,
-                    decryptGlmApiKey(settings));
+                    decryptGlmApiKey(settings),
+                    "builtin",
+                    "GLM");
         }
         // Custom provider: providerKey stored as-is (case-sensitive match by providerKey)
         List<UserModel> userModels = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
@@ -285,7 +290,9 @@ public class UserSettingsService {
         return new ModelEndpoint(um.getProviderKey(),
                 um.getModelName(),
                 resolveCustomModelApiUrl(um),
-                resolveCustomModelApiKey(um));
+                resolveCustomModelApiKey(um),
+                Boolean.TRUE.equals(um.getBuiltin()) ? "builtin-custom" : "custom",
+                um.getProviderLabel());
     }
 
     public String decryptDeepseekApiKey(SysUserSettings settings) {
@@ -385,6 +392,48 @@ public class UserSettingsService {
         return resolved;
     }
 
+    private String resolveDefaultProviderForUpdate(Long userId, String provider, String fallback) {
+        if (!StringUtils.hasText(provider)) {
+            return fallback;
+        }
+        String requested = provider.trim();
+        String builtin = requested.toLowerCase();
+        if (DEFAULT_PROVIDER.equals(builtin) || PROVIDER_GLM.equals(builtin)) {
+            return builtin;
+        }
+        ensureUserInitialized(userId);
+        boolean ownedModelProvider = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId).stream()
+                .anyMatch(model -> model.getProviderKey().equals(requested));
+        if (!ownedModelProvider) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default model provider is not configured: " + requested);
+        }
+        return requested;
+    }
+
+    private void resetDefaultProviderIfNeeded(Long userId, String deletedProviderKey) {
+        if (!StringUtils.hasText(deletedProviderKey)) {
+            return;
+        }
+        repository.findById(userId)
+                .filter(settings -> deletedProviderKey.equals(settings.getDefaultProvider()))
+                .ifPresent(settings -> {
+                    settings.update(DEFAULT_PROVIDER,
+                            settings.getDeepseekApiKeyEncrypted(),
+                            settings.getGlmApiKeyEncrypted(),
+                            settings.getDeepseekModel(),
+                            settings.getGlmModel(),
+                            settings.getGithubPatEncrypted(),
+                            settings.getFilesystemRootsText(),
+                            settings.getDisabledSkillsJson(),
+                            settings.getDeepseekTemperature(),
+                            settings.getMaxSteps(),
+                            settings.getRagDefaultEnabled(),
+                            settings.getDeepseekModelsText(),
+                            settings.getGlmModelsText());
+                    repository.saveAndFlush(settings);
+                });
+    }
+
     private void ensureOpenRouterModels(Long userId) {
         List<UserModel> existing = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
         List<UserModel> missing = new ArrayList<>();
@@ -438,6 +487,11 @@ public class UserSettingsService {
     }
 
     /** Resolved model endpoint for the agent harness. */
-    public record ModelEndpoint(String providerKey, String modelName, String apiUrl, String apiKey) {
+    public record ModelEndpoint(String providerKey,
+                                String modelName,
+                                String apiUrl,
+                                String apiKey,
+                                String sourceType,
+                                String sourceLabel) {
     }
 }

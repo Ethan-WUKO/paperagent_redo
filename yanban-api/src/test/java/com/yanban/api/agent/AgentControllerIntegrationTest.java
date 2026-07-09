@@ -118,6 +118,62 @@ class AgentControllerIntegrationTest {
     }
 
     @Test
+    void customModelSelectionUsesResolvedEndpointAndExposesModelSourceDebug() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any())).thenReturn(
+                new ChatResponse(ChatMessage.assistant("custom answer"), "stop", null)
+        );
+        String token = registerAndGetToken("agent_user_custom_model");
+
+        MvcResult modelResult = mockMvc.perform(post("/api/v1/models")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "label":"My Compatible Model",
+                                  "apiUrl":"https://models.example.test/v1/chat/completions",
+                                  "apiKey":"sk-custom-secret",
+                                  "modelName":"my-compatible-model"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.apiKeyConfigured").value(true))
+                .andExpect(jsonPath("$").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("apiKey"))))
+                .andReturn();
+        JsonNode model = objectMapper.readTree(modelResult.getResponse().getContentAsString());
+        String providerKey = model.get("providerKey").asText();
+
+        long sessionId = createSession(token, "Custom Model Session");
+        mockMvc.perform(patch("/api/v1/agent/sessions/{id}", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"modelProvider":"%s","model":"my-compatible-model"}
+                                """.formatted(providerKey)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.modelProvider").value(providerKey))
+                .andExpect(jsonPath("$.model").value("my-compatible-model"));
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"hello custom\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.debug.modelSource.providerKey").value(providerKey))
+                .andExpect(jsonPath("$.debug.modelSource.modelName").value("my-compatible-model"))
+                .andExpect(jsonPath("$.debug.modelSource.sourceType").value("custom"));
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModelProvider).chat(captor.capture());
+        ChatRequest chatRequest = captor.getValue();
+        assertThat(chatRequest.provider()).isEqualTo(providerKey);
+        assertThat(chatRequest.model()).isEqualTo("my-compatible-model");
+        assertThat(chatRequest.apiUrl()).isEqualTo("https://models.example.test/v1/chat/completions");
+        assertThat(chatRequest.apiKey()).isEqualTo("sk-custom-secret");
+    }
+
+    @Test
     void runtimeIdentityQuestionUsesConfiguredProviderWithoutCallingModel() throws Exception {
         String token = registerAndGetToken("agent_user_identity");
         long sessionId = createSession(token, "Identity");

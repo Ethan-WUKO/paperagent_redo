@@ -232,6 +232,7 @@ public class PaperOrchestrator {
         try {
             checkpoint(taskId);
             PaperTask task = tasks.findById(taskId).orElseThrow();
+            try (PaperModelExecutionContext.Scope ignored = PaperModelExecutionContext.open(task.getUserId())) {
             transition(taskId, STATUS_RUNNING, "PARSE", null);
             publishProgress("log", taskId, "开始读取 LaTeX 源文件", "PARSE", null, null, null, null, null, 5);
             checkpoint(taskId);
@@ -322,6 +323,7 @@ public class PaperOrchestrator {
             recordTaskEvent(taskId, "TASK_COMPLETED", "COMPLETE", STATUS_COMPLETED, "论文润色任务已完成");
             checkpoint(taskId);
             publishProgress("complete", taskId, "论文任务已完成：已生成润色文本、推荐文献与审查报告", "COMPLETE", document.sections().size(), document.sections().size(), null, null, null, 100);
+            }
         } catch (TaskStoppedException ex) {
             transitionCancelled(taskId, ex.getMessage());
         } catch (Exception ex) {
@@ -605,6 +607,9 @@ public class PaperOrchestrator {
     }
 
     private void syncUnifiedTask(PaperTask task) {
+        if (agentTaskRegistry == null) {
+            return;
+        }
         agentTaskRegistry.upsertSafely(new AgentTaskUpsertRequest(
                 task.getUserId(),
                 null,
