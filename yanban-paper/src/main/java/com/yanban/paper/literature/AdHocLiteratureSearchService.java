@@ -39,12 +39,13 @@ public class AdHocLiteratureSearchService {
         Map<String, LiteratureCandidate> unique = new LinkedHashMap<>();
         Map<String, String> keyAliases = new LinkedHashMap<>();
         Map<String, LinkedHashSet<String>> duplicateSources = new LinkedHashMap<>();
+        Map<String, Integer> duplicateMergeCounts = new LinkedHashMap<>();
         List<String> failures = new ArrayList<>();
         int rawCount = 0;
         int sourceAttempts = 0;
         for (LiteratureCandidate candidate : localCardSearchService.search(normalizedQuery, selectionLimit, yearFrom)) {
             if (!StringUtils.hasText(candidate.title())) continue;
-            putUniqueCandidate(unique, keyAliases, duplicateSources, candidate);
+            putUniqueCandidate(unique, keyAliases, duplicateSources, duplicateMergeCounts, candidate);
             rawCount++;
         }
         for (LiteratureSource source : sources) {
@@ -60,13 +61,14 @@ public class AdHocLiteratureSearchService {
             for (LiteratureCandidate candidate : candidates) {
                 if (!StringUtils.hasText(candidate.title())) continue;
                 if (yearFrom != null && candidate.year() != null && candidate.year() < yearFrom) continue;
-                putUniqueCandidate(unique, keyAliases, duplicateSources, candidate);
+                putUniqueCandidate(unique, keyAliases, duplicateSources, duplicateMergeCounts, candidate);
             }
         }
         Set<String> queryTokens = queryTokens(normalizedQuery);
         List<AdHocLiteratureItem> items = unique.values().stream()
                 .map(candidate -> toItem(candidate, score(candidate, queryTokens),
-                        duplicateSources.getOrDefault(identityKey(candidate), new LinkedHashSet<>())))
+                        duplicateSources.getOrDefault(identityKey(candidate), new LinkedHashSet<>()),
+                        duplicateMergeCounts.getOrDefault(identityKey(candidate), 0)))
                 .sorted(Comparator.comparingDouble(AdHocLiteratureItem::score).reversed()
                         .thenComparing(item -> item.year() == null ? 0 : item.year(), Comparator.reverseOrder()))
                 .limit(selectionLimit)
@@ -77,6 +79,7 @@ public class AdHocLiteratureSearchService {
     private void putUniqueCandidate(Map<String, LiteratureCandidate> unique,
                                     Map<String, String> keyAliases,
                                     Map<String, LinkedHashSet<String>> duplicateSources,
+                                    Map<String, Integer> duplicateMergeCounts,
                                     LiteratureCandidate candidate) {
         List<String> keys = identityKeys(candidate);
         String existingPrimaryKey = keys.stream()
@@ -86,6 +89,7 @@ public class AdHocLiteratureSearchService {
                 .orElse(null);
         if (StringUtils.hasText(existingPrimaryKey)) {
             duplicateSources.computeIfAbsent(existingPrimaryKey, ignored -> new LinkedHashSet<>()).add(sourceLabel(candidate));
+            duplicateMergeCounts.merge(existingPrimaryKey, 1, Integer::sum);
             keys.forEach(key -> keyAliases.putIfAbsent(key, existingPrimaryKey));
             return;
         }
@@ -95,7 +99,10 @@ public class AdHocLiteratureSearchService {
         unique.put(primaryKey, candidate);
     }
 
-    private AdHocLiteratureItem toItem(LiteratureCandidate candidate, double score, LinkedHashSet<String> duplicateSources) {
+    private AdHocLiteratureItem toItem(LiteratureCandidate candidate,
+                                       double score,
+                                       LinkedHashSet<String> duplicateSources,
+                                       int duplicateMergeCount) {
         List<String> metadataRiskNotes = metadataRiskNotes(candidate);
         return new AdHocLiteratureItem(
                 candidate.title(),
@@ -118,8 +125,9 @@ public class AdHocLiteratureSearchService {
                 metadataRiskLevel(metadataRiskNotes),
                 metadataRiskNotes,
                 identityKey(candidate),
-                duplicateSources.size() > 1 ? "MERGED_DUPLICATES" : "UNIQUE",
-                List.copyOf(duplicateSources)
+                duplicateMergeCount > 0 ? "MERGED_DUPLICATES" : "UNIQUE",
+                List.copyOf(duplicateSources),
+                duplicateMergeCount
         );
     }
 
@@ -296,25 +304,26 @@ public class AdHocLiteratureSearchService {
                                       String sourceQuery, double score, String bibtex, Long cardId, String matchTarget,
                                       List<String> rankingBasis, String citationStatus, String metadataRiskLevel,
                                       List<String> metadataRiskNotes, String deduplicationKey, String duplicateStatus,
-                                      List<String> duplicateSources) {
+                                      List<String> duplicateSources, int duplicateMergeCount) {
         public AdHocLiteratureItem(String title, List<String> authors, Integer year, String venue, String doi,
                                    String arxivId, String openAlexId, String url, String abstractText, String source,
                                    String sourceQuery, double score, String bibtex) {
             this(title, authors, year, venue, doi, arxivId, openAlexId, url, abstractText, source, sourceQuery, score, bibtex, null,
-                    sourceQuery, List.of(), "UNKNOWN", "UNKNOWN", List.of(), "", "UNKNOWN", List.of());
+                    sourceQuery, List.of(), "UNKNOWN", "UNKNOWN", List.of(), "", "UNKNOWN", List.of(), 0);
         }
 
         public AdHocLiteratureItem(String title, List<String> authors, Integer year, String venue, String doi,
                                    String arxivId, String openAlexId, String url, String abstractText, String source,
                                    String sourceQuery, double score, String bibtex, Long cardId) {
             this(title, authors, year, venue, doi, arxivId, openAlexId, url, abstractText, source, sourceQuery, score, bibtex, cardId,
-                    sourceQuery, List.of(), "UNKNOWN", "UNKNOWN", List.of(), "", "UNKNOWN", List.of());
+                    sourceQuery, List.of(), "UNKNOWN", "UNKNOWN", List.of(), "", "UNKNOWN", List.of(), 0);
         }
 
         public AdHocLiteratureItem withCardId(Long value) {
             return new AdHocLiteratureItem(title, authors, year, venue, doi, arxivId, openAlexId, url, abstractText,
                     source, sourceQuery, score, bibtex, value, matchTarget, rankingBasis, citationStatus,
-                    metadataRiskLevel, metadataRiskNotes, deduplicationKey, duplicateStatus, duplicateSources);
+                    metadataRiskLevel, metadataRiskNotes, deduplicationKey, duplicateStatus, duplicateSources,
+                    duplicateMergeCount);
         }
     }
 }

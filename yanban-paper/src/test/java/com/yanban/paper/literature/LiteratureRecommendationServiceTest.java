@@ -93,11 +93,48 @@ class LiteratureRecommendationServiceTest {
             assertThat(item.deduplicationKey()).isEqualTo("doi:10.1000/rag");
             assertThat(item.duplicateStatus()).isEqualTo("MERGED_DUPLICATES");
             assertThat(item.duplicateSources()).containsExactly("local_card", "openalex");
+            assertThat(item.duplicateMergeCount()).isEqualTo(1);
             assertThat(item.matchTarget()).isEqualTo("hybrid RAG");
             assertThat(item.rankingBasis()).anyMatch(value -> value.startsWith("score="));
         });
         verify(catalog, times(2)).upsertCard(any());
         verify(cardAnalysis).analyzeTopCandidates(any(), eq(7));
+    }
+
+    @Test
+    void recommendMarksMergedDuplicatesWhenSameSourceReturnsSamePaperAcrossQueries() {
+        PaperModelClient modelClient = mock(PaperModelClient.class);
+        when(modelClientProvider.getIfAvailable()).thenReturn(modelClient);
+        when(modelClient.complete(any(), any(), any(), anyInt()))
+                .thenReturn("""
+                        {"queries":[{"query":"hybrid rag retrieval"},{"query":"neural rag retrieval"}],"mustIncludeTerms":["rag"],"excludeTerms":[]}
+                        """)
+                .thenReturn("{}");
+        when(localSearch.search(any(), anyInt(), any())).thenReturn(List.of());
+        when(source.search(any(), anyInt())).thenReturn(List.of(strongerExternal()));
+
+        LiteratureRecommendationService.RecommendationResult result = service.recommend(
+                new LiteratureRecommendationService.RecommendationRequest(
+                        "hybrid RAG retrieval",
+                        null,
+                        null,
+                        null,
+                        5,
+                        10,
+                        2,
+                        false,
+                        null,
+                        null
+                )
+        );
+
+        assertThat(result.rawCandidateCount()).isEqualTo(2);
+        assertThat(result.uniqueCandidateCount()).isEqualTo(1);
+        assertThat(result.items()).hasSize(1);
+        LiteratureRecommendationService.RecommendationItem item = result.items().get(0);
+        assertThat(item.duplicateSources()).containsExactly("openalex");
+        assertThat(item.duplicateMergeCount()).isEqualTo(1);
+        assertThat(item.duplicateStatus()).isEqualTo("MERGED_DUPLICATES");
     }
 
     @Test

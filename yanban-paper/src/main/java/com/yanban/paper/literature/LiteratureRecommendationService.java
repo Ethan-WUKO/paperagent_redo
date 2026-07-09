@@ -119,7 +119,7 @@ public class LiteratureRecommendationService {
         Set<String> existing = existingIdentityKeys(normalizedRequest.existingBibtex());
 
         List<RecommendationItem> items = selected.stream()
-                .map(result -> toItem(result, existing, normalizedRequest, pool.duplicateSourcesByKey()))
+                .map(result -> toItem(result, existing, normalizedRequest, pool.duplicateSourcesByKey(), pool.duplicateMergeCountsByKey()))
                 .toList();
         log.info("LiteratureRecommendation select elapsedMs={} selectedCount={} existingBibtexKeys={}",
                 elapsedMs(selectStart),
@@ -427,6 +427,7 @@ public class LiteratureRecommendationService {
         Map<String, LiteratureCandidate> unique = new LinkedHashMap<>();
         Map<String, String> keyAliases = new LinkedHashMap<>();
         Map<String, LinkedHashSet<String>> duplicateSources = new LinkedHashMap<>();
+        Map<String, Integer> duplicateMergeCounts = new LinkedHashMap<>();
         List<String> failures = new ArrayList<>();
         List<RetrievalDiagnosticItem> diagnostics = new ArrayList<>();
         int rawCount = 0;
@@ -451,7 +452,7 @@ public class LiteratureRecommendationService {
             for (LiteratureCandidate candidate : localCandidates) {
                 if (!validCandidate(candidate, request.yearFrom())) continue;
                 localAccepted++;
-                putUniqueCandidate(unique, keyAliases, duplicateSources, candidate);
+                putUniqueCandidate(unique, keyAliases, duplicateSources, duplicateMergeCounts, candidate);
             }
             log.info("LiteratureRecommendation retrieval source=local_card elapsedMs={} query={} returned={} accepted={} failed={} uniqueSoFar={} message={}",
                     elapsedMs(localStart),
@@ -483,7 +484,7 @@ public class LiteratureRecommendationService {
                 for (LiteratureCandidate candidate : safeCandidates) {
                     if (!validCandidate(candidate, request.yearFrom())) continue;
                     accepted++;
-                    putUniqueCandidate(unique, keyAliases, duplicateSources, candidate);
+                    putUniqueCandidate(unique, keyAliases, duplicateSources, duplicateMergeCounts, candidate);
                 }
                 log.info("LiteratureRecommendation retrieval source={} elapsedMs={} query={} limit={} returned={} accepted={} failed={} uniqueSoFar={} message={}",
                         source.name(),
@@ -500,12 +501,13 @@ public class LiteratureRecommendationService {
         }
         Map<String, List<String>> duplicateSourcesByKey = new LinkedHashMap<>();
         duplicateSources.forEach((key, values) -> duplicateSourcesByKey.put(key, List.copyOf(values)));
-        return new RetrievalPool(unique, rawCount, sourceAttempts, failures, diagnostics, duplicateSourcesByKey);
+        return new RetrievalPool(unique, rawCount, sourceAttempts, failures, diagnostics, duplicateSourcesByKey, Map.copyOf(duplicateMergeCounts));
     }
 
     private void putUniqueCandidate(Map<String, LiteratureCandidate> unique,
                                     Map<String, String> keyAliases,
                                     Map<String, LinkedHashSet<String>> duplicateSources,
+                                    Map<String, Integer> duplicateMergeCounts,
                                     LiteratureCandidate candidate) {
         List<String> keys = identityKeys(candidate);
         String existingPrimaryKey = keys.stream()
@@ -515,6 +517,7 @@ public class LiteratureRecommendationService {
                 .orElse(null);
         if (StringUtils.hasText(existingPrimaryKey)) {
             duplicateSources.computeIfAbsent(existingPrimaryKey, ignored -> new LinkedHashSet<>()).add(sourceLabel(candidate));
+            duplicateMergeCounts.merge(existingPrimaryKey, 1, Integer::sum);
             keys.forEach(key -> keyAliases.putIfAbsent(key, existingPrimaryKey));
             return;
         }
@@ -678,11 +681,13 @@ public class LiteratureRecommendationService {
     private RecommendationItem toItem(LiteratureSearchResult result,
                                       Set<String> existing,
                                       RecommendationRequest request,
-                                      Map<String, List<String>> duplicateSourcesByKey) {
+                                      Map<String, List<String>> duplicateSourcesByKey,
+                                      Map<String, Integer> duplicateMergeCountsByKey) {
         LiteratureCard card = result.card();
         String deduplicationKey = cardIdentityKey(card);
         boolean alreadyPresent = existing.contains(deduplicationKey) || existing.contains(titleKey(card.getTitle()));
         List<String> duplicateSources = duplicateSourcesByKey.getOrDefault(deduplicationKey, List.of());
+        int duplicateMergeCount = duplicateMergeCountsByKey.getOrDefault(deduplicationKey, 0);
         List<String> metadataRiskNotes = metadataRiskNotes(card);
         return new RecommendationItem(
                 card.getId(),
@@ -708,8 +713,9 @@ public class LiteratureRecommendationService {
                 metadataRiskLevel(metadataRiskNotes),
                 metadataRiskNotes,
                 deduplicationKey,
-                duplicateSources.size() > 1 ? "MERGED_DUPLICATES" : "UNIQUE",
-                duplicateSources
+                duplicateMergeCount > 0 ? "MERGED_DUPLICATES" : "UNIQUE",
+                duplicateSources,
+                duplicateMergeCount
         );
     }
 
@@ -1243,7 +1249,8 @@ public class LiteratureRecommendationService {
                                  int sourceAttempts,
                                  List<String> sourceFailures,
                                  List<RetrievalDiagnosticItem> retrievalDiagnostics,
-                                 Map<String, List<String>> duplicateSourcesByKey) {
+                                 Map<String, List<String>> duplicateSourcesByKey,
+                                 Map<String, Integer> duplicateMergeCountsByKey) {
     }
 
     private record SearchPlan(List<String> queries,
@@ -1328,7 +1335,8 @@ public class LiteratureRecommendationService {
                                      List<String> metadataRiskNotes,
                                      String deduplicationKey,
                                      String duplicateStatus,
-                                     List<String> duplicateSources) {
+                                     List<String> duplicateSources,
+                                     int duplicateMergeCount) {
         public RecommendationItem(Long cardId,
                                   String title,
                                   List<String> authors,
@@ -1348,7 +1356,7 @@ public class LiteratureRecommendationService {
                                   String bibtex) {
             this(cardId, title, authors, year, venue, doi, arxivId, openAlexId, url, pdfUrl, citationCount,
                     score, role, sourceQuery, alreadyPresent, reason, bibtex, sourceQuery, List.of(), "UNKNOWN",
-                    "UNKNOWN", List.of(), "", "UNKNOWN", List.of());
+                    "UNKNOWN", List.of(), "", "UNKNOWN", List.of(), 0);
         }
     }
 

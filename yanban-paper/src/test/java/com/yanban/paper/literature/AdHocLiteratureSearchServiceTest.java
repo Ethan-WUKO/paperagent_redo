@@ -61,11 +61,27 @@ class AdHocLiteratureSearchServiceTest {
         assertThat(result.items().get(0).source()).isEqualTo("local_card");
         assertThat(result.items().get(0).duplicateStatus()).isEqualTo("MERGED_DUPLICATES");
         assertThat(result.items().get(0).duplicateSources()).containsExactly("local_card", "openalex");
+        assertThat(result.items().get(0).duplicateMergeCount()).isEqualTo(1);
         assertThat(result.items().get(0).citationStatus()).isEqualTo("BIBTEX_READY_VERIFY_BEFORE_SUBMISSION");
         assertThat(result.items().get(0).metadataRiskLevel()).isEqualTo("LOW");
         assertThat(result.items().get(0).metadataRiskNotes()).isEmpty();
         assertThat(result.items().get(0).rankingBasis()).anyMatch(value -> value.startsWith("score="));
         assertThat(result.items().get(0).deduplicationKey()).isEqualTo("doi:10.1000/rag");
+    }
+
+    @Test
+    void searchMarksMergedDuplicatesWhenSameSourceReturnsDuplicatePapers() {
+        when(localCardSearchService.search("hybrid RAG", 8, null)).thenReturn(List.of());
+        when(source.search("hybrid RAG", 16)).thenReturn(List.of(externalCandidate(), externalCandidate()));
+
+        AdHocLiteratureSearchService.AdHocLiteratureSearchResult result = service.search("hybrid RAG", 8, null);
+
+        assertThat(result.rawCandidateCount()).isEqualTo(2);
+        assertThat(result.uniqueCandidateCount()).isEqualTo(1);
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).duplicateSources()).containsExactly("openalex");
+        assertThat(result.items().get(0).duplicateMergeCount()).isEqualTo(1);
+        assertThat(result.items().get(0).duplicateStatus()).isEqualTo("MERGED_DUPLICATES");
     }
 
     @Test

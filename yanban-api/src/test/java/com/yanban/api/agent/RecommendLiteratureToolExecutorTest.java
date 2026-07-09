@@ -80,7 +80,8 @@ class RecommendLiteratureToolExecutorTest {
                         List.of(),
                         "doi:10.1000/rag",
                         "MERGED_DUPLICATES",
-                        List.of("local_card", "openalex")
+                        List.of("local_card", "openalex"),
+                        1
                 )),
                 List.of()
         ));
@@ -98,6 +99,7 @@ class RecommendLiteratureToolExecutorTest {
         assertThat(result.output().path("items").get(0).path("deduplicationKey").asText()).isEqualTo("doi:10.1000/rag");
         assertThat(result.output().path("items").get(0).path("duplicateStatus").asText()).isEqualTo("MERGED_DUPLICATES");
         assertThat(result.output().path("items").get(0).path("duplicateSources")).hasSize(2);
+        assertThat(result.output().path("items").get(0).path("duplicateMergeCount").asInt()).isEqualTo(1);
         assertThat(executor.definition().description()).contains("Topic-based academic literature search v1");
         assertThat(executor.definition().description()).contains("Does not inspect full manuscripts");
     }
