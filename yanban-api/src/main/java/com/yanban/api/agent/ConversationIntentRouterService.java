@@ -177,6 +177,16 @@ public class ConversationIntentRouterService {
             if (StringUtils.hasText(item.arxivId())) sb.append("   - arXiv：").append(item.arxivId()).append("\n");
             if (StringUtils.hasText(item.url())) sb.append("   - URL：").append(item.url()).append("\n");
             sb.append("   - 相关性分数：").append(String.format(Locale.ROOT, "%.2f", item.score())).append("\n");
+            sb.append("   - Citation status: ").append(item.citationStatus()).append("\n");
+            sb.append("   - Metadata risk: ").append(item.metadataRiskLevel());
+            if (!item.metadataRiskNotes().isEmpty()) {
+                sb.append(" (").append(String.join("; ", item.metadataRiskNotes())).append(")");
+            }
+            sb.append("\n");
+            sb.append("   - Deduplication: ").append(item.duplicateStatus()).append(" / ").append(item.deduplicationKey()).append("\n");
+            if (!item.rankingBasis().isEmpty()) {
+                sb.append("   - Ranking basis: ").append(String.join("; ", item.rankingBasis())).append("\n");
+            }
             if (StringUtils.hasText(item.abstractText())) sb.append("   - 摘要片段：").append(abbreviate(item.abstractText(), 220)).append("\n");
             if (includeBibtex) sb.append("```bibtex\n").append(item.bibtex()).append("```\n");
             sb.append("\n");

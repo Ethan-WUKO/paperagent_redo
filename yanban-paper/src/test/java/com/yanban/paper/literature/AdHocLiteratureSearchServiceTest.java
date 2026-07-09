@@ -59,6 +59,26 @@ class AdHocLiteratureSearchServiceTest {
         assertThat(result.uniqueCandidateCount()).isEqualTo(1);
         assertThat(result.rawCandidateCount()).isEqualTo(2);
         assertThat(result.items().get(0).source()).isEqualTo("local_card");
+        assertThat(result.items().get(0).duplicateStatus()).isEqualTo("MERGED_DUPLICATES");
+        assertThat(result.items().get(0).duplicateSources()).containsExactly("local_card", "openalex");
+        assertThat(result.items().get(0).citationStatus()).isEqualTo("BIBTEX_READY_VERIFY_BEFORE_SUBMISSION");
+        assertThat(result.items().get(0).metadataRiskLevel()).isEqualTo("LOW");
+        assertThat(result.items().get(0).metadataRiskNotes()).isEmpty();
+        assertThat(result.items().get(0).rankingBasis()).anyMatch(value -> value.startsWith("score="));
+        assertThat(result.items().get(0).deduplicationKey()).isEqualTo("doi:10.1000/rag");
+    }
+
+    @Test
+    void searchMarksMetadataRiskForIncompleteCitationMetadata() {
+        when(localCardSearchService.search("hybrid RAG", 8, null)).thenReturn(List.of());
+        when(source.search("hybrid RAG", 16)).thenReturn(List.of(incompleteCandidate()));
+
+        AdHocLiteratureSearchService.AdHocLiteratureSearchResult result = service.search("hybrid RAG", 8, null);
+
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).citationStatus()).isEqualTo("BIBTEX_NEEDS_METADATA_REVIEW");
+        assertThat(result.items().get(0).metadataRiskLevel()).isEqualTo("HIGH");
+        assertThat(result.items().get(0).metadataRiskNotes()).contains("missing authors", "missing publication year", "missing stable identifier or URL");
     }
 
     private LiteratureCandidate localCandidate() {
@@ -97,6 +117,27 @@ class AdHocLiteratureSearchServiceTest {
                 "https://example.test/rag",
                 null,
                 7,
+                List.of(),
+                List.of("retrieval"),
+                "hybrid RAG"
+        );
+    }
+
+    private LiteratureCandidate incompleteCandidate() {
+        return new LiteratureCandidate(
+                "openalex",
+                null,
+                null,
+                null,
+                null,
+                "Hybrid RAG Metadata Sparse Candidate",
+                List.of(),
+                null,
+                null,
+                "sparse metadata candidate about hybrid RAG",
+                null,
+                null,
+                1,
                 List.of(),
                 List.of("retrieval"),
                 "hybrid RAG"

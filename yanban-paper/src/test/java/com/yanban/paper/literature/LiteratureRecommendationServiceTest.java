@@ -87,9 +87,45 @@ class LiteratureRecommendationServiceTest {
             assertThat(item.title()).isEqualTo("Hybrid Retrieval for RAG");
             assertThat(item.alreadyPresent()).isTrue();
             assertThat(item.bibtex()).contains("Recommended by Yanban Agent");
+            assertThat(item.citationStatus()).isEqualTo("BIBTEX_READY_VERIFY_BEFORE_SUBMISSION");
+            assertThat(item.metadataRiskLevel()).isEqualTo("LOW");
+            assertThat(item.metadataRiskNotes()).isEmpty();
+            assertThat(item.deduplicationKey()).isEqualTo("doi:10.1000/rag");
+            assertThat(item.duplicateStatus()).isEqualTo("MERGED_DUPLICATES");
+            assertThat(item.duplicateSources()).containsExactly("local_card", "openalex");
+            assertThat(item.matchTarget()).isEqualTo("hybrid RAG");
+            assertThat(item.rankingBasis()).anyMatch(value -> value.startsWith("score="));
         });
         verify(catalog, times(2)).upsertCard(any());
         verify(cardAnalysis).analyzeTopCandidates(any(), eq(7));
+    }
+
+    @Test
+    void recommendMarksMetadataRiskWhenCitationFieldsAreIncomplete() {
+        when(localSearch.search(any(), anyInt(), any())).thenReturn(List.of());
+        when(source.search(any(), anyInt())).thenReturn(List.of(incompleteExternal()));
+
+        LiteratureRecommendationService.RecommendationResult result = service.recommend(
+                new LiteratureRecommendationService.RecommendationRequest(
+                        "hybrid RAG",
+                        null,
+                        null,
+                        null,
+                        3,
+                        10,
+                        1,
+                        false,
+                        null,
+                        null
+                )
+        );
+
+        assertThat(result.items()).hasSize(1);
+        LiteratureRecommendationService.RecommendationItem item = result.items().get(0);
+        assertThat(item.bibtex()).isNull();
+        assertThat(item.citationStatus()).isEqualTo("BIBTEX_NOT_REQUESTED_VERIFY_METADATA");
+        assertThat(item.metadataRiskLevel()).isEqualTo("HIGH");
+        assertThat(item.metadataRiskNotes()).contains("missing authors", "missing publication year", "missing stable identifier or URL");
     }
 
     @Test
@@ -289,6 +325,27 @@ class LiteratureRecommendationServiceTest {
                 80,
                 List.of(),
                 List.of("retrieval", "rag", "reranking"),
+                "hybrid RAG"
+        );
+    }
+
+    private LiteratureCandidate incompleteExternal() {
+        return new LiteratureCandidate(
+                "openalex",
+                null,
+                null,
+                null,
+                null,
+                "Hybrid RAG Metadata Sparse Candidate",
+                List.of(),
+                null,
+                null,
+                "Hybrid retrieval for RAG with sparse metadata.",
+                null,
+                null,
+                1,
+                List.of(),
+                List.of("retrieval", "rag"),
                 "hybrid RAG"
         );
     }

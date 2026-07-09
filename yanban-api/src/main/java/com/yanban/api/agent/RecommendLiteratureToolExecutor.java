@@ -51,7 +51,7 @@ public class RecommendLiteratureToolExecutor implements ToolExecutor {
         parameters.putArray("required").add("query");
         this.definition = new ToolDefinition(
                 TOOL_NAME,
-                "Unified academic literature recommendation with LLM query planning, multi-source retrieval, deduplication, scoring, optional LLM rerank, and explainable recommendations.",
+                "Topic-based academic literature search v1. Returns real, deduplicated, ranked, explainable paper recommendations with citation metadata status, existing-BibTeX markers, and metadata risk notes. Does not inspect full manuscripts, diagnose literature-review gaps, replace old citations, or modify paper text.",
                 parameters
         );
     }

@@ -246,6 +246,52 @@
 6. 用户反馈如果不沉淀，系统会一直停留在一次性搜索工具阶段。
 7. 没有评测回归时，排序逻辑很容易越改越乱。
 
+## Issue #91：文献检索基础能力收口
+
+执行时间：2026-07-09
+
+分支：`codex/literature-base-closure`
+
+状态：已完成代码实施和固定样例验证。
+
+完成内容：
+
+1. 收口主题文献检索第一版输出协议，复用现有 `recommend_literature` 和 `/literature` 检索入口。
+2. `recommend_literature` 结果新增匹配对象、排序依据、引用信息状态、元数据风险等级、元数据风险说明、去重键、重复合并状态和重复来源。
+3. `/literature` 快捷检索结果同步新增引用信息状态、元数据风险、排序依据和去重说明，并在聊天文本里展示。
+4. DOI、arXiv、OpenAlex、Semantic Scholar ID 和标题指纹继续用于去重；重复候选不作为多条独立推荐出现，入选结果会记录合并来源。
+5. 已有 BibTeX 继续通过 `alreadyPresent` 标记，不把已有参考文献当成全新推荐。
+6. `recommend_literature` 工具说明已明确限定为主题检索第一版，不承诺全文缺引用检测、综述缺口诊断、替换旧文献或修改正文。
+
+关键改动：
+
+1. `LiteratureRecommendationService` 增加重复来源追踪和推荐条目的引用/风险/去重解释字段。
+2. `AdHocLiteratureSearchService` 增加同类输出字段，保持后台任务 materialize 的 `cardId` 兼容。
+3. `ConversationIntentRouterService` 在 `/literature` 文本结果中展示 citation status、metadata risk、deduplication 和 ranking basis。
+4. `RecommendLiteratureToolExecutor` 更新工具描述，避免越界承诺。
+5. 补充服务和工具执行器测试，覆盖去重、已有文献、引用状态、元数据风险和工具 JSON 字段。
+
+测试结果：
+
+1. `mvn --% -pl yanban-paper -am -Dtest=LiteratureRecommendationServiceTest,AdHocLiteratureSearchServiceTest,LiteratureRecommendationEvaluationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+   - 结果：通过，11 tests, 0 failures, 0 errors。
+2. `mvn --% -pl yanban-api -am -Dtest=RecommendLiteratureToolExecutorTest,ConversationIntentRouterServiceTest -Dsurefire.failIfNoSpecifiedTests=false test`
+   - 结果：通过，6 tests, 0 failures, 0 errors。
+3. `powershell -ExecutionPolicy Bypass -File docs/evaluation/run-literature-recommendation-eval.ps1`
+   - 结果：通过，并生成 `yanban-paper/target/literature-recommendation-eval/report.json` 和 `yanban-paper/target/literature-recommendation-eval/report.md`。
+
+未解决问题：
+
+1. 本次不新增持久化用户反馈、不做长期个性化推荐，也不做完整 Project 文献库。
+2. 本次不做全文自动缺引用检测、不做自动综述缺口诊断、不做自动替换旧文献。
+3. 本次不自动修改论文正文，也不自动插入引用。
+4. 外部论文源仍可能失败或返回不完整元数据；当前策略是返回部分结果和风险提示。
+
+是否影响后续 issue：
+
+1. 影响：后续补引用、补综述、替换文献和前端决策面板可以复用新增的统一解释字段。
+2. 风险：新增字段属于输出协议扩展，应避免其他并行分支再次发明不兼容字段。
+
 ## 下一步建议
 
 下一步优先做：
