@@ -83,6 +83,9 @@ class PaperControllerIntegrationTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.sourceFilename").value("main.tex"))
+                .andExpect(jsonPath("$.scoreThreshold").value(75))
+                .andExpect(jsonPath("$.maxRounds").value(3))
+                .andExpect(jsonPath("$.innerMaxAttempts").value(2))
                 .andExpect(jsonPath("$.objectKey", not(blankOrNullString())))
                 .andReturn();
 
@@ -94,12 +97,18 @@ class PaperControllerIntegrationTest {
         Assertions.assertThat(task.getTargetLanguage()).isEqualTo("zh");
         Assertions.assertThat(task.getInputFormat()).isEqualTo("LATEX");
         Assertions.assertThat(task.getMode()).isEqualTo("LATEX_BIB");
+        Assertions.assertThat(task.getScoreThreshold()).isEqualTo(75);
+        Assertions.assertThat(task.getMaxRounds()).isEqualTo(3);
+        Assertions.assertThat(task.getInnerMaxAttempts()).isEqualTo(2);
         Assertions.assertThat(paperTaskRoundRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).isNotEmpty();
 
         mockMvc.perform(get("/api/v1/paper/tasks/{taskId}", taskId)
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(taskId));
+                .andExpect(jsonPath("$.id").value(taskId))
+                .andExpect(jsonPath("$.scoreThreshold").value(75))
+                .andExpect(jsonPath("$.maxRounds").value(3))
+                .andExpect(jsonPath("$.innerMaxAttempts").value(2));
 
         if (task.getFinalObjectKey() != null && !task.getFinalObjectKey().isBlank()) {
             mockMvc.perform(get("/api/v1/paper/tasks/{taskId}/download", taskId)
@@ -116,6 +125,23 @@ class PaperControllerIntegrationTest {
         mockMvc.perform(multipart("/api/v1/paper/process")
                         .file(new MockMultipartFile("mainTex", "sample.pdf", "application/pdf", "pdf-content".getBytes()))
                         .param("scoreThreshold", "75")
+                        .param("maxRounds", "3")
+                        .param("innerMaxAttempts", "2")
+                        .param("literatureCount", "5")
+                        .param("targetLanguage", "zh")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void rejectScoreThresholdOutsideZeroToOneHundredScale() throws Exception {
+        String token = registerAndGetToken("paper_user_score_threshold");
+
+        mockMvc.perform(multipart("/api/v1/paper/process")
+                        .file(new MockMultipartFile("mainTex", "main.tex",
+                                "application/x-tex",
+                                "\\documentclass{article}\\begin{document}Hi\\end{document}".getBytes()))
+                        .param("scoreThreshold", "101")
                         .param("maxRounds", "3")
                         .param("innerMaxAttempts", "2")
                         .param("literatureCount", "5")

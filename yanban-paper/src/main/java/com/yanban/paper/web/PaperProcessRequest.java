@@ -10,7 +10,7 @@ public record PaperProcessRequest(
         MultipartFile mainTex,
         MultipartFile bibFile,
         MultipartFile file,
-        @Min(0) Integer scoreThreshold,
+        @Min(0) @Max(100) Integer scoreThreshold,
         @Min(1) @Max(20) Integer maxRounds,
         @Min(1) @Max(20) Integer innerMaxAttempts,
         @Min(1) @Max(100) Integer literatureMinCount,

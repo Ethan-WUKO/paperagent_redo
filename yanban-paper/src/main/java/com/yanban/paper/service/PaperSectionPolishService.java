@@ -64,13 +64,20 @@ public class PaperSectionPolishService {
     @Transactional
     public SectionPolishResult polishSection(Long taskId, LatexSection latexSection, String targetLanguage,
                                              double scoreThreshold, int maxAttempts) {
+        return polishSection(taskId, latexSection, targetLanguage, normalizeScoreThreshold(scoreThreshold), maxAttempts, 1);
+    }
+
+    @Transactional
+    public SectionPolishResult polishSection(Long taskId, LatexSection latexSection, String targetLanguage,
+                                             int scoreThreshold, int maxRounds, int innerMaxAttempts) {
         PaperTask task = tasks.findById(taskId).orElseThrow();
         Optional<PaperSection> storedSection = sections.findByTaskIdOrderByOrderIndexAsc(taskId).stream()
                 .filter(section -> section.getOrderIndex().equals(latexSection.orderIndex()))
                 .findFirst();
         if (latexSection.role() == LatexSectionRole.REFERENCES) {
             return persist(task, storedSection, "SKIPPED", latexSection.rawText(), latexSection.rawText(), 0, false, 0,
-                    Map.of("reason", "references_not_polished"), Map.of(), List.of());
+                    reviewMeta("references_not_polished", "Reference sections are not polished.", 0, false, 0,
+                            maxRounds, innerMaxAttempts, true, false, Map.of()), Map.of(), List.of());
         }
 
         PaperTaskAnalysis analysis = analyses.findByTaskId(taskId).orElse(null);
@@ -79,17 +86,19 @@ public class PaperSectionPolishService {
         boolean introductionSection = latexSection.role() == LatexSectionRole.INTRO || (latexSection.title() != null && latexSection.title().toLowerCase().contains("intro"));
         MaskedLatexText masked = maskingService.mask(latexSection.rawText());
         String reviewComments = "";
-        String lastRejectedReason = "";
-        int attempts = Math.max(1, maxAttempts);
-        for (int attempt = 1; attempt <= attempts; attempt++) {
+        String lastRejectedCode = "polish_failed";
+        String lastRejectedMessage = "Section polishing did not produce an acceptable candidate.";
+        int rounds = Math.max(1, maxRounds);
+        int repairsPerRound = Math.max(1, innerMaxAttempts);
+        for (int round = 1; round <= rounds; round++) {
             String prompt = promptService.render(introductionSection ? "introduction-polish" : "section-polish", Map.of(
                     "targetLanguage", blankToDefault(targetLanguage, task.getTargetLanguage()),
                     "paperTitle", task.getTitle(),
                     "researchProfile", researchProfile,
                     "conceptLadder", conceptLadder,
                     "sectionTitle", latexSection.title(),
-                    "attemptIndex", attempt,
-                    "maxAttempts", attempts,
+                    "attemptIndex", round,
+                    "maxAttempts", rounds,
                     "reviewComments", reviewComments.isBlank() ? "None." : reviewComments,
                     "sectionText", masked.text()
             ));
@@ -97,62 +106,86 @@ public class PaperSectionPolishService {
             try {
                 polishResponse = modelClient.complete("Preserve placeholders exactly and return tagged output only.", prompt, 0.3, 4096);
             } catch (Exception ex) {
-                return persist(task, storedSection, "FAILED_KEEP_ORIGINAL", latexSection.rawText(), latexSection.rawText(), 0, false, attempt,
-                        Map.of("reason", "model_call_failed", "message", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()), Map.of(), maskingService.lint(latexSection.rawText()));
+                return persist(task, storedSection, "MODEL_FAILED", latexSection.rawText(), latexSection.rawText(), 0, false, round,
+                        reviewMeta("model_call_failed", rootMessage(ex), 0, false, round, rounds, repairsPerRound,
+                                true, false, Map.of()), Map.of(), maskingService.lint(latexSection.rawText()));
             }
             String polishedMasked = extractOutput(polishResponse);
             PlaceholderValidation validation = maskingService.validatePlaceholders(polishedMasked, masked.placeholderSet());
             if (!validation.valid()) {
-                lastRejectedReason = "placeholder_validation_failed missing=" + validation.missing() + " unexpected=" + validation.unexpected();
-                reviewComments = lastRejectedReason;
+                lastRejectedCode = "placeholder_validation_failed";
+                lastRejectedMessage = "Missing placeholders: " + validation.missing() + "; unexpected placeholders: " + validation.unexpected();
+                reviewComments = lastRejectedMessage;
                 continue;
             }
             String polished = maskingService.unmask(polishedMasked, masked.placeholders());
             CandidateValidation candidateValidation = validateCandidate(latexSection.rawText(), polished);
             if (!candidateValidation.valid()) {
-                lastRejectedReason = candidateValidation.reason();
-                reviewComments = lastRejectedReason;
+                lastRejectedCode = candidateValidation.reasonCode();
+                lastRejectedMessage = candidateValidation.reasonMessage();
+                reviewComments = lastRejectedMessage;
                 continue;
             }
             Map<String, Object> candidateDiff = diff(latexSection.rawText(), polished);
             Review review = review(task, latexSection, researchProfile, latexSection.rawText(), polished, targetLanguage, scoreThreshold, candidateDiff);
             if (review.passed() && review.score() >= scoreThreshold) {
-                return persist(task, storedSection, "POLISHED", latexSection.rawText(), polished, review.score(), true, attempt,
-                        review.raw(), candidateDiff, candidateValidation.lintIssues());
+                return persist(task, storedSection, "POLISHED", latexSection.rawText(), polished, review.score(), true, round,
+                        reviewMeta("polished", "Section passed review.", review.score(), true, round, rounds,
+                                repairsPerRound, false, false, review.raw()), candidateDiff, candidateValidation.lintIssues());
             }
 
             String criticComments = summarizeReview(review.raw());
-            RepairResult repair = repair(task, latexSection, researchProfile, latexSection.rawText(), polished, targetLanguage, criticComments);
-            if (repair.success()) {
+            String finalReasonCode = review.reasonCode();
+            String finalReasonMessage = review.reasonMessage();
+            Map<String, Object> finalReviewRaw = review.raw();
+            Map<String, Object> finalDiff = candidateDiff;
+            CandidateValidation finalValidation = candidateValidation;
+            String currentPolished = polished;
+
+            for (int repairAttempt = 1; repairAttempt <= repairsPerRound; repairAttempt++) {
+                RepairResult repair = repair(task, latexSection, researchProfile, latexSection.rawText(), currentPolished, targetLanguage, criticComments);
+                if (!repair.success()) {
+                    finalReasonCode = firstReason(repair.raw(), "repair_model_call_failed");
+                    finalReasonMessage = firstMessage(repair.raw(), "Repair failed.");
+                    criticComments = criticComments + "\nrepair_failed: " + repair.raw();
+                    continue;
+                }
                 CandidateValidation repairValidation = validateCandidate(latexSection.rawText(), repair.polishedText());
                 if (repairValidation.valid()) {
                     Map<String, Object> repairDiff = diff(latexSection.rawText(), repair.polishedText());
                     Review repairReview = review(task, latexSection, researchProfile, latexSection.rawText(), repair.polishedText(), targetLanguage, scoreThreshold, repairDiff);
                     Map<String, Object> repairReviewRaw = withRepairMeta(repairReview.raw(), review.raw(), true, repair.raw());
                     if (repairReview.passed() && repairReview.score() >= scoreThreshold) {
-                        return persist(task, storedSection, "POLISHED", latexSection.rawText(), repair.polishedText(), repairReview.score(), true, attempt,
-                                repairReviewRaw, repairDiff, repairValidation.lintIssues());
+                        return persist(task, storedSection, "POLISHED", latexSection.rawText(), repair.polishedText(), repairReview.score(), true, round,
+                                reviewMeta("polished", "Section passed review after repair.", repairReview.score(), true, round,
+                                        rounds, repairsPerRound, false, false, repairReviewRaw),
+                                repairDiff, repairValidation.lintIssues());
                     }
-                    polished = repair.polishedText();
-                    candidateDiff = repairDiff;
-                    candidateValidation = repairValidation;
-                    review = new Review(repairReview.score(), repairReview.passed(), repairReviewRaw);
+                    currentPolished = repair.polishedText();
+                    finalDiff = repairDiff;
+                    finalValidation = repairValidation;
+                    finalReviewRaw = repairReviewRaw;
+                    finalReasonCode = repairReview.reasonCode();
+                    finalReasonMessage = repairReview.reasonMessage();
                     criticComments = summarizeReview(repairReviewRaw);
                 } else {
-                    criticComments = criticComments + "\nrepair_rejected: " + repairValidation.reason();
+                    finalReasonCode = repairValidation.reasonCode();
+                    finalReasonMessage = repairValidation.reasonMessage();
+                    criticComments = criticComments + "\nrepair_rejected: " + repairValidation.reasonMessage();
                 }
-            } else {
-                criticComments = criticComments + "\nrepair_failed: " + repair.raw();
             }
 
             reviewComments = criticComments;
-            if (attempt == attempts) {
-                return persist(task, storedSection, "REVIEW_FAILED", latexSection.rawText(), polished, review.score(), false, attempt,
-                        review.raw(), candidateDiff, candidateValidation.lintIssues());
+            if (round == rounds) {
+                return persist(task, storedSection, "REVIEW_FAILED", latexSection.rawText(), currentPolished, number(finalReviewRaw.get("score"), review.score()), false, round,
+                        reviewMeta(finalReasonCode, finalReasonMessage, number(finalReviewRaw.get("score"), review.score()), false, round,
+                                rounds, repairsPerRound, true, false, finalReviewRaw),
+                        finalDiff, finalValidation.lintIssues());
             }
         }
-        return persist(task, storedSection, "FAILED_KEEP_ORIGINAL", latexSection.rawText(), latexSection.rawText(), 0, false, attempts,
-                Map.of("reason", lastRejectedReason.isBlank() ? "polish_failed" : lastRejectedReason), Map.of(), maskingService.lint(latexSection.rawText()));
+        return persist(task, storedSection, "PROTECTION_REJECTED", latexSection.rawText(), latexSection.rawText(), 0, false, rounds,
+                reviewMeta(lastRejectedCode, lastRejectedMessage, 0, false, rounds, rounds, repairsPerRound,
+                        true, true, Map.of()), Map.of(), maskingService.lint(latexSection.rawText()));
     }
 
     private boolean structuralCommandsPreserved(String original, String polished) {
@@ -203,16 +236,18 @@ public class PaperSectionPolishService {
 
     private CandidateValidation validateCandidate(String original, String polished) {
         if (unexpectedTranslation(original, polished)) {
-            return new CandidateValidation(false, "unexpected_translation_detected", List.of());
+            return new CandidateValidation(false, "unexpected_translation_detected",
+                    "The candidate appears to translate the section instead of polishing it.", List.of());
         }
         if (!structuralCommandsPreserved(original, polished)) {
-            return new CandidateValidation(false, "structural_command_changed", List.of());
+            return new CandidateValidation(false, "structural_command_changed",
+                    "The candidate changed protected LaTeX structure, labels, refs, cites, or environments.", List.of());
         }
         List<LatexLintIssue> lintIssues = maskingService.lint(polished);
         if (hasBlocker(lintIssues)) {
-            return new CandidateValidation(false, "latex_lint_failed " + lintIssues, lintIssues);
+            return new CandidateValidation(false, "latex_lint_failed", "LaTeX lint blockers were found: " + lintIssues, lintIssues);
         }
-        return new CandidateValidation(true, "", lintIssues);
+        return new CandidateValidation(true, "", "", lintIssues);
     }
 
     private Review review(PaperTask task, LatexSection section, String researchProfile, String originalText,
@@ -231,17 +266,39 @@ public class PaperSectionPolishService {
         try {
             text = modelClient.complete("You return strict JSON only.", prompt, 0.1, 2048);
         } catch (Exception ex) {
-            return new Review(0, false, Map.of("reason", "review_model_call_failed", "message", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()));
+            return new Review(0, false,
+                    Map.of("reasonCode", "review_model_call_failed", "reasonMessage", rootMessage(ex)),
+                    "review_model_call_failed",
+                    rootMessage(ex));
         }
         Map<String, Object> raw = parseMap(text);
         double score = number(raw.get("score"), 0);
+        if (score > 0 && score <= 1) {
+            Map<String, Object> invalidRaw = new LinkedHashMap<>(raw);
+            invalidRaw.put("reasonCode", "review_score_scale_invalid");
+            invalidRaw.put("reasonMessage", "Review score must use the 0-100 scale, not a 0-1 ratio.");
+            return new Review(score, false, invalidRaw, "review_score_scale_invalid",
+                    "Review score must use the 0-100 scale, not a 0-1 ratio.");
+        }
+        if (score < 0 || score > 100) {
+            Map<String, Object> invalidRaw = new LinkedHashMap<>(raw);
+            invalidRaw.put("reasonCode", "review_score_out_of_range");
+            invalidRaw.put("reasonMessage", "Review score must be between 0 and 100.");
+            return new Review(score, false, invalidRaw, "review_score_out_of_range",
+                    "Review score must be between 0 and 100.");
+        }
         boolean passed = booleanValue(raw.get("passed"), score >= scoreThreshold);
         boolean introducedUnsupported = booleanValue(raw.get("introducedUnsupportedContent"), false);
         boolean needsRepair = booleanValue(raw.get("needsRepair"), false);
         if (introducedUnsupported || needsRepair) {
             passed = false;
         }
-        return new Review(score, passed, raw);
+        if (score < scoreThreshold) {
+            passed = false;
+        }
+        String reasonCode = passed ? "polished" : "review_failed";
+        String reasonMessage = passed ? "Section passed review." : "Section review did not meet the configured threshold.";
+        return new Review(score, passed, raw, reasonCode, reasonMessage);
     }
 
     private RepairResult repair(PaperTask task, LatexSection section, String researchProfile, String originalText,
@@ -295,6 +352,8 @@ public class PaperSectionPolishService {
             reviewWithMeta.put("passed", passed);
             reviewWithMeta.put("attempts", attempts);
             reviewWithMeta.put("lintIssues", lintIssues);
+            reviewWithMeta.putIfAbsent("keptOriginal", !"POLISHED".equals(status));
+            reviewWithMeta.putIfAbsent("protectionTriggered", "PROTECTION_REJECTED".equals(status));
             section.setReviewJson(toJson(reviewWithMeta));
             section.setDiffJson(toJson(diff));
             sections.save(section);
@@ -403,12 +462,64 @@ public class PaperSectionPolishService {
         return value == null || value.isBlank() ? (fallback == null ? "" : fallback) : value;
     }
 
-    private record CandidateValidation(boolean valid, String reason, List<LatexLintIssue> lintIssues) {
+    private int normalizeScoreThreshold(double scoreThreshold) {
+        return (int) Math.max(0, Math.min(100, Math.round(scoreThreshold)));
+    }
+
+    private String rootMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        return message == null || message.isBlank() ? current.getClass().getSimpleName() : message;
+    }
+
+    private Map<String, Object> reviewMeta(String reasonCode,
+                                           String reasonMessage,
+                                           double score,
+                                           boolean passed,
+                                           int attempts,
+                                           int maxRounds,
+                                           int innerMaxAttempts,
+                                           boolean keptOriginal,
+                                           boolean protectionTriggered,
+                                           Map<String, Object> raw) {
+        Map<String, Object> meta = new LinkedHashMap<>(raw == null ? Map.of() : raw);
+        meta.put("reasonCode", reasonCode);
+        meta.put("reasonMessage", reasonMessage);
+        meta.put("score", score);
+        meta.put("passed", passed);
+        meta.put("attempts", attempts);
+        meta.put("maxRounds", maxRounds);
+        meta.put("innerMaxAttempts", innerMaxAttempts);
+        meta.put("keptOriginal", keptOriginal);
+        meta.put("protectionTriggered", protectionTriggered);
+        return meta;
+    }
+
+    private String firstReason(Map<String, Object> raw, String fallback) {
+        Object reasonCode = raw == null ? null : raw.get("reasonCode");
+        if (reasonCode == null) {
+            reasonCode = raw == null ? null : raw.get("reason");
+        }
+        return reasonCode == null || String.valueOf(reasonCode).isBlank() ? fallback : String.valueOf(reasonCode);
+    }
+
+    private String firstMessage(Map<String, Object> raw, String fallback) {
+        Object message = raw == null ? null : raw.get("reasonMessage");
+        if (message == null) {
+            message = raw == null ? null : raw.get("message");
+        }
+        return message == null || String.valueOf(message).isBlank() ? fallback : String.valueOf(message);
+    }
+
+    private record CandidateValidation(boolean valid, String reasonCode, String reasonMessage, List<LatexLintIssue> lintIssues) {
     }
 
     private record RepairResult(boolean success, String polishedText, Map<String, Object> raw) {
     }
 
-    private record Review(double score, boolean passed, Map<String, Object> raw) {
+    private record Review(double score, boolean passed, Map<String, Object> raw, String reasonCode, String reasonMessage) {
     }
 }

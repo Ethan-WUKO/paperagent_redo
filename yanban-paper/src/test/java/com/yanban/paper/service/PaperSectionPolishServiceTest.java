@@ -92,7 +92,7 @@ class PaperSectionPolishServiceTest {
 
         SectionPolishResult result = polishService.polishSection(task.getId(), latexSection, "en", 80, 1);
 
-        assertThat(result.status()).isEqualTo("FAILED_KEEP_ORIGINAL");
+        assertThat(result.status()).isEqualTo("PROTECTION_REJECTED");
         assertThat(result.polishedText()).isEqualTo(latexSection.rawText());
     }
 
@@ -107,12 +107,12 @@ class PaperSectionPolishServiceTest {
         SectionPolishResult result = polishService.polishSection(task.getId(), latexSection, "en", 80, 3);
 
         assertThat(result.status()).isEqualTo("POLISHED");
-        assertThat(result.attempts()).isEqualTo(3);
+        assertThat(result.attempts()).isEqualTo(2);
         assertThat(result.reviewScore()).isEqualTo(88);
         assertThat(result.polishedText()).contains("\\cite{rag2020}");
         PaperSection saved = sections.findById(stored.getId()).orElseThrow();
         assertThat(saved.getPolishStatus()).isEqualTo("POLISHED");
-        assertThat(saved.getReviewJson()).contains("88", "attempts");
+        assertThat(saved.getReviewJson()).contains("88", "attempts", "reasonCode", "maxRounds", "innerMaxAttempts");
         assertThat(saved.getDiffJson()).contains("originalWordCount");
     }
 
@@ -125,8 +125,59 @@ class PaperSectionPolishServiceTest {
 
         SectionPolishResult result = polishService.polishSection(task.getId(), latexSection, "en", 80, 1);
 
-        assertThat(result.status()).isEqualTo("FAILED_KEEP_ORIGINAL");
+        assertThat(result.status()).isEqualTo("PROTECTION_REJECTED");
         assertThat(result.polishedText()).isEqualTo(latexSection.rawText());
+    }
+
+    @Test
+    void scoreThresholdUsesZeroToOneHundredScale() {
+        modelClient.preserveCitationOnFirstPolish = true;
+        modelClient.alwaysPassReview = true;
+        modelClient.finalReviewScore = 88;
+        PaperTask task = tasks.save(new PaperTask(1L, "Demo", "main.tex", "paper/main.tex", "RUNNING", "en", "POLISH", null));
+        PaperSection stored = sections.save(new PaperSection(task.getId(), "main.tex", 0, 2, "Introduction", "INTRO", 1.0, "test", 0, 80));
+        LatexSection latexSection = new LatexSection(0, 2, "section", true, "Introduction", LatexSectionRole.INTRO, 0, 80,
+                "\\section{Introduction}\nThis paper uses RAG \\cite{rag2020}.");
+
+        SectionPolishResult result = polishService.polishSection(task.getId(), latexSection, "en", 90, 1, 1);
+
+        assertThat(result.status()).isEqualTo("REVIEW_FAILED");
+        assertThat(result.reviewScore()).isEqualTo(88);
+        PaperSection saved = sections.findById(stored.getId()).orElseThrow();
+        assertThat(saved.getReviewJson()).contains("\"reasonCode\":\"review_failed\"", "\"keptOriginal\":true");
+    }
+
+    @Test
+    void ratioReviewScoreIsRejectedInsteadOfScaled() {
+        modelClient.preserveCitationOnFirstPolish = true;
+        modelClient.returnRatioScore = true;
+        PaperTask task = tasks.save(new PaperTask(1L, "Demo", "main.tex", "paper/main.tex", "RUNNING", "en", "POLISH", null));
+        PaperSection stored = sections.save(new PaperSection(task.getId(), "main.tex", 0, 2, "Introduction", "INTRO", 1.0, "test", 0, 80));
+        LatexSection latexSection = new LatexSection(0, 2, "section", true, "Introduction", LatexSectionRole.INTRO, 0, 80,
+                "\\section{Introduction}\nThis paper uses RAG \\cite{rag2020}.");
+
+        SectionPolishResult result = polishService.polishSection(task.getId(), latexSection, "en", 80, 1, 1);
+
+        assertThat(result.status()).isEqualTo("REVIEW_FAILED");
+        assertThat(result.reviewScore()).isEqualTo(0.88);
+        PaperSection saved = sections.findById(stored.getId()).orElseThrow();
+        assertThat(saved.getReviewJson()).contains("review_score_scale_invalid", "\"score\":0.88");
+    }
+
+    @Test
+    void modelFailureKeepsOriginalAndRecordsReason() {
+        modelClient.failPolishCall = true;
+        PaperTask task = tasks.save(new PaperTask(1L, "Demo", "main.tex", "paper/main.tex", "RUNNING", "en", "POLISH", null));
+        PaperSection stored = sections.save(new PaperSection(task.getId(), "main.tex", 0, 2, "Introduction", "INTRO", 1.0, "test", 0, 80));
+        LatexSection latexSection = new LatexSection(0, 2, "section", true, "Introduction", LatexSectionRole.INTRO, 0, 80,
+                "\\section{Introduction}\nThis paper uses RAG.");
+
+        SectionPolishResult result = polishService.polishSection(task.getId(), latexSection, "en", 80, 3, 2);
+
+        assertThat(result.status()).isEqualTo("MODEL_FAILED");
+        assertThat(result.polishedText()).isEqualTo(latexSection.rawText());
+        PaperSection saved = sections.findById(stored.getId()).orElseThrow();
+        assertThat(saved.getReviewJson()).contains("model_call_failed", "\"keptOriginal\":true");
     }
 
     static final class EmptyMinioProvider implements ObjectProvider<io.minio.MinioClient> {
@@ -155,27 +206,49 @@ class PaperSectionPolishServiceTest {
         private int polishCalls;
         private int reviewCalls;
         private boolean returnExtraLabel;
+        private boolean preserveCitationOnFirstPolish;
+        private boolean alwaysPassReview;
+        private boolean returnRatioScore;
+        private boolean failPolishCall;
+        private int finalReviewScore = 88;
 
         void reset() {
             polishCalls = 0;
             reviewCalls = 0;
             returnExtraLabel = false;
+            preserveCitationOnFirstPolish = false;
+            alwaysPassReview = false;
+            returnRatioScore = false;
+            failPolishCall = false;
+            finalReviewScore = 88;
         }
 
         @Override
         public String complete(String systemPrompt, String userPrompt, Double temperature, Integer maxTokens) {
             if (userPrompt.contains("Return strict JSON only")) {
                 reviewCalls++;
+                if (returnRatioScore) {
+                    return "{\"score\":0.88,\"passed\":true,\"issues\":[],\"suggestions\":[]}";
+                }
+                if (alwaysPassReview) {
+                    return "{\"score\":" + finalReviewScore + ",\"passed\":true,\"issues\":[],\"suggestions\":[]}";
+                }
                 if (reviewCalls == 1) {
                     return "{\"score\":60,\"passed\":false,\"issues\":[{\"severity\":\"major\",\"message\":\"Too vague\"}],\"suggestions\":[\"Be specific\"]}";
                 }
-                return "{\"score\":88,\"passed\":true,\"issues\":[],\"suggestions\":[]}";
+                return "{\"score\":" + finalReviewScore + ",\"passed\":true,\"issues\":[],\"suggestions\":[]}";
             }
             polishCalls++;
+            if (failPolishCall) {
+                throw new IllegalStateException("model unavailable");
+            }
+            if (userPrompt.contains("Current polished section text:")) {
+                return "<output>\\section{Introduction} This paper presents a clearer RAG motivation \\cite{rag2020}.</output><explanation>x</explanation>";
+            }
             if (returnExtraLabel) {
                 return "<output>\\section{Introduction} This paper uses RAG. \\label{fig:new}</output>";
             }
-            if (userPrompt.contains("Attempt: 1 / 1") || polishCalls == 1) {
+            if (!preserveCitationOnFirstPolish && (userPrompt.contains("Attempt: 1 / 1") || polishCalls == 1)) {
                 return "<output>\\section{Introduction} This polished text drops the citation.</output><explanation>x</explanation>";
             }
             return "<output>\\section{Introduction} This paper presents a clearer RAG motivation [[YANBAN_CITE_0001]].</output><explanation>x</explanation>";

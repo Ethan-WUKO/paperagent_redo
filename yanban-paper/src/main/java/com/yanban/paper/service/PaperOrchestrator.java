@@ -319,7 +319,7 @@ public class PaperOrchestrator {
             transition(taskId, STATUS_RUNNING, "POLISH", null);
             checkpoint(taskId);
             publishProgress("polish_start", taskId, "开始分章润色", "POLISH", 0, document.sections().size(), null, null, null, 82);
-            int polishedCount = polishSections(taskId, document, task.getTargetLanguage());
+            int polishedCount = polishSections(task, document);
             checkpoint(taskId);
             persistRound(taskId, 6, "POLISH", "COMPLETED", "sections=" + document.sections().size(), "processed=" + polishedCount, null);
             publishProgress("polish_complete", taskId, "分章润色完成，处理 " + polishedCount + " 个章节", "POLISH", polishedCount, document.sections().size(), null, null, null, 90);
@@ -406,22 +406,58 @@ public class PaperOrchestrator {
         return builder.toString();
     }
 
-    private int polishSections(Long taskId, LatexDocument document, String targetLanguage) {
+    private int polishSections(PaperTask task, LatexDocument document) {
         int processed = 0;
+        Long taskId = task.getId();
         int total = document.sections().size();
+        int scoreThreshold = scoreThreshold(task);
+        int maxRounds = maxRounds(task);
+        int innerMaxAttempts = innerMaxAttempts(task);
         for (LatexSection section : document.sections()) {
             checkpoint(taskId);
             publishProgress("section_polish_start", taskId, "润色章节：" + section.title(), "POLISH", processed, total, section.title(), 1, 1, null);
             try {
-                sectionPolishService.polishSection(taskId, section, targetLanguage, 0.7, 1);
+                sectionPolishService.polishSection(taskId, section, task.getTargetLanguage(),
+                        scoreThreshold, maxRounds, innerMaxAttempts);
             } catch (Exception ex) {
                 log.warn("Skip polishing section {} of task {} due to error", section.title(), taskId, ex);
+                markSectionFailed(task, section, ex, maxRounds, innerMaxAttempts);
                 publishProgress("section_polish_skipped", taskId, "章节润色失败，已保留原文：" + section.title(), "POLISH", processed, total, section.title(), 1, 1, null);
             }
             processed++;
             publishProgress("section_polish_complete", taskId, "章节处理完成：" + section.title(), "POLISH", processed, total, section.title(), 1, 1, null);
         }
         return processed;
+    }
+
+    private int scoreThreshold(PaperTask task) {
+        Integer value = task.getScoreThreshold();
+        return value == null ? 80 : Math.max(0, Math.min(100, value));
+    }
+
+    private int maxRounds(PaperTask task) {
+        Integer value = task.getMaxRounds();
+        return value == null ? 3 : Math.max(1, Math.min(20, value));
+    }
+
+    private int innerMaxAttempts(PaperTask task) {
+        Integer value = task.getInnerMaxAttempts();
+        return value == null ? 2 : Math.max(1, Math.min(20, value));
+    }
+
+    @Transactional
+    protected void markSectionFailed(PaperTask task, LatexSection latexSection, Exception ex, int maxRounds, int innerMaxAttempts) {
+        sections.findByTaskIdOrderByOrderIndexAsc(task.getId()).stream()
+                .filter(section -> section.getOrderIndex().equals(latexSection.orderIndex()))
+                .findFirst()
+                .ifPresent(section -> {
+                    section.setPolishStatus("FAILED_KEEP_ORIGINAL");
+                    section.setReviewJson("""
+                            {"reasonCode":"section_polish_exception","reasonMessage":"%s","score":0.0,"passed":false,"attempts":0,"maxRounds":%d,"innerMaxAttempts":%d,"keptOriginal":true,"protectionTriggered":false,"lintIssues":[]}
+                            """.formatted(json(rootMessage(ex)), maxRounds, innerMaxAttempts).trim());
+                    section.setDiffJson("{}");
+                    sections.save(section);
+                });
     }
 
     @Transactional
@@ -583,6 +619,13 @@ public class PaperOrchestrator {
         }
         String message = current.getMessage();
         return message == null || message.isBlank() ? current.getClass().getSimpleName() : message;
+    }
+
+    private String json(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private PaperTask getOwnedTask(Long userId, Long taskId) {

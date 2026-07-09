@@ -66,6 +66,15 @@ public class PaperTask {
     @Column(name = "literature_count")
     private Integer literatureCount;
 
+    @Column(name = "score_threshold", nullable = false)
+    private Integer scoreThreshold = 80;
+
+    @Column(name = "max_rounds", nullable = false)
+    private Integer maxRounds = 3;
+
+    @Column(name = "inner_max_attempts", nullable = false)
+    private Integer innerMaxAttempts = 2;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -114,6 +123,9 @@ public class PaperTask {
     public String getErrorMessage() { return errorMessage; }
     public Integer getLiteratureMinCount() { return literatureMinCount; }
     public Integer getLiteratureCount() { return literatureCount; }
+    public Integer getScoreThreshold() { return scoreThreshold; }
+    public Integer getMaxRounds() { return maxRounds; }
+    public Integer getInnerMaxAttempts() { return innerMaxAttempts; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 
@@ -128,4 +140,7 @@ public class PaperTask {
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public void setLiteratureMinCount(Integer literatureMinCount) { this.literatureMinCount = literatureMinCount; }
     public void setLiteratureCount(Integer literatureCount) { this.literatureCount = literatureCount; }
+    public void setScoreThreshold(Integer scoreThreshold) { this.scoreThreshold = scoreThreshold; }
+    public void setMaxRounds(Integer maxRounds) { this.maxRounds = maxRounds; }
+    public void setInnerMaxAttempts(Integer innerMaxAttempts) { this.innerMaxAttempts = innerMaxAttempts; }
 }

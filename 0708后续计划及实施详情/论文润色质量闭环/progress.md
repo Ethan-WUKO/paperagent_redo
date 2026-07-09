@@ -109,6 +109,7 @@ Evaluation:
 Scope boundary:
 - This baseline validates guardrails and reportability with a deterministic model stub.
 - It does not judge full academic writing quality or replace manual review.
+
 ## 2026-07-09 Issue #90 统一任务状态和事件体验
 
 目标：
@@ -131,3 +132,94 @@ Scope boundary:
 
 下一步：
 - 后续 UI 可按 `artifactStatus` 和最近事件字段优化展示；本 issue 不改 UI。
+
+## 2026-07-09 11:33
+
+目标：
+
+- 处理 GitHub issue #92：论文润色配置真实生效、评分尺度统一、章节状态和失败原因记录。
+- 严格不做 diff 展示、采纳/拒绝闭环、全文缺引用检测、综述 gap 诊断、旧文献替换、正式综述段落生成、自动插入引用或修改正文引用。
+
+本次完成：
+
+- 新增 `paper_tasks.score_threshold / max_rounds / inner_max_attempts` 持久化字段和 H2 同步 migration。
+- `PaperTaskService` 创建任务时保存规范化配置，查询任务返回真实配置，幂等 key 纳入润色配置。
+- `PaperOrchestrator` 从任务读取配置传给分章润色，并在章节异常时写入 `FAILED_KEEP_ORIGINAL` 和可读 `reviewJson`。
+- `PaperSectionPolishService` 改为 `maxRounds` 外轮 + `innerMaxAttempts` repair 内尝试，统一 0-100 评分，拒绝 0-1 比例评分，并规范 `reasonCode/reasonMessage/keptOriginal/protectionTriggered` 等元信息。
+- `section-review.md` 明确评分必须为 0-100。
+- review report 增加章节失败原因分布，只做状态摘要，不做用户可读 diff。
+- 指定必读文件 `0708后续计划及实施详情/AI开发者执行规则.md` 在当前仓库不存在；已按 issue 内统一约束、并行协作文档和 `memory-bank/agent-product-reconstruction-roadmap.md` 同名章节执行。
+
+修改文件：
+
+- `yanban-api/src/main/resources/db/migration/V29__add_paper_polish_config.sql`
+- `yanban-api/src/test/resources/db/migration-h2/V29__add_paper_polish_config.sql`
+- `yanban-paper/src/main/java/com/yanban/paper/domain/PaperTask.java`
+- `yanban-paper/src/main/java/com/yanban/paper/service/PaperTaskService.java`
+- `yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `yanban-paper/src/main/java/com/yanban/paper/service/PaperSectionPolishService.java`
+- `yanban-paper/src/main/java/com/yanban/paper/service/PaperAssembleService.java`
+- `yanban-paper/src/main/java/com/yanban/paper/web/PaperProcessRequest.java`
+- `yanban-paper/src/main/java/com/yanban/paper/web/PaperTaskResponse.java`
+- `yanban-paper/src/main/resources/prompts/section-review.md`
+- `yanban-paper/src/test/java/com/yanban/paper/service/PaperTaskServiceTest.java`
+- `yanban-paper/src/test/java/com/yanban/paper/service/PaperSectionPolishServiceTest.java`
+- `yanban-paper/src/test/java/com/yanban/paper/service/PaperOrchestratorCancellationTest.java`
+- `yanban-api/src/test/java/com/yanban/api/paper/PaperControllerIntegrationTest.java`
+
+测试：
+
+- 已执行：`mvn -pl yanban-paper -am "-Dsurefire.failIfNoSpecifiedTests=false" "-Dtest=PaperTaskServiceTest,PaperSectionPolishServiceTest,PaperOrchestratorCancellationTest" test`
+- 结果：通过，15 tests, 0 failures, 0 errors。
+- 已执行：`mvn -pl yanban-api -am "-Dsurefire.failIfNoSpecifiedTests=false" "-Dtest=PaperControllerIntegrationTest" test`
+- 结果：通过，4 tests, 0 failures, 0 errors；Flyway H2 成功应用 29 个 migration，到 v29。受限网络下异步文献检索出现 OpenAlex DNS 警告，但测试已通过。
+- 已执行：`mvn -pl yanban-paper -am "-Dsurefire.failIfNoSpecifiedTests=false" "-Dtest=PaperQualitySampleTest" test`
+- 结果：通过，3 tests, 0 failures, 0 errors。
+
+风险：
+
+- 新增数据库 migration，合并前需确认 V29 版本号没有与其他分支冲突。
+- 章节失败原因仍存放在 `review_json`，未新增结构化字段；后续若要做统计查询，可单独 issue 增加列。
+
+下一步：
+
+- 跑 API/迁移集成测试。
+- 若通过，提交、推送并创建 PR。
+
+## 2026-07-09 18:02 PR #99 rebase cleanup
+
+目标：
+
+- 只修 PR #99：基于当前 `origin/main` 重新 rebase，清除已合并 #100 的重复提交和文件，恢复 #92 migration 为 V29，并确认 PR diff 只包含 #92 范围。
+
+本次完成：
+
+- 已基于 `origin/main` `f717917` 重新 rebase；该 main 已包含 #100。
+- 已跳过本分支中重复的 #100 cherry-pick 提交，`pr-body-issue-90.md` 不再存在于本分支或 PR diff。
+- 已跳过旧的 V30 调整提交，保留本 PR 的 `V29__add_paper_polish_config.sql` main/H2 migration；V30 留给后续 #97。
+- 已解决 `progress.md` 冲突，并确认 `PaperOrchestrator`、`PaperTaskService` 自动合并后仍只保留 #92 的配置持久化、评分尺度、章节状态和失败原因相关改动。
+- 已确认 PR diff 不包含 #100 的 agent/frontend/task 状态文件。
+
+修改文件：
+
+- `yanban-api/src/main/resources/db/migration/V29__add_paper_polish_config.sql`
+- `yanban-api/src/test/resources/db/migration-h2/V29__add_paper_polish_config.sql`
+- `yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `yanban-paper/src/main/java/com/yanban/paper/service/PaperTaskService.java`
+- `0708后续计划及实施详情/论文润色质量闭环/progress.md`
+
+测试：
+
+- 已执行：`mvn -pl yanban-api -am clean "-Dsurefire.failIfNoSpecifiedTests=false" "-Dtest=PaperControllerIntegrationTest" test`
+- 结果：通过，4 tests, 0 failures, 0 errors；Flyway clean 环境成功应用 29 个 migration，到 v29。
+- 已执行：`mvn -pl yanban-paper -am "-Dsurefire.failIfNoSpecifiedTests=false" "-Dtest=PaperTaskServiceTest,PaperSectionPolishServiceTest,PaperOrchestratorCancellationTest,PaperQualitySampleTest" test`
+- 结果：通过，19 tests, 0 failures, 0 errors。
+
+风险：
+
+- PR #99 当前只包含 #92 改动；若 main 后续再新增 migration，需要合并前再次检查版本号。
+- 章节失败原因仍存放在 `review_json`，未新增结构化字段。
+
+下一步：
+
+- amend 当前提交，force-with-lease 推送，并确认 GitHub merge state 为 CLEAN/MERGEABLE 后请求复审。

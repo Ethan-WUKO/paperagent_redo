@@ -350,8 +350,14 @@ public class PaperAssembleService {
                 .append("## Section Polish Summary\n\n");
         for (PaperSection section : sections) {
             report.append("- ").append(section.getTitle()).append(" (`").append(section.getRole()).append("`): ")
-                    .append(section.getPolishStatus() == null ? "NOT_POLISHED" : section.getPolishStatus()).append("\n");
+                    .append(section.getPolishStatus() == null ? "NOT_POLISHED" : section.getPolishStatus());
+            String reasonCode = sectionReasonCode(section);
+            if (!reasonCode.isBlank()) {
+                report.append(" — ").append(reasonCode);
+            }
+            report.append("\n");
         }
+        appendSectionFailureDistribution(report, sections);
         report.append("\n## Introduction Analysis Diagnostics\n\n");
         appendIntroductionAnalysisDiagnostics(report, task.getId());
         report.append("\n## Introduction Citation Slots\n\n");
@@ -386,6 +392,42 @@ public class PaperAssembleService {
         report.append("## Disclaimer\n\n")
                 .append("This report is an AI-assisted self-check and editing aid. It is not a substitute for peer review, advisor feedback, or venue-specific submission checks. Verify every citation, claim, and LaTeX change before submission.\n");
         return report.toString();
+    }
+
+    private void appendSectionFailureDistribution(StringBuilder report, List<PaperSection> sections) {
+        Map<String, Integer> distribution = new LinkedHashMap<>();
+        for (PaperSection section : sections) {
+            if ("POLISHED".equalsIgnoreCase(section.getPolishStatus())) {
+                continue;
+            }
+            String reasonCode = sectionReasonCode(section);
+            if (reasonCode.isBlank()) {
+                reasonCode = section.getPolishStatus() == null ? "NOT_POLISHED" : section.getPolishStatus();
+            }
+            distribution.put(reasonCode, distribution.getOrDefault(reasonCode, 0) + 1);
+        }
+        if (distribution.isEmpty()) {
+            return;
+        }
+        report.append("\n### Section Failure Reasons\n\n");
+        distribution.forEach((reason, count) -> report.append("- ").append(reason).append(": ").append(count).append("\n"));
+    }
+
+    private String sectionReasonCode(PaperSection section) {
+        String reviewJson = section.getReviewJson();
+        if (reviewJson == null || reviewJson.isBlank()) {
+            return "";
+        }
+        try {
+            Map<String, Object> review = objectMapper.readValue(reviewJson, new TypeReference<Map<String, Object>>() {});
+            Object reasonCode = review.get("reasonCode");
+            if (reasonCode == null) {
+                reasonCode = review.get("reason");
+            }
+            return reasonCode == null ? "" : String.valueOf(reasonCode);
+        } catch (Exception ignored) {
+            return "review_json_parse_failed";
+        }
     }
 
     private void appendIntroductionAnalysisDiagnostics(StringBuilder report, Long taskId) {

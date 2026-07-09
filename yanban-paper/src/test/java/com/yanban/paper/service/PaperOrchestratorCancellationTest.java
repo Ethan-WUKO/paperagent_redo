@@ -10,14 +10,20 @@ import static org.mockito.Mockito.when;
 import com.yanban.core.agent.AgentTaskEventCreateRequest;
 import com.yanban.core.agent.AgentTaskEventRecorder;
 import com.yanban.paper.domain.PaperSectionRepository;
+import com.yanban.paper.domain.PaperSection;
 import com.yanban.paper.domain.PaperTask;
 import com.yanban.paper.domain.PaperTaskArtifactRepository;
 import com.yanban.paper.domain.PaperTaskClarificationRepository;
 import com.yanban.paper.domain.PaperTaskRepository;
 import com.yanban.paper.domain.PaperTaskRoundRepository;
+import com.yanban.paper.latex.LatexDocument;
 import com.yanban.paper.latex.LatexParserService;
 import com.yanban.paper.latex.LatexRoleRecognitionService;
+import com.yanban.paper.latex.LatexSection;
+import com.yanban.paper.latex.LatexSectionRole;
 import com.yanban.paper.literature.LiteratureService;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -34,6 +40,8 @@ class PaperOrchestratorCancellationTest {
     private static final Long TASK_ID = 42L;
 
     private PaperTaskRepository tasks;
+    private PaperSectionRepository sections;
+    private PaperSectionPolishService sectionPolishService;
     private PaperEventStreamService eventStreamService;
     private AgentTaskEventRecorder taskEvents;
     private PaperOrchestrator orchestrator;
@@ -41,12 +49,14 @@ class PaperOrchestratorCancellationTest {
     @BeforeEach
     void setUp() {
         tasks = mock(PaperTaskRepository.class);
+        sections = mock(PaperSectionRepository.class);
+        sectionPolishService = mock(PaperSectionPolishService.class);
         eventStreamService = mock(PaperEventStreamService.class);
         taskEvents = mock(AgentTaskEventRecorder.class);
         orchestrator = new PaperOrchestrator(
                 tasks,
                 mock(PaperTaskRoundRepository.class),
-                mock(PaperSectionRepository.class),
+                sections,
                 mock(PaperTaskArtifactRepository.class),
                 mock(PaperTaskClarificationRepository.class),
                 eventStreamService,
@@ -58,7 +68,7 @@ class PaperOrchestratorCancellationTest {
                 mock(PaperIntroductionAnalysisService.class),
                 mock(LiteratureService.class),
                 mock(PaperGapAnalysisService.class),
-                mock(PaperSectionPolishService.class),
+                sectionPolishService,
                 mock(PaperAssembleService.class),
                 directExecutor(),
                 taskEvents
@@ -147,6 +157,31 @@ class PaperOrchestratorCancellationTest {
                 .isInstanceOfSatisfying(ResponseStatusException.class, ex ->
                         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
         assertNoEvents();
+    }
+
+    @Test
+    void polishSectionsUsesPersistedConfigAndRecordsSectionException() {
+        PaperTask task = task("RUNNING", "POLISH");
+        task.setScoreThreshold(92);
+        task.setMaxRounds(4);
+        task.setInnerMaxAttempts(5);
+        LatexSection latexSection = new LatexSection(0, 2, "section", true, "Introduction", LatexSectionRole.INTRO, 0, 42,
+                "\\section{Introduction}\nText.");
+        LatexDocument document = new LatexDocument("main.tex", "paper", List.of(), List.of(), "", "", List.of(latexSection),
+                List.of(), List.of(), List.of(), List.of(), Map.of(), List.of());
+        PaperSection stored = new PaperSection(TASK_ID, "main.tex", 0, 2, "Introduction", "INTRO", 1.0, "test", 0, 42);
+
+        org.mockito.Mockito.doThrow(new IllegalStateException("boom"))
+                .when(sectionPolishService).polishSection(TASK_ID, latexSection, "zh", 92, 4, 5);
+        when(sections.findByTaskIdOrderByOrderIndexAsc(TASK_ID)).thenReturn(List.of(stored));
+
+        Integer processed = ReflectionTestUtils.invokeMethod(orchestrator, "polishSections", task, document);
+
+        assertThat(processed).isEqualTo(1);
+        verify(sectionPolishService).polishSection(TASK_ID, latexSection, "zh", 92, 4, 5);
+        assertThat(stored.getPolishStatus()).isEqualTo("FAILED_KEEP_ORIGINAL");
+        assertThat(stored.getReviewJson()).contains("section_polish_exception", "\"maxRounds\":4", "\"innerMaxAttempts\":5");
+        verify(sections).save(stored);
     }
 
     private PaperTask task(String status, String stage) {

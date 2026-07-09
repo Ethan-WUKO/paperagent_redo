@@ -20,6 +20,7 @@ Polished section text:
 {{sectionText}}
 
 Evaluation rules:
+- Score must be a number from 0 to 100. Do not return a 0 to 1 ratio.
 - Judge whether the polished section preserves the author's original scientific meaning.
 - Mark as blocker if it introduces unsupported claims, new experiments, new numerical results, new citations, new contribution bullets, new variables, new equations, or new optimization problems.
 - Mark as blocker if it changes LaTeX structure, labels, refs, cites, equations, figures, tables, algorithms, or bibliography commands.

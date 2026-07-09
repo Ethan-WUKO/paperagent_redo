@@ -83,11 +83,15 @@ public class PaperTaskService {
         String clientRequestId = resolveClientRequestId(clientRequestIdHeader, request.clientRequestId());
         int maxLiteratureCount = normalizeLiteratureCount(request.literatureCount());
         int minLiteratureCount = normalizeLiteratureMinCount(request.literatureMinCount(), maxLiteratureCount);
-        String idempotencyKey = buildIdempotencyKey(userId, request, file, bibFile, clientRequestId, maxLiteratureCount, minLiteratureCount);
+        int scoreThreshold = normalizeScoreThreshold(request.scoreThreshold());
+        int maxRounds = normalizeMaxRounds(request.maxRounds());
+        int innerMaxAttempts = normalizeInnerMaxAttempts(request.innerMaxAttempts());
+        String idempotencyKey = buildIdempotencyKey(userId, request, file, bibFile, clientRequestId,
+                maxLiteratureCount, minLiteratureCount, scoreThreshold, maxRounds, innerMaxAttempts);
 
         PaperTask existing = paperTaskRepository.findByIdempotencyKey(idempotencyKey).orElse(null);
         if (existing != null) {
-            return PaperTaskResponse.from(existing, request.scoreThreshold(), request.maxRounds(), request.innerMaxAttempts(), existing.getLiteratureCount(), true);
+            return PaperTaskResponse.from(existing, existing.getLiteratureCount(), true);
         }
 
         String objectKey = paperStorageService.storeOriginal(userId, file);
@@ -111,6 +115,9 @@ public class PaperTaskService {
         task.setMode(Boolean.TRUE.equals(request.literatureOnly()) ? baseMode + "_LITERATURE_ONLY" : baseMode);
         task.setLiteratureCount(maxLiteratureCount);
         task.setLiteratureMinCount(minLiteratureCount);
+        task.setScoreThreshold(scoreThreshold);
+        task.setMaxRounds(maxRounds);
+        task.setInnerMaxAttempts(innerMaxAttempts);
 
         PaperTask saved = paperTaskRepository.save(task);
         saveSourceArtifact(saved.getId(), "source_tex", objectKey, file.getOriginalFilename());
@@ -119,7 +126,7 @@ public class PaperTaskService {
         }
         recordTaskCreatedAfterCommit(saved);
         startTaskAfterCommit(saved.getId());
-        return PaperTaskResponse.from(saved, request.scoreThreshold(), request.maxRounds(), request.innerMaxAttempts(), saved.getLiteratureCount(), false);
+        return PaperTaskResponse.from(saved, saved.getLiteratureCount(), false);
     }
 
     private void recordTaskCreatedAfterCommit(PaperTask task) {
@@ -185,6 +192,27 @@ public class PaperTaskService {
         return Math.max(1, Math.min(maxLiteratureCount, value));
     }
 
+    private int normalizeScoreThreshold(Integer scoreThreshold) {
+        if (scoreThreshold == null) {
+            return 80;
+        }
+        return Math.max(0, Math.min(100, scoreThreshold));
+    }
+
+    private int normalizeMaxRounds(Integer maxRounds) {
+        if (maxRounds == null) {
+            return 3;
+        }
+        return Math.max(1, Math.min(20, maxRounds));
+    }
+
+    private int normalizeInnerMaxAttempts(Integer innerMaxAttempts) {
+        if (innerMaxAttempts == null) {
+            return 2;
+        }
+        return Math.max(1, Math.min(20, innerMaxAttempts));
+    }
+
     private void startTaskAfterCommit(Long taskId) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             paperOrchestrator.startTask(taskId);
@@ -234,7 +262,10 @@ public class PaperTaskService {
                                        MultipartFile bibFile,
                                        String clientRequestId,
                                        int maxLiteratureCount,
-                                       int minLiteratureCount) {
+                                       int minLiteratureCount,
+                                       int scoreThreshold,
+                                       int maxRounds,
+                                       int innerMaxAttempts) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             updateDigest(digest, String.valueOf(userId));
@@ -244,6 +275,9 @@ public class PaperTaskService {
             updateDigest(digest, String.valueOf(Boolean.TRUE.equals(request.literatureOnly())));
             updateDigest(digest, String.valueOf(maxLiteratureCount));
             updateDigest(digest, String.valueOf(minLiteratureCount));
+            updateDigest(digest, String.valueOf(scoreThreshold));
+            updateDigest(digest, String.valueOf(maxRounds));
+            updateDigest(digest, String.valueOf(innerMaxAttempts));
             updateDigest(digest, file.getOriginalFilename());
             updateDigest(digest, file.getBytes());
             if (bibFile != null && !bibFile.isEmpty()) {
@@ -307,7 +341,7 @@ public class PaperTaskService {
     public PaperTaskResponse getTask(Long userId, Long taskId) {
         PaperTask task = paperTaskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "paper task not found"));
-        return PaperTaskResponse.from(task, null, null, null, task.getLiteratureCount(), false);
+        return PaperTaskResponse.from(task, task.getLiteratureCount(), false);
     }
 
     @Transactional(readOnly = true)

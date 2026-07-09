@@ -30,6 +30,12 @@ public record PaperTaskResponse(
                                          Integer innerMaxAttempts,
                                          Integer literatureCount,
                                          boolean idempotent) {
+        return from(task, literatureCount, idempotent);
+    }
+
+    public static PaperTaskResponse from(PaperTask task,
+                                         Integer literatureCount,
+                                         boolean idempotent) {
         return new PaperTaskResponse(
                 task.getId(),
                 task.getUserId(),
@@ -43,9 +49,9 @@ public record PaperTaskResponse(
                 task.getTargetLanguage(),
                 task.getCurrentStage(),
                 task.getErrorMessage(),
-                scoreThreshold,
-                maxRounds,
-                innerMaxAttempts,
+                task.getScoreThreshold(),
+                task.getMaxRounds(),
+                task.getInnerMaxAttempts(),
                 task.getLiteratureMinCount(),
                 literatureCount,
                 task.getCreatedAt(),

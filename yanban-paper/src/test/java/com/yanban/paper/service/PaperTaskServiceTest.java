@@ -48,6 +48,9 @@ class PaperTaskServiceTest {
         PaperProcessRequest request = new PaperProcessRequest(tex, null, null, null, null, null, 3, 5, false, "zh", null);
         PaperTask existing = new PaperTask(7L, "main", "main.tex", "paper/main.tex", "PENDING", "zh", "UPLOAD_RECEIVED", null, "req-1", "idem-1");
         assignId(existing, 21L);
+        existing.setScoreThreshold(90);
+        existing.setMaxRounds(4);
+        existing.setInnerMaxAttempts(5);
 
         when(paperTaskRepository.findByIdempotencyKey(any())).thenReturn(Optional.of(existing));
 
@@ -56,6 +59,9 @@ class PaperTaskServiceTest {
         assertThat(response.id()).isEqualTo(21L);
         assertThat(response.clientRequestId()).isEqualTo("req-1");
         assertThat(response.idempotent()).isTrue();
+        assertThat(response.scoreThreshold()).isEqualTo(90);
+        assertThat(response.maxRounds()).isEqualTo(4);
+        assertThat(response.innerMaxAttempts()).isEqualTo(5);
         verify(paperStorageService, never()).storeOriginal(any(), any());
         verify(paperTaskRepository, never()).save(any());
         verify(agentTaskRegistry, never()).upsertSafely(any());
@@ -81,6 +87,9 @@ class PaperTaskServiceTest {
         assertThat(response.id()).isEqualTo(42L);
         assertThat(response.clientRequestId()).isEqualTo("req-42");
         assertThat(response.idempotent()).isFalse();
+        assertThat(response.scoreThreshold()).isEqualTo(80);
+        assertThat(response.maxRounds()).isEqualTo(3);
+        assertThat(response.innerMaxAttempts()).isEqualTo(2);
 
         ArgumentCaptor<AgentTaskUpsertRequest> captor = ArgumentCaptor.forClass(AgentTaskUpsertRequest.class);
         verify(agentTaskRegistry).upsertSafely(captor.capture());
@@ -89,6 +98,38 @@ class PaperTaskServiceTest {
         assertThat(unifiedTask.sourceId()).isEqualTo(42L);
         assertThat(unifiedTask.source()).isEqualTo(AgentTaskRegistry.SOURCE_PAPER_TASK);
         assertThat(unifiedTask.taskType()).isEqualTo(com.yanban.core.agent.AgentTaskEventRecorder.TASK_TYPE_PAPER_POLISH);
+    }
+
+    @Test
+    void createTaskPersistsNormalizedPolishConfigAndSeparatesIdempotencyKeys() {
+        MockMultipartFile tex = new MockMultipartFile("mainTex", "main.tex", "application/x-tex", "\\documentclass{article}".getBytes());
+        PaperProcessRequest strict = new PaperProcessRequest(tex, null, null, 90, 4, 5, null, 5, false, "zh", null);
+        PaperProcessRequest lenient = new PaperProcessRequest(tex, null, null, 70, 4, 5, null, 5, false, "zh", null);
+
+        when(paperTaskRepository.findByIdempotencyKey(any())).thenReturn(Optional.empty());
+        when(paperStorageService.storeOriginal(eq(7L), eq(tex))).thenReturn("paper/source.tex");
+        when(paperTaskRepository.save(any(PaperTask.class))).thenAnswer(invocation -> {
+            PaperTask task = invocation.getArgument(0);
+            if (task.getId() == null) {
+                assignId(task, System.nanoTime());
+            }
+            return task;
+        });
+
+        service.createTask(7L, strict, "same-client-request");
+        service.createTask(7L, lenient, "same-client-request");
+
+        ArgumentCaptor<String> idempotencyKeyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(paperTaskRepository, org.mockito.Mockito.times(2)).findByIdempotencyKey(idempotencyKeyCaptor.capture());
+        assertThat(idempotencyKeyCaptor.getAllValues()).hasSize(2);
+        assertThat(idempotencyKeyCaptor.getAllValues().get(0)).isNotEqualTo(idempotencyKeyCaptor.getAllValues().get(1));
+
+        ArgumentCaptor<PaperTask> taskCaptor = ArgumentCaptor.forClass(PaperTask.class);
+        verify(paperTaskRepository, org.mockito.Mockito.times(2)).save(taskCaptor.capture());
+        PaperTask firstTask = taskCaptor.getAllValues().get(0);
+        assertThat(firstTask.getScoreThreshold()).isEqualTo(90);
+        assertThat(firstTask.getMaxRounds()).isEqualTo(4);
+        assertThat(firstTask.getInnerMaxAttempts()).isEqualTo(5);
     }
 
     private static <T> ObjectProvider<T> provider(T value) {
