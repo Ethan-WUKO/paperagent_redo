@@ -1,0 +1,116 @@
+package com.yanban.core.agent;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Lob;
+import jakarta.persistence.Table;
+import java.time.Instant;
+import org.hibernate.annotations.CreationTimestamp;
+
+@Entity
+@Table(name = "agent_context_snapshots")
+public class AgentContextSnapshot {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "turn_id", nullable = false)
+    private Long turnId;
+
+    @Column(name = "session_id", nullable = false)
+    private Long sessionId;
+
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
+    @Column(name = "trace_id", length = 128)
+    private String traceId;
+
+    @Lob
+    @Column(name = "sections_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String sectionsJson;
+
+    @Lob
+    @Column(name = "dropped_items_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String droppedItemsJson;
+
+    @Column(name = "raw_message_count", nullable = false)
+    private Integer rawMessageCount;
+
+    @Column(name = "normalized_message_count", nullable = false)
+    private Integer normalizedMessageCount;
+
+    @Column(name = "context_message_count", nullable = false)
+    private Integer contextMessageCount;
+
+    @Column(name = "estimated_characters", nullable = false)
+    private Integer estimatedCharacters;
+
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;
+
+    protected AgentContextSnapshot() {
+    }
+
+    public AgentContextSnapshot(Long turnId,
+                                Long sessionId,
+                                Long userId,
+                                String traceId,
+                                String sectionsJson,
+                                String droppedItemsJson,
+                                Integer rawMessageCount,
+                                Integer normalizedMessageCount,
+                                Integer contextMessageCount,
+                                Integer estimatedCharacters) {
+        this.turnId = requireNonNull(turnId, "turnId");
+        this.sessionId = requireNonNull(sessionId, "sessionId");
+        this.userId = requireNonNull(userId, "userId");
+        this.traceId = blankToNull(traceId);
+        this.sectionsJson = requireText(sectionsJson, "sectionsJson");
+        this.droppedItemsJson = requireText(droppedItemsJson, "droppedItemsJson");
+        this.rawMessageCount = nonNegative(rawMessageCount);
+        this.normalizedMessageCount = nonNegative(normalizedMessageCount);
+        this.contextMessageCount = nonNegative(contextMessageCount);
+        this.estimatedCharacters = nonNegative(estimatedCharacters);
+    }
+
+    public Long getId() { return id; }
+    public Long getTurnId() { return turnId; }
+    public Long getSessionId() { return sessionId; }
+    public Long getUserId() { return userId; }
+    public String getTraceId() { return traceId; }
+    public String getSectionsJson() { return sectionsJson; }
+    public String getDroppedItemsJson() { return droppedItemsJson; }
+    public Integer getRawMessageCount() { return rawMessageCount; }
+    public Integer getNormalizedMessageCount() { return normalizedMessageCount; }
+    public Integer getContextMessageCount() { return contextMessageCount; }
+    public Integer getEstimatedCharacters() { return estimatedCharacters; }
+    public Instant getCreatedAt() { return createdAt; }
+
+    private Long requireNonNull(Long value, String name) {
+        if (value == null) {
+            throw new IllegalArgumentException(name + " must not be null");
+        }
+        return value;
+    }
+
+    private String requireText(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " must not be blank");
+        }
+        return value.trim();
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private int nonNegative(Integer value) {
+        return value == null || value < 0 ? 0 : value;
+    }
+}

@@ -1,0 +1,32 @@
+\documentclass{ctexart}
+\title{面向课程学习的检索增强问答系统}
+\author{研伴测试作者}
+\keywords{检索增强生成, 课程问答, 学习助手}
+\begin{document}
+\maketitle
+
+\section{摘要}
+本文研究一个面向课程学习的检索增强问答系统。系统先检索课程资料，再调用大模型生成答案。初步实验显示，加入检索后学生提问的答案更加贴近资料内容。
+
+\section{引言}
+大语言模型在教育问答中表现出较强的自然语言生成能力，但在课程资料更新频繁的场景中容易产生幻觉。检索增强生成（RAG）通过引入外部知识源缓解这一问题\cite{lewis2020rag}。本文关注中文课程资料场景下的轻量级 RAG 助手，并希望减少回答中的无依据断言。
+
+\section{方法}
+系统包含文档切分、向量检索、上下文拼接与答案生成四个步骤。给定用户问题 $q$，系统检索 Top-$k$ 个片段，并将其与问题共同输入生成模型。整体流程如图~\ref{fig:pipeline} 所示。
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.7\linewidth]{pipeline.pdf}
+\caption{课程问答 RAG 流程}
+\label{fig:pipeline}
+\end{figure}
+
+\section{实验}
+我们构造了 50 个课程问题，并比较无检索和有检索两种设置。评价指标包括答案相关性、事实一致性和可追溯性。当前实验规模较小，尚未覆盖跨章节综合问题。
+
+\section{结论}
+初步结果表明，课程资料检索能够提升答案的依据性。未来需要扩大测试集，并对引用证据的质量进行人工评估。
+
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}

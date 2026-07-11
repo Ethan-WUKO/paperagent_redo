@@ -1,0 +1,21 @@
+CREATE TABLE agent_context_snapshots (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    turn_id BIGINT NOT NULL,
+    session_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    trace_id VARCHAR(128),
+    sections_json LONGTEXT NOT NULL,
+    dropped_items_json LONGTEXT NOT NULL,
+    raw_message_count INT NOT NULL DEFAULT 0,
+    normalized_message_count INT NOT NULL DEFAULT 0,
+    context_message_count INT NOT NULL DEFAULT 0,
+    estimated_characters INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_agent_context_snapshots_turn (turn_id),
+    INDEX idx_agent_context_snapshots_session_created (session_id, created_at),
+    INDEX idx_agent_context_snapshots_user_created (user_id, created_at),
+    CONSTRAINT fk_agent_context_snapshots_turn FOREIGN KEY (turn_id) REFERENCES agent_turns (id) ON DELETE CASCADE,
+    CONSTRAINT fk_agent_context_snapshots_session FOREIGN KEY (session_id) REFERENCES agent_sessions (id) ON DELETE CASCADE,
+    CONSTRAINT fk_agent_context_snapshots_user FOREIGN KEY (user_id) REFERENCES sys_users (id)
+);

@@ -1,0 +1,54 @@
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Frontend
+node_modules/
+dist/
+.vite/
+.pnpm-store/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data
+data/
+storage/
+logs/
+uploads/
+tmp/
+tmp-*.ps1
+
+# Local sharing artifacts
+二维码/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+*.bak
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+coverage/
+.jacoco/
+docs/evaluation/runs/
+.mvp-*-tmp/
+
+# Local paper-polish test cases and downloaded artifacts
+reference/
+IEEE_TAES_regular_template_latex_v6-artifacts*/
+
+# Local MCP workspace
+workspace/

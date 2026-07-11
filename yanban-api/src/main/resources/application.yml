@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: yanban-api
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
+  profiles:
+    default: dev
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] traceId=%X{traceId:-} %logger{36} : %msg%n"
+
+yanban:
+  jwt:
+    secret: ${JWT_SECRET:dev_only_change_me_please_32_chars_minimum}
+    access-token-ttl: 1h
+    refresh-token-ttl: 7d
+  invite:
+    enabled: ${INVITE_CODE_ENABLED:true}
+    codes: ${INVITE_CODES:}
+    max-uses: ${INVITE_CODE_MAX_USES:5}
+  demo:
+    enabled: ${DEMO_ENABLED:false}
+    seed-on-startup: ${DEMO_SEED_ON_STARTUP:true}
+    username: ${DEMO_USERNAME:demo}
+    reset-cron: "${DEMO_RESET_CRON:0 30 3 * * *}"
+    canonical-url: ${DEMO_CANONICAL_URL:http://yanban.online:18080/demo}
+    max-upload-bytes: ${DEMO_MAX_UPLOAD_BYTES:3145728}
+    max-uploads-per-reset: ${DEMO_MAX_UPLOADS_PER_RESET:5}
+    max-chat-messages-per-hour: ${DEMO_MAX_CHAT_MESSAGES_PER_HOUR:60}
+    max-paper-tasks-per-reset: ${DEMO_MAX_PAPER_TASKS_PER_RESET:2}
+  observability:
+    default-window-minutes: 60
+    plan-failure-rate-warning: 0.10
+    plan-failure-rate-critical: 0.25
+    running-plan-age-warning-seconds: 180
+    running-plan-age-critical-seconds: 600
+    plan-p95-warning-ms: 120000
+    plan-p95-critical-ms: 300000
+    guardrail-event-warning: 5
+    guardrail-event-critical: 20

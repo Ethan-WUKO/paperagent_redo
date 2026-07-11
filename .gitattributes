@@ -1,0 +1,79 @@
+# Line-ending policy for this repository.
+#
+# The repo is edited across Windows and WSL, so we normalize all text
+# files to LF. This avoids spurious whole-file "modified" entries in
+# `git status` caused by CRLF/LF drift.
+#
+# `text=auto` lets git auto-detect text vs binary and normalize on
+# compare/checkout. Explicit rules below make intent unambiguous.
+
+* text=auto eol=lf
+
+# --- Text sources: force LF ---
+*.java       text eol=lf
+*.kt         text eol=lf
+*.ts         text eol=lf
+*.tsx        text eol=lf
+*.js         text eol=lf
+*.mjs        text eol=lf
+*.cjs        text eol=lf
+*.vue        text eol=lf
+*.css        text eol=lf
+*.scss       text eol=lf
+*.html       text eol=lf
+*.md         text eol=lf
+*.txt        text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.json       text eol=lf
+*.json5      text eol=lf
+*.properties text eol=lf
+*.sql        text eol=lf
+*.xml        text eol=lf
+*.tex        text eol=lf
+*.bib        text eol=lf
+*.cls        text eol=lf
+*.sty        text eol=lf
+*.bst        text eol=lf
+*.sh         text eol=lf
+*.bash       text eol=lf
+*.zsh        text eol=lf
+*.ps1        text eol=lf
+*.gitignore  text eol=lf
+*.gitattributes text eol=lf
+Dockerfile*  text eol=lf
+LICENSE      text eol=lf
+
+# --- Windows-only scripts: keep CRLF (cmd interpreters expect it) ---
+*.bat        text eol=crlf
+*.cmd        text eol=crlf
+
+# --- Binary: never normalize ---
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.webp       binary
+*.bmp        binary
+*.ico        binary
+*.icns       binary
+*.svg        text eol=lf
+*.pdf        binary
+*.doc        binary
+*.docx       binary
+*.xls        binary
+*.xlsx       binary
+*.ppt        binary
+*.pptx       binary
+*.zip        binary
+*.gz         binary
+*.tar        binary
+*.tgz        binary
+*.jar        binary
+*.war        binary
+*.ear        binary
+*.class      binary
+*.so         binary
+*.dll        binary
+*.exe        binary
+*.bin        binary

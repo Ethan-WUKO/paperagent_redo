@@ -1,0 +1,210 @@
+{
+  "runtimeCases": [
+    {
+      "caseId": "runtime_followup_codename",
+      "title": "Direct follow-up keeps short-term project codename",
+      "history": [
+        {
+          "role": "user",
+          "content": "For this sprint, my project codename is Orion."
+        },
+        {
+          "role": "assistant",
+          "content": "Understood. I will keep using Orion as the project codename in this conversation."
+        }
+      ],
+      "userMessage": "What codename am I using for the project right now?",
+      "expectedAnswerContains": [
+        "Orion"
+      ]
+    },
+    {
+      "caseId": "runtime_followup_owner",
+      "title": "Direct runtime can reuse earlier user facts",
+      "history": [
+        {
+          "role": "user",
+          "content": "The knowledge base owner for this workspace is Lin Mei."
+        },
+        {
+          "role": "assistant",
+          "content": "Noted. Lin Mei is the recorded owner for this workspace."
+        }
+      ],
+      "userMessage": "Who is the knowledge base owner I mentioned earlier?",
+      "expectedAnswerContains": [
+        "Lin Mei"
+      ]
+    }
+  ],
+  "toolCases": [
+    {
+      "caseId": "tool_search_web_latest",
+      "title": "Time-sensitive public question should trigger web search",
+      "history": [],
+      "userMessage": "Please check the latest radar benchmark update.",
+      "allowedTools": [
+        "search_web"
+      ],
+      "expectedToolName": "search_web",
+      "expectedToolQuery": "latest radar benchmark update",
+      "expectedAnswerContains": [
+        "search_web",
+        "RKB-2026"
+      ]
+    },
+    {
+      "caseId": "tool_search_knowledge_formal_name",
+      "title": "Private project naming question should trigger knowledge search",
+      "history": [],
+      "userMessage": "Use the project notes and tell me the formal project name.",
+      "allowedTools": [
+        "search_knowledge"
+      ],
+      "expectedToolName": "search_knowledge",
+      "expectedToolQuery": "formal project name",
+      "expectedAnswerContains": [
+        "search_knowledge",
+        "Yanban ScholarAI"
+      ]
+    }
+  ],
+  "memoryCases": [
+    {
+      "caseId": "memory_chat_memory_drops_early_context",
+      "title": "Ten-message chat memory loses the earliest item in a twelve-message tail",
+      "sessionSummary": null,
+      "history": [
+        {
+          "role": "user",
+          "content": "Remember that the release tag is delta-42."
+        },
+        {
+          "role": "assistant",
+          "content": "I recorded delta-42 as the release tag."
+        },
+        {
+          "role": "user",
+          "content": "Checkpoint 01 complete."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 01 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Checkpoint 02 complete."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 02 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Checkpoint 03 complete."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 03 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Checkpoint 04 complete."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 04 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Checkpoint 05 complete."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 05 acknowledged."
+        }
+      ],
+      "maxRecentMessages": 12,
+      "maxContextCharacters": 24000,
+      "criticalKeywords": [
+        "delta-42"
+      ]
+    },
+    {
+      "caseId": "memory_hybrid_retains_more_than_baseline",
+      "title": "Hybrid memory keeps a signal that baseline recent-message limit drops",
+      "sessionSummary": null,
+      "history": [
+        {
+          "role": "user",
+          "content": "Warm-up note A."
+        },
+        {
+          "role": "assistant",
+          "content": "Warm-up note A acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "The fallback budget code is gamma-7."
+        },
+        {
+          "role": "assistant",
+          "content": "I recorded gamma-7 as the fallback budget code."
+        },
+        {
+          "role": "user",
+          "content": "Experiment checkpoint 01."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 01 logged."
+        },
+        {
+          "role": "user",
+          "content": "Experiment checkpoint 02."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 02 logged."
+        },
+        {
+          "role": "user",
+          "content": "Experiment checkpoint 03."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 03 logged."
+        },
+        {
+          "role": "user",
+          "content": "Experiment checkpoint 04."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 04 logged."
+        },
+        {
+          "role": "user",
+          "content": "Experiment checkpoint 05."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 05 logged."
+        },
+        {
+          "role": "user",
+          "content": "Experiment checkpoint 06."
+        },
+        {
+          "role": "assistant",
+          "content": "Checkpoint 06 logged."
+        }
+      ],
+      "maxRecentMessages": 12,
+      "maxContextCharacters": 24000,
+      "criticalKeywords": [
+        "gamma-7"
+      ]
+    }
+  ]
+}

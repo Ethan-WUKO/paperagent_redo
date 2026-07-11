@@ -1,0 +1,2438 @@
+<template>
+  <AppLayout>
+    <div
+      class="chat-page research-chat-page"
+      :class="{
+        'research-chat-page--sessions-collapsed': chatSidebarCollapsed,
+      }"
+    >
+      <button
+        v-if="chatSidebarCollapsed"
+        type="button"
+        class="chat-rail-toggle chat-rail-toggle--sessions"
+        title="Show conversations"
+        @click="setChatSidebarCollapsed(false)"
+      >
+        ☰
+      </button>
+
+      <aside class="chat-sidebar" :aria-hidden="chatSidebarCollapsed">
+        <NCard size="small" class="chat-panel chat-session-panel">
+          <template #header>
+            <div class="panel-heading">
+              <span>Recent Conversations</span>
+              <small>{{ sessions.length }} sessions</small>
+            </div>
+          </template>
+          <template #header-extra>
+            <div class="chat-session-actions">
+              <NButton type="primary" size="small" circle @click="handleCreateSession">+</NButton>
+              <NButton secondary size="small" class="chat-panel-collapse" title="Hide conversations" @click="setChatSidebarCollapsed(true)">Hide</NButton>
+            </div>
+          </template>
+
+
+          <NSpace vertical :size="8">
+            <NEmpty v-if="sessions.length === 0" description="还没有会话" size="small" />
+            <div
+              v-for="session in sessions"
+              :key="session.id"
+              role="button"
+              tabindex="0"
+              class="session-item"
+              :class="{ 'session-item--active': selectedSessionId === session.id }"
+              @click="selectSession(session.id)"
+              @keydown.enter.prevent="selectSession(session.id)"
+            >
+              <div class="session-item__content">
+                <div class="session-item__title">{{ session.title || ('会话 #' + session.id) }}</div>
+                <div class="session-item__meta">最近更新 {{ formatSessionUpdatedAt(session.updatedAt || session.createdAt) }}</div>
+              </div>
+              <NDropdown trigger="click" :options="sessionMenuOptions" @select="(key) => handleSessionMenuSelect(key, session)">
+                <NButton quaternary circle size="tiny" class="session-item__more" @click.stop>...</NButton>
+              </NDropdown>
+            </div>
+          </NSpace>
+        </NCard>
+      </aside>
+
+      <section class="chat-main">
+        <NCard
+          class="chat-panel chat-workspace-panel"
+          :content-style="{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto', gap: '12px', minHeight: '0' }"
+        >
+          <template #header>
+            <div class="chat-room-title">
+              <div>
+                <h2>{{ activeSessionTitle }}</h2>
+              </div>
+            </div>
+          </template>
+          <template #header-extra>
+            <div class="chat-toolbar">
+              <NCheckbox v-model:checked="ragDisabled">禁用知识库</NCheckbox>
+              <NCheckbox v-model:checked="planMode">计划模式</NCheckbox>
+              <NSelect
+                v-model:value="selectedSkillId"
+                style="width: 190px"
+                clearable
+                :options="skillOptions"
+                placeholder="Skill（可选）"
+              />
+              <NCheckbox v-model:checked="showProcessMessages">过程</NCheckbox>
+              <NButton secondary round @click="() => reloadCurrentMessages()" :disabled="!selectedSessionId">刷新</NButton>
+            </div>
+          </template>
+
+          <div v-if="showDemoQuestions" class="demo-question-strip">
+            <div class="demo-question-strip__head">
+              <strong>Demo 示例问题</strong>
+              <span>点击后会填入输入框，你可以直接发送或继续修改。</span>
+            </div>
+            <div class="demo-question-strip__grid">
+              <button v-for="question in demoQuestions" :key="question" type="button" @click="useDemoQuestion(question)">
+                {{ question }}
+              </button>
+            </div>
+          </div>
+
+          <div class="chat-thread-shell">
+            <div ref="messagesContainerRef" class="chat-messages" @scroll="handleMessagesScroll">
+              <div v-if="messagesLoading" class="chat-loading">加载会话中...</div>
+              <NEmpty v-else-if="filteredMessages.length === 0" description="发一条消息开始对话" class="chat-empty" />
+              <div
+                v-for="message in filteredMessages"
+                :key="message.localId"
+                :ref="(el) => setMessageRowRef(el, message.localId)"
+                class="message-row"
+                :class="'message-row--' + message.role"
+              >
+                <template v-if="message.role === 'process'">
+                  <details class="process-message-card process-message-card--live" :open="message.processOpen">
+                    <summary class="process-message-card__summary">
+                      <span class="process-message-card__label">{{ processSummaryLabel(message) }}</span>
+                      <span class="process-message-card__chevron">›</span>
+                    </summary>
+                    <div class="process-message-card__content">
+                      <template v-for="(segment, index) in getMessageSegments(message.content)" :key="message.localId + '-' + index">
+                        <pre v-if="segment.type === 'code'" class="message-code-block"><code>{{ segment.content }}</code></pre>
+                        <p v-else class="message-text-block">{{ segment.content }}</p>
+                      </template>
+                    </div>
+                  </details>
+                </template>
+
+                <template v-else-if="message.role === 'system' || message.role === 'tool'">
+                  <details class="process-message-card">
+                    <summary class="process-message-card__summary">
+                      <span>{{ message.role === 'system' ? '系统过程' : '工具输出' }}</span>
+                      <span class="process-message-card__meta">展开</span>
+                    </summary>
+                    <div class="process-message-card__content">
+                      <template v-for="(segment, index) in getMessageSegments(message.content)" :key="message.localId + '-' + index">
+                        <pre v-if="segment.type === 'code'" class="message-code-block"><code>{{ segment.content }}</code></pre>
+                        <p v-else class="message-text-block">{{ segment.content }}</p>
+                      </template>
+                    </div>
+                  </details>
+                </template>
+
+                <template v-else>
+                  <div class="message-avatar" :class="'message-avatar--' + message.role">{{ message.role === 'user' ? '你' : 'AI' }}</div>
+                  <div class="message-bubble">
+                    <div class="message-role">{{ message.role === 'user' ? '你' : 'ScholarAI' }}</div>
+                    <div class="message-content">
+                      <template v-if="message.role === 'assistant'">
+                        <MarkdownMessage :content="message.content || '正在思考...'" />
+                        <div v-if="message.artifacts?.length" class="chat-artifact-list">
+                          <article v-for="artifact in message.artifacts" :key="artifact.id" class="chat-artifact-card">
+                            <div class="chat-artifact-card__icon">{{ artifactIconLabel(artifact) }}</div>
+                            <div class="chat-artifact-card__main">
+                              <strong>{{ artifact.title || artifact.downloadFilename || ('Artifact #' + artifact.id) }}</strong>
+                              <small>{{ artifact.artifactType || 'DOCUMENT' }} · {{ artifact.downloadFilename || 'downloadable file' }}</small>
+                              <p v-if="artifact.preview">{{ artifact.preview }}</p>
+                            </div>
+                            <div class="chat-artifact-card__actions">
+                              <NButton size="tiny" secondary :loading="previewingArtifactId === artifact.id" @click="previewArtifact(artifact)">预览</NButton>
+                              <NButton size="tiny" type="primary" secondary :loading="downloadingArtifactId === artifact.id" @click="downloadArtifactCard(artifact)">下载</NButton>
+                              <NButton size="tiny" secondary :loading="savingArtifactId === artifact.id" @click="saveArtifactCardToKnowledge(artifact)">存入知识库</NButton>
+                            </div>
+                          </article>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <template v-for="(segment, index) in getMessageSegments(message.content || '...')" :key="message.localId + '-' + index">
+                          <pre v-if="segment.type === 'code'" class="message-code-block"><code>{{ segment.content }}</code></pre>
+                          <p v-else class="message-text-block">{{ segment.content }}</p>
+                        </template>
+                      </template>
+                    </div>
+                    <NButton
+                      v-if="message.navigationUrl"
+                      text
+                      type="primary"
+                      class="message-link-button"
+                      @click="goToNavigation(message.navigationUrl)"
+                    >
+                      打开论文修改页
+                    </NButton>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div
+              v-if="minimapMessages.length > 0"
+              ref="chatMinimapRailRef"
+              class="chat-minimap-rail"
+              @mouseenter="cancelMinimapHoverClear"
+              @mouseleave="handleMinimapRailLeave"
+            >
+              <div ref="chatMinimapRef" class="chat-minimap" aria-label="当前会话导航条" @scroll="syncMinimapPreviewPosition">
+                <button
+                  v-for="(message, index) in minimapMessages"
+                  :key="'minimap-' + message.localId"
+                  :ref="(el) => setMinimapItemRef(el, message.localId)"
+                  type="button"
+                  class="chat-minimap__item"
+                  :class="[
+                    'chat-minimap__item--' + message.role,
+                    minimapWaveClass(index),
+                    { 'chat-minimap__item--active': activeMinimapMessageId === message.localId },
+                  ]"
+                  @mouseenter="setHoveredMinimapIndex(index)"
+                  @focus="setHoveredMinimapIndex(index)"
+                  @blur="scheduleMinimapHoverClear"
+                  @click="scrollToMessage(message.localId)"
+                />
+              </div>
+              <div
+                v-if="hoveredMinimapMessage"
+                ref="chatMinimapPreviewRef"
+                class="chat-minimap__preview"
+                :style="minimapPreviewStyle"
+                @mouseenter="keepHoveredMinimapIndex"
+                @mouseleave="scheduleMinimapHoverClear"
+              >
+                <div
+                  v-if="hoveredMinimapPreview.user"
+                  class="chat-minimap__preview-line chat-minimap__preview-line--user"
+                >
+                  {{ hoveredMinimapPreview.user }}
+                </div>
+                <div
+                  v-if="hoveredMinimapPreview.assistant"
+                  class="chat-minimap__preview-line chat-minimap__preview-line--assistant"
+                >
+                  {{ hoveredMinimapPreview.assistant }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="chat-composer" :class="{ 'chat-composer--has-attachments': chatAttachments.length || chatUploading }">
+            <div class="chat-composer__topline">
+              <div class="chat-composer__model-picker">
+                <NSelect
+                  v-model:value="selectedModelKey"
+                  size="small"
+                  class="chat-model-select"
+                  :options="modelOptions"
+                  placeholder="选择模型"
+                  @update:value="handleModelChange"
+                />
+              </div>
+              <div class="chat-composer__quick-actions">
+                <button type="button" @click="draft = '/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex'">Search Papers</button>
+                <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
+                <button type="button" @click="planMode = !planMode">{{ planMode ? 'ReAct Mode' : 'Plan Mode' }}</button>
+                <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
+              </div>
+            </div>
+            <NInput
+              v-model:value="draft"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 6 }"
+              placeholder="Ask a research question or describe a task..."
+              @keydown.enter.exact.prevent="handleSend"
+            />
+            <input
+              ref="chatFileInputRef"
+              type="file"
+              class="chat-file-input"
+              multiple
+              accept=".pdf,.doc,.docx,.txt,.md,.tex,.bib,.csv,.json"
+              @change="handleChatFileChange"
+            />
+            <div v-if="chatAttachments.length || chatUploading" class="chat-attachment-tray">
+              <div v-for="attachment in chatAttachments" :key="attachment.documentId" class="chat-attachment-chip">
+                <span>{{ attachment.filename }}</span>
+                <small>#{{ attachment.documentId }} · {{ attachment.status }}</small>
+                <button type="button" :disabled="sending || chatUploading" @click="removeChatAttachment(attachment.documentId)">×</button>
+              </div>
+              <div v-if="chatUploading" class="chat-attachment-chip chat-attachment-chip--uploading">
+                <span>{{ chatUploadStatus || 'Uploading document...' }}</span>
+                <small>{{ chatUploadProgress }}%</small>
+              </div>
+            </div>
+            <div class="chat-composer__footer">
+              <span class="chat-hint">Enter 发送 · Shift+Enter 换行</span>
+              <div class="chat-composer__send-actions">
+                <button
+                  type="button"
+                  class="chat-upload-button"
+                  :disabled="sending || chatUploading"
+                  aria-label="上传资料"
+                  @click="chatFileInputRef?.click()"
+                >上传资料</button>
+                <NButton
+                  type="primary"
+                  round
+                  class="chat-send-button"
+                  :class="{ 'chat-send-button--busy': sending }"
+                  :disabled="chatUploading || sending"
+                  @click="handleSend"
+                >发送</NButton>
+              </div>
+            </div>
+          </div>
+        </NCard>
+      </section>
+
+    </div>
+
+    <NModal v-model:show="renameModalVisible" preset="card" title="重命名会话" style="width: 420px" :bordered="false">
+      <NSpace vertical :size="14">
+        <NInput
+          v-model:value="renameDraft"
+          maxlength="40"
+          show-count
+          placeholder="输入新的会话名称"
+          @keydown.enter.prevent="confirmRenameSession"
+        />
+        <NSpace justify="end">
+          <NButton secondary @click="renameModalVisible = false">取消</NButton>
+          <NButton type="primary" :loading="renaming" @click="confirmRenameSession">保存</NButton>
+        </NSpace>
+      </NSpace>
+    </NModal>
+    <NModal v-model:show="artifactPreviewVisible" preset="card" :title="artifactPreviewTitle" style="width: min(920px, 92vw)" :bordered="false">
+      <div class="chat-artifact-preview">
+        <MarkdownMessage v-if="artifactPreviewType === 'MARKDOWN'" :content="artifactPreviewContent" />
+        <pre v-else>{{ artifactPreviewContent }}</pre>
+      </div>
+    </NModal>
+  </AppLayout>
+</template>
+
+<script setup lang="ts">
+import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NSelect, NSpace } from 'naive-ui';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import AppLayout from '@/components/AppLayout.vue';
+import MarkdownMessage from '@/components/MarkdownMessage.vue';
+import { downloadArtifact, getArtifact, saveArtifactToKnowledge } from '@/api/artifact';
+import { getDemoConfig } from '@/api/demo';
+import { mergeKbUpload, uploadChunk, type KbDocumentResponse } from '@/api/knowledge';
+import {
+  createPlan,
+  createSession,
+  deleteSession as deleteAgentSession,
+  executePlanAsync,
+  getPlan,
+  listMessages,
+  listSessions,
+  sendMessage as sendAgentMessage,
+  updateSession as updateAgentSession,
+  type AgentDebugPayload,
+  type AgentMessageResponse,
+  type AgentPlanResponse,
+  type AgentPlanStepResponse,
+  type SendMessageResponse,
+  type AgentSessionResponse,
+} from '@/api/agent';
+import { listSkills, type SkillListItemResponse } from '@/api/skills';
+import { getSettings, type UserSettingsResponse } from '@/api/settings';
+import { useAuthStore } from '@/stores/auth';
+import { ui } from '@/ui';
+
+type MessageRole = 'user' | 'assistant' | 'system' | 'tool' | 'process';
+
+interface ChatMessageView {
+  localId: string;
+  role: MessageRole;
+  content: string;
+  createdAt?: string | null;
+  toolCallsJson?: string | null;
+  navigationUrl?: string | null;
+  artifacts?: ChatArtifactCard[];
+  processOpen?: boolean;
+  processDone?: boolean;
+  processStartedAt?: number | null;
+  processElapsedMs?: number | null;
+}
+
+interface ChatArtifactCard {
+  id: number;
+  title: string;
+  artifactType: string;
+  downloadUrl: string;
+  downloadFilename: string;
+  downloadContentType: string;
+  preview?: string | null;
+}
+
+interface ChatUploadAttachment {
+  documentId: number;
+  filename: string;
+  status: string;
+}
+
+interface ToolCallSnapshot {
+  id?: string | null;
+  function?: {
+    name?: string | null;
+    arguments?: string | null;
+  } | null;
+}
+
+interface WsChatEvent {
+  type: 'ack' | 'process' | 'chunk' | 'done' | 'error' | 'debug';
+  content: string | null;
+  sessionId: number | null;
+  error: string | null;
+  finishReason: string | null;
+  navigationUrl: string | null;
+  clientRequestId: string | null;
+  debug: AgentDebugPayload | null;
+}
+
+interface MessageSegment {
+  type: 'text' | 'code';
+  content: string;
+}
+
+const router = useRouter();
+const route = useRoute();
+const authStore = useAuthStore();
+const DEFAULT_DEMO_QUESTIONS = [
+  '根据知识库，概括这个项目能解决什么问题？',
+  '演示文档里的组会时间、地点和下次 DDL 是什么？',
+  '这个项目的 RAG 流程包含哪些步骤？',
+  '用计划模式帮我把两周内完善 Agent 能力拆成任务。',
+];
+const sessions = ref<AgentSessionResponse[]>([]);
+const selectedSessionId = ref<number | null>(null);
+const messages = ref<ChatMessageView[]>([]);
+const messagesBySessionId = ref<Record<number, ChatMessageView[]>>({});
+const messagesLoading = ref(false);
+const draft = ref('');
+const sending = ref(false);
+const selectedSkillId = ref<string | null>(null);
+const availableSkills = ref<SkillListItemResponse[]>([]);
+const settings = ref<UserSettingsResponse | null>(null);
+const demoQuestions = ref(DEFAULT_DEMO_QUESTIONS);
+const selectedModelKey = ref('');
+const ragDisabled = ref(false);
+const planMode = ref(false);
+const showProcessMessages = ref(false);
+const currentPlan = ref<AgentPlanResponse | null>(null);
+const currentSocket = ref<WebSocket | null>(null);
+const currentAssistantMessageId = ref<string | null>(null);
+const currentAssistantMessageSessionId = ref<number | null>(null);
+const currentProcessMessageId = ref<string | null>(null);
+const currentProcessMessageSessionId = ref<number | null>(null);
+const messagesContainerRef = ref<HTMLElement | null>(null);
+const chatFileInputRef = ref<HTMLInputElement | null>(null);
+const chatMinimapRailRef = ref<HTMLElement | null>(null);
+const chatMinimapRef = ref<HTMLElement | null>(null);
+const chatMinimapPreviewRef = ref<HTMLElement | null>(null);
+const messageRowRefs: Record<string, HTMLElement | null> = {};
+const minimapItemRefs: Record<string, HTMLElement | null> = {};
+const activeMinimapMessageId = ref<string | null>(null);
+const hoveredMinimapIndex = ref<number | null>(null);
+const pinnedMinimapIndex = ref<number | null>(null);
+const minimapViewportTop = ref(0);
+const minimapViewportHeight = ref(0.18);
+const minimapPreviewTopPx = ref(8);
+const sessionScrollPositions = ref<Record<number, number>>({});
+const renameModalVisible = ref(false);
+const renameSessionId = ref<number | null>(null);
+const renameDraft = ref('');
+const renaming = ref(false);
+const artifactPreviewVisible = ref(false);
+const artifactPreviewTitle = ref('');
+const artifactPreviewType = ref('MARKDOWN');
+const artifactPreviewContent = ref('');
+const previewingArtifactId = ref<number | null>(null);
+const downloadingArtifactId = ref<number | null>(null);
+const savingArtifactId = ref<number | null>(null);
+const chatAttachments = ref<ChatUploadAttachment[]>([]);
+const chatUploading = ref(false);
+const chatUploadProgress = ref(0);
+const chatUploadStatus = ref('');
+const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
+const SESSION_STORAGE_KEY = 'yanban.chat.selectedSessionId';
+const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
+const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
+const DEFAULT_GLM_MODEL = 'glm-5.2';
+const WS_ACK_TIMEOUT_MS = 4000;
+const WS_MAX_RETRIES = 3;
+const CHAT_UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024;
+let minimapHoverClearTimer: number | null = null;
+let minimapActiveLockUntil = 0;
+let messagesRequestSeq = 0;
+
+const sessionMenuOptions = [
+  { label: '重命名', key: 'rename' },
+  { label: '删除', key: 'delete' },
+];
+
+const skillOptions = computed(() => availableSkills.value
+  .filter((skill) => skill.enabled)
+  .map((skill) => ({ label: skill.name + (skill.source === 'builtin' ? '（内置）' : ''), value: skill.id })));
+
+const modelOptions = computed(() => {
+  const options: { label: string; value: string }[] = [];
+  const deepseekModels = settings.value?.deepseekModels?.length
+    ? settings.value.deepseekModels
+    : [DEFAULT_DEEPSEEK_MODEL];
+  for (const m of deepseekModels) {
+    options.push({ label: 'DeepSeek / ' + m, value: toModelKey('deepseek', m) });
+  }
+  const glmModels = settings.value?.glmModels?.length
+    ? settings.value.glmModels
+    : [DEFAULT_GLM_MODEL];
+  for (const m of glmModels) {
+    options.push({ label: 'GLM / ' + m, value: toModelKey('glm', m) });
+  }
+  const customModels = settings.value?.customModels || [];
+  for (const cm of customModels) {
+    if (!cm.builtin || cm.providerKey.startsWith('openrouter-')) {
+      options.push({ label: cm.label + ' / ' + cm.modelName, value: toModelKey(cm.providerKey, cm.modelName) });
+    }
+  }
+  if (selectedModelKey.value && !options.some((option) => option.value === selectedModelKey.value)) {
+    const selected = parseModelKey(selectedModelKey.value);
+    options.push({ label: formatProviderName(selected.provider) + ' / ' + selected.model, value: selectedModelKey.value });
+  }
+  return options;
+});
+
+const activeSessionTitle = computed(() => {
+  const active = sessions.value.find((item) => item.id === selectedSessionId.value);
+  return active?.title || '研究对话';
+});
+
+const filteredMessages = computed(() => {
+  const visibleMessages = messages.value.filter((message) => !isAssistantToolCallMessage(message));
+  if (showProcessMessages.value) {
+    return visibleMessages;
+  }
+  return visibleMessages.filter((message) => message.role === 'user'
+    || message.role === 'assistant'
+    || message.role === 'process');
+});
+
+const minimapMessages = computed(() => filteredMessages.value.filter((message) => message.role === 'user'));
+
+const minimapViewportStyle = computed(() => ({
+  top: (minimapViewportTop.value * 100).toFixed(2) + '%',
+  height: Math.max(minimapViewportHeight.value * 100, 8).toFixed(2) + '%',
+}));
+
+const hoveredMinimapMessage = computed(() => {
+  const index = hoveredMinimapIndex.value;
+  if (index == null) {
+    return null;
+  }
+  return minimapMessages.value[index] || null;
+});
+
+const hoveredMinimapPreview = computed(() => buildMinimapPreview(hoveredMinimapMessage.value));
+
+const minimapPreviewStyle = computed(() => {
+  return {
+    top: minimapPreviewTopPx.value.toFixed(2) + 'px',
+  };
+});
+
+const isDemoExperience = computed(() => route.query.demo === '1' || Boolean(authStore.currentUser?.demo));
+const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && filteredMessages.value.length === 0);
+
+onMounted(async () => {
+  applyMobileChatDefaults();
+  await Promise.all([loadSettings(), loadSkills()]);
+  await loadDemoConfigIfNeeded();
+  await loadSessions();
+  applyQuestionFromRoute();
+  syncMinimapViewport();
+});
+
+watch(
+  () => route.query.sessionId,
+  async (value) => {
+    const sessionId = parseSessionId(value);
+    if (!sessionId || sessionId === selectedSessionId.value) {
+      return;
+    }
+    if (sessions.value.some((item) => item.id === sessionId)) {
+      await selectSession(sessionId);
+    }
+  }
+);
+
+watch(
+  () => filteredMessages.value.map((message) => message.localId).join('|'),
+  async () => {
+    await nextTick();
+    syncMinimapViewport();
+    syncMinimapPreviewPosition();
+  }
+);
+
+watch(
+  () => hoveredMinimapIndex.value,
+  async () => {
+    await nextTick();
+    syncMinimapPreviewPosition();
+  }
+);
+
+onBeforeUnmount(() => {
+  currentSocket.value?.close();
+  cancelMinimapHoverClear();
+  Object.keys(messageRowRefs).forEach((key) => {
+    delete messageRowRefs[key];
+  });
+  Object.keys(minimapItemRefs).forEach((key) => {
+    delete minimapItemRefs[key];
+  });
+});
+
+async function loadDemoConfigIfNeeded() {
+  if (!isDemoExperience.value) {
+    return;
+  }
+  try {
+    const { data } = await getDemoConfig();
+    if (data.exampleQuestions?.length) {
+      demoQuestions.value = data.exampleQuestions;
+    }
+  } catch {
+    demoQuestions.value = DEFAULT_DEMO_QUESTIONS;
+  }
+}
+
+function applyQuestionFromRoute() {
+  const queryQuestion = route.query.q;
+  if (typeof queryQuestion === 'string' && queryQuestion.trim()) {
+    useDemoQuestion(queryQuestion);
+  }
+}
+
+function useDemoQuestion(question: string) {
+  draft.value = question;
+  if (question.includes('璁″垝妯″紡') || question.includes('鎷嗘垚浠诲姟')) {
+    planMode.value = true;
+  }
+}
+
+function applyMobileChatDefaults() {
+  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches) {
+    setChatSidebarCollapsed(true);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const { data } = await getSettings();
+    settings.value = data;
+    if (!selectedModelKey.value) {
+      selectedModelKey.value = defaultModelKeyFromSettings(data);
+    }
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '加载模型设置失败');
+    if (!selectedModelKey.value) {
+      selectedModelKey.value = toModelKey('deepseek', DEFAULT_DEEPSEEK_MODEL);
+    }
+  }
+}
+
+async function loadSkills() {
+  try {
+    const { data } = await listSkills();
+    availableSkills.value = data;
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '加载 Skills 失败');
+  }
+}
+
+async function loadSessions(selectLatest = true) {
+  const { data } = await listSessions();
+  sessions.value = data;
+  if (!selectLatest) {
+    return;
+  }
+  if (data.length === 0) {
+    clearSessionSelection();
+    return;
+  }
+  const preferredSessionId = resolvePreferredSessionId(data);
+  if (preferredSessionId) {
+    await selectSession(preferredSessionId);
+  }
+}
+
+async function selectSession(sessionId: number) {
+  if (!sessions.value.some((item) => item.id === sessionId)) {
+    return;
+  }
+  saveCurrentScrollPosition(selectedSessionId.value);
+  applySelectedSession(sessionId);
+  currentPlan.value = null;
+  messages.value = messagesBySessionId.value[sessionId] || [];
+  const session = sessions.value.find((item) => item.id === sessionId);
+  ragDisabled.value = Boolean(session?.ragDisabled);
+  if (session?.modelProvider && session?.model) {
+    selectedModelKey.value = toModelKey(session.modelProvider, session.model);
+  }
+  await reloadCurrentMessages(sessionId);
+  await restoreScrollPosition(sessionId);
+  syncMinimapViewport();
+}
+
+async function reloadCurrentMessages(sessionId = selectedSessionId.value) {
+  if (!sessionId) {
+    messages.value = [];
+    syncMinimapViewport();
+    return;
+  }
+  const requestSeq = ++messagesRequestSeq;
+  messagesLoading.value = selectedSessionId.value === sessionId && !messagesBySessionId.value[sessionId]?.length;
+  try {
+    const { data } = await listMessages(sessionId, { limit: 50, view: 'all' });
+    const nextMessages = buildViewMessages(data);
+    pruneMessageRowRefs(nextMessages);
+    setSessionMessages(sessionId, nextMessages);
+  } finally {
+    if (selectedSessionId.value === sessionId && requestSeq === messagesRequestSeq) {
+      messagesLoading.value = false;
+    }
+    syncMinimapViewport();
+  }
+}
+
+function setSessionMessages(sessionId: number, nextMessages: ChatMessageView[]) {
+  messagesBySessionId.value = {
+    ...messagesBySessionId.value,
+    [sessionId]: nextMessages,
+  };
+  if (selectedSessionId.value === sessionId) {
+    messages.value = nextMessages;
+  }
+}
+
+function appendSessionMessage(sessionId: number, message: ChatMessageView) {
+  const nextMessages = [...(messagesBySessionId.value[sessionId] || []), message];
+  setSessionMessages(sessionId, nextMessages);
+}
+
+function updateSessionMessage(sessionId: number, localId: string | null, updater: (message: ChatMessageView) => void) {
+  if (!localId) {
+    return;
+  }
+  const currentMessages = messagesBySessionId.value[sessionId] || [];
+  const nextMessages = currentMessages.map((message) => {
+    if (message.localId !== localId) {
+      return message;
+    }
+    const copy = { ...message };
+    updater(copy);
+    return copy;
+  });
+  setSessionMessages(sessionId, nextMessages);
+}
+
+function removeSessionMessage(sessionId: number | null, localId: string | null) {
+  if (!sessionId || !localId) {
+    return;
+  }
+  const nextMessages = (messagesBySessionId.value[sessionId] || []).filter((message) => message.localId !== localId);
+  setSessionMessages(sessionId, nextMessages);
+}
+
+function findSessionMessage(sessionId: number | null, localId: string | null) {
+  if (!sessionId || !localId) {
+    return null;
+  }
+  return (messagesBySessionId.value[sessionId] || []).find((message) => message.localId === localId) || null;
+}
+
+function insertProcessMessageAfterLatestUser(sessionId: number, processMessage: ChatMessageView | null) {
+  if (!processMessage) {
+    return;
+  }
+  const existingMessages = messagesBySessionId.value[sessionId] || [];
+  const withoutDuplicate = existingMessages.filter((message) => message.localId !== processMessage.localId);
+  let insertIndex = withoutDuplicate.map((message) => message.role).lastIndexOf('user');
+  if (insertIndex < 0) {
+    insertIndex = Math.max(0, withoutDuplicate.length - 1);
+  }
+  const nextMessages = [
+    ...withoutDuplicate.slice(0, insertIndex + 1),
+    processMessage,
+    ...withoutDuplicate.slice(insertIndex + 1),
+  ];
+  setSessionMessages(sessionId, nextMessages);
+}
+
+async function handleCreateSession() {
+  try {
+    const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+    const { data } = await createSession({
+      title: '新会话',
+      ragDisabled: false,
+      modelProvider: selectedModel.provider,
+      model: selectedModel.model,
+    });
+    sessions.value = [data, ...sessions.value];
+    await selectSession(data.id);
+    ui.message.success('已创建新会话');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '创建会话失败');
+  }
+}
+
+async function handleChatFileChange(event: Event) {
+  const target = event.target as HTMLInputElement;
+  const files = Array.from(target.files || []);
+  target.value = '';
+  if (files.length === 0) {
+    return;
+  }
+  if (sending.value) {
+    ui.message.warning('当前正在回复，稍后再上传资料');
+    return;
+  }
+  chatUploading.value = true;
+  chatUploadProgress.value = 0;
+  try {
+    const uploaded: ChatUploadAttachment[] = [];
+    for (let index = 0; index < files.length; index += 1) {
+      const document = await uploadChatFile(files[index], index, files.length);
+      uploaded.push({
+        documentId: document.id,
+        filename: document.filename,
+        status: document.status,
+      });
+    }
+    chatAttachments.value = [...chatAttachments.value, ...uploaded];
+    ui.message.success(uploaded.length === 1 ? '资料已上传，将随下一条消息使用' : `已上传 ${uploaded.length} 个资料文件`);
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || error.message || '上传资料失败');
+  } finally {
+    chatUploading.value = false;
+    chatUploadProgress.value = 0;
+    chatUploadStatus.value = '';
+  }
+}
+
+async function uploadChatFile(file: File, fileIndex: number, fileCount: number): Promise<KbDocumentResponse> {
+  const uploadId = globalThis.crypto?.randomUUID?.() || `chat-upload-${Date.now()}-${fileIndex}`;
+  const totalChunks = Math.max(1, Math.ceil(file.size / CHAT_UPLOAD_CHUNK_SIZE));
+  for (let chunkNumber = 0; chunkNumber < totalChunks; chunkNumber += 1) {
+    const start = chunkNumber * CHAT_UPLOAD_CHUNK_SIZE;
+    const end = Math.min(start + CHAT_UPLOAD_CHUNK_SIZE, file.size);
+    const chunk = file.slice(start, end);
+    chatUploadStatus.value = fileCount > 1
+      ? `Uploading ${fileIndex + 1}/${fileCount}: ${file.name}`
+      : `Uploading ${file.name}`;
+    await uploadChatChunkWithRetry({
+      uploadId,
+      filename: file.name,
+      chunkNumber,
+      totalChunks,
+      file: chunk,
+    });
+    const fileProgress = ((chunkNumber + 1) / totalChunks) * 90;
+    chatUploadProgress.value = Math.round(((fileIndex + fileProgress / 100) / fileCount) * 100);
+  }
+  chatUploadStatus.value = `Processing ${file.name}`;
+  const { data } = await mergeKbUpload({
+    uploadId,
+    filename: file.name,
+    totalChunks,
+    mimeType: file.type || 'application/octet-stream',
+    isPublic: false,
+  });
+  chatUploadProgress.value = Math.round(((fileIndex + 1) / fileCount) * 100);
+  return data;
+}
+
+async function uploadChatChunkWithRetry(payload: Parameters<typeof uploadChunk>[0]) {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await uploadChunk(payload);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => window.setTimeout(resolve, attempt * 300));
+    }
+  }
+  throw lastError;
+}
+
+function removeChatAttachment(documentId: number) {
+  chatAttachments.value = chatAttachments.value.filter((item) => item.documentId !== documentId);
+}
+
+async function handleSend() {
+  if (!draft.value.trim()) {
+    ui.message.warning('请输入消息内容');
+    return;
+  }
+  if (sending.value) {
+    return;
+  }
+  if (chatUploading.value) {
+    ui.message.warning('资料还在上传，请稍后再发送');
+    return;
+  }
+
+  let activeSendSessionId: number | null = null;
+  try {
+    sending.value = true;
+    let sessionId = selectedSessionId.value;
+    if (!sessionId) {
+      const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+      const { data } = await createSession({
+        title: '新会话',
+        ragDisabled: ragDisabled.value,
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      });
+      sessions.value = [data, ...sessions.value];
+      applySelectedSession(data.id);
+      sessionId = data.id;
+    } else {
+      await ensureActiveSessionModelSynced(sessionId);
+    }
+    activeSendSessionId = sessionId;
+
+    const rawContent = draft.value.trim();
+    const attachmentsForSend = [...chatAttachments.value];
+    const content = buildContentWithChatAttachments(rawContent, attachmentsForSend);
+    const displayContent = buildDisplayContentWithChatAttachments(rawContent, attachmentsForSend);
+    draft.value = '';
+    chatAttachments.value = [];
+    appendSessionMessage(sessionId, {
+      localId: 'user-' + Date.now(),
+      role: 'user',
+      content: displayContent,
+    });
+
+    const willUsePlanExecution = planMode.value && !isPlanArtifactRequest(content);
+    if (!willUsePlanExecution) {
+      const processId = 'process-' + Date.now();
+      currentProcessMessageId.value = processId;
+      currentProcessMessageSessionId.value = sessionId;
+      appendSessionMessage(sessionId, {
+        localId: processId,
+        role: 'process',
+        content: 'Starting request...',
+        processOpen: true,
+        processDone: false,
+        processStartedAt: Date.now(),
+        processElapsedMs: null,
+      });
+    }
+
+    const assistantId = 'assistant-' + Date.now();
+    currentAssistantMessageId.value = assistantId;
+    currentAssistantMessageSessionId.value = sessionId;
+    appendSessionMessage(sessionId, {
+      localId: assistantId,
+      role: 'assistant',
+      content: '',
+      navigationUrl: null,
+    });
+    await scrollMessagesToBottom();
+
+    if (willUsePlanExecution) {
+      await sendPlanMessage(sessionId, content, ragDisabled.value, selectedSkillId.value);
+    } else {
+      await sendMessageWithFallback(sessionId, content, ragDisabled.value, selectedSkillId.value);
+    }
+  } catch (error: any) {
+    collapseCurrentProcessMessage();
+    removePendingAssistant();
+    if (activeSendSessionId) {
+      await reloadCurrentMessages(activeSendSessionId).catch(() => undefined);
+    }
+    ui.message.error(error.response?.data?.message || error.message || '发送失败');
+    sending.value = false;
+  }
+}
+
+function isPlanArtifactRequest(content: string) {
+  const text = content.trim().toLowerCase();
+  if (!text) {
+    return false;
+  }
+  const asksForPlanArtifact = /(制定|设计|生成|输出|给我|帮我).{0,16}(研究计划|学习计划|学习路线|路线图|roadmap|plan)/i.test(text)
+    || /(研究计划|学习计划|学习路线|路线图|roadmap|plan).{0,16}(制定|设计|生成|输出)/i.test(text);
+  const asksToExecute = /(执行|开始执行|直接执行|搜索|检索|查找|调研|收集|爬取|调用|运行|分析文献|找.{0,8}论文|search|execute|run)/i.test(text);
+  return asksForPlanArtifact && !asksToExecute;
+}
+
+function buildContentWithChatAttachments(content: string, attachments: ChatUploadAttachment[]) {
+  if (attachments.length === 0) {
+    return content;
+  }
+  const lines = attachments.map((item) => `- documentId=${item.documentId}, filename=${item.filename}, status=${item.status}`);
+  return [
+    content,
+    '',
+    '本轮对话已上传以下知识库文档，请优先使用 search_knowledge / read_document 检索这些资料后再回答：',
+    ...lines,
+  ].join('\n');
+}
+
+function buildDisplayContentWithChatAttachments(content: string, attachments: ChatUploadAttachment[]) {
+  if (attachments.length === 0) {
+    return content;
+  }
+  return [
+    content,
+    '',
+    '已附加资料：',
+    ...attachments.map((item) => `- ${item.filename} (#${item.documentId})`),
+  ].join('\n');
+}
+
+async function sendPlanMessage(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
+  currentSocket.value?.close();
+  const { data: createdPlan } = await createPlan(sessionId, {
+    content,
+    ragDisabled: disableRag,
+    skillId,
+    autoExecute: false,
+  });
+  currentPlan.value = createdPlan;
+  await setAssistantContent(buildPlanAssistantContent(createdPlan));
+
+  let refreshing = false;
+  const refreshPlan = async () => {
+    if (refreshing) {
+      return currentPlan.value;
+    }
+    refreshing = true;
+    try {
+      const { data } = await getPlan(createdPlan.id);
+      currentPlan.value = data;
+      await setAssistantContent(buildPlanAssistantContent(data));
+      return data;
+    } catch {
+      return currentPlan.value;
+    } finally {
+      refreshing = false;
+    }
+  };
+
+  try {
+    const { data: queuedPlan } = await executePlanAsync(createdPlan.id);
+    currentPlan.value = queuedPlan;
+    await setAssistantContent(buildPlanAssistantContent(queuedPlan));
+
+    await new Promise<void>((resolve) => {
+      let pollTimer: number | undefined;
+      let timeoutTimer: number | undefined;
+      timeoutTimer = window.setTimeout(() => {
+        if (pollTimer !== undefined) {
+          window.clearInterval(pollTimer);
+        }
+        void refreshPlan().finally(resolve);
+      }, 300000);
+      pollTimer = window.setInterval(() => {
+        void refreshPlan().then((plan) => {
+          if (plan && isTerminalPlanStatus(plan.status)) {
+            if (pollTimer !== undefined) {
+              window.clearInterval(pollTimer);
+            }
+            if (timeoutTimer !== undefined) {
+              window.clearTimeout(timeoutTimer);
+            }
+            resolve();
+          }
+        });
+      }, 1500);
+      void refreshPlan().then((plan) => {
+        if (plan && isTerminalPlanStatus(plan.status)) {
+          if (pollTimer !== undefined) {
+            window.clearInterval(pollTimer);
+          }
+          if (timeoutTimer !== undefined) {
+            window.clearTimeout(timeoutTimer);
+          }
+          resolve();
+        }
+      });
+    });
+
+    const finalPlan = currentPlan.value || queuedPlan;
+    if (finalPlan.status === 'FAILED' || finalPlan.status === 'CANCELLED') {
+      await appendAssistantChunk('\n\nPlan ended with status ' + finalPlan.status + ': ' + (finalPlan.errorMessage || 'No error message.'));
+    }
+    await afterSendFinished(sessionId);
+  } catch (error: any) {
+    const message = error.response?.data?.message || error.message || 'Plan execution failed';
+    await refreshPlan();
+    await appendAssistantChunk('\n\nPlan execution failed: ' + message);
+    collapseCurrentProcessMessage();
+    ui.message.error(message);
+    sending.value = false;
+    currentAssistantMessageId.value = null;
+  }
+}
+
+function isTerminalPlanStatus(status: string) {
+  return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+}
+
+async function sendMessageWithFallback(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
+  const clientRequestId = crypto.randomUUID();
+  console.info('[chat] send start', { sessionId, mode: 'ws-preferred', clientRequestId });
+  try {
+    await sendWsMessageWithRetry(sessionId, content, disableRag, skillId, clientRequestId);
+  } catch (wsError: any) {
+    console.warn('[chat] websocket send failed, switching to http fallback', {
+      sessionId,
+      clientRequestId,
+      error: wsError?.message || String(wsError),
+    });
+    currentSocket.value?.close();
+    currentSocket.value = null;
+    ui.message.warning(
+      wsError?.message
+        ? (wsError.message + '，已自动切换到稳定发送模式。')
+        : '实时连接失败，已自动切换到稳定发送模式。',
+    );
+    await appendProcessLine('WebSocket failed, switching to stable HTTP fallback.');
+    await sendHttpMessage(sessionId, content, disableRag, skillId, clientRequestId);
+  }
+}
+
+async function sendWsMessageWithRetry(
+  sessionId: number,
+  content: string,
+  disableRag: boolean,
+  skillId: string | null,
+  clientRequestId: string,
+) {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= WS_MAX_RETRIES; attempt += 1) {
+    try {
+      await sendWsMessage(sessionId, content, disableRag, skillId, clientRequestId, attempt);
+      return;
+    } catch (error: any) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.warn('[chat] websocket attempt failed', {
+        sessionId,
+        clientRequestId,
+        attempt,
+        error: lastError.message,
+      });
+    }
+  }
+  throw lastError || new Error('WebSocket ack failed');
+}
+
+async function sendWsMessage(
+  sessionId: number,
+  content: string,
+  disableRag: boolean,
+  skillId: string | null,
+  clientRequestId: string,
+  attempt: number,
+) {
+  currentSocket.value?.close();
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let ackReceived = false;
+    let ackTimeout: number | null = null;
+    const token = authStore.token;
+    if (!token) {
+      reject(new Error('未登录'));
+      return;
+    }
+
+    const finishResolve = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (ackTimeout !== null) {
+        window.clearTimeout(ackTimeout);
+      }
+      resolve();
+    };
+
+    const finishReject = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (ackTimeout !== null) {
+        window.clearTimeout(ackTimeout);
+      }
+      reject(error);
+    };
+
+    const wsUrl = buildChatWebSocketUrl(token);
+    console.info('[chat] websocket connect start', { sessionId, wsUrl, clientRequestId, attempt });
+    const ws = new WebSocket(wsUrl);
+    currentSocket.value = ws;
+    ackTimeout = window.setTimeout(() => {
+      if (ackReceived) {
+        return;
+      }
+      finishReject(new Error('WebSocket 连接超时'));
+      ws.close();
+    }, WS_ACK_TIMEOUT_MS);
+
+    ws.onopen = () => {
+      console.info('[chat] websocket open', { sessionId, clientRequestId, attempt });
+      ws.send(JSON.stringify({
+        sessionId,
+        content,
+        ragDisabled: disableRag,
+        skillId,
+        clientRequestId,
+      }));
+    };
+
+    ws.onmessage = async (event) => {
+      const payload = JSON.parse(event.data) as WsChatEvent;
+      if (payload.clientRequestId && payload.clientRequestId !== clientRequestId) {
+        console.info('[chat] websocket ignore stale event', {
+          sessionId,
+          clientRequestId,
+          payloadRequestId: payload.clientRequestId,
+          type: payload.type,
+        });
+        return;
+      }
+      if (payload.type === 'ack') {
+        ackReceived = true;
+        if (ackTimeout !== null) {
+          window.clearTimeout(ackTimeout);
+          ackTimeout = null;
+        }
+        console.info('[chat] websocket ack', { sessionId, clientRequestId, attempt });
+        return;
+      }
+      if (payload.type === 'chunk' && payload.content) {
+        appendAssistantChunk(payload.content);
+        return;
+      }
+      if (payload.type === 'process' && payload.content) {
+        await appendProcessLine(payload.content);
+        return;
+      }
+      if (payload.type === 'debug') {
+        console.info('[chat] websocket debug payload', {
+          sessionId,
+          clientRequestId,
+          hasDebug: !!payload.debug,
+          toolTraceCount: payload.debug?.toolTrace?.length || 0,
+          fallbackCount: payload.debug?.fallbacks?.length || 0,
+        });
+        return;
+      }
+      if (payload.type === 'error') {
+        console.warn('[chat] websocket payload error', { sessionId, clientRequestId, error: payload.error });
+        collapseCurrentProcessMessage();
+        finishReject(new Error(payload.error || 'WebSocket 对话失败'));
+        ws.close();
+        return;
+      }
+      if (payload.type === 'done') {
+        console.info('[chat] websocket done', { sessionId, clientRequestId, navigationUrl: payload.navigationUrl });
+        if (payload.navigationUrl) {
+          attachAssistantNavigation(payload.navigationUrl);
+        }
+        collapseCurrentProcessMessage();
+        await afterSendFinished(sessionId);
+        ws.close();
+        finishResolve();
+      }
+    };
+
+    ws.onerror = () => {
+      console.warn('[chat] websocket error event', { sessionId, clientRequestId, attempt, readyState: ws.readyState });
+      if (!ackReceived) {
+        finishReject(new Error('WebSocket connection failed before ack'));
+        return;
+      }
+      finishReject(new Error('WebSocket 连接失败'));
+    };
+    ws.onclose = () => {
+      currentSocket.value = null;
+      console.info('[chat] websocket closed', { sessionId, clientRequestId, attempt, readyState: ws.readyState, settled, ackReceived });
+      if (!settled && sending.value && !ackReceived) {
+        finishReject(new Error('WebSocket 连接已关闭'));
+      }
+    };
+  });
+}
+
+async function sendHttpMessage(
+  sessionId: number,
+  content: string,
+  disableRag: boolean,
+  skillId: string | null,
+  clientRequestId: string,
+) {
+  console.info('[chat] http fallback send start', { sessionId, clientRequestId });
+  const { data } = await sendAgentMessage(sessionId, {
+    content,
+    ragDisabled: disableRag,
+    skillId,
+    clientRequestId,
+  });
+  console.info('[chat] http fallback send success', {
+    sessionId,
+    clientRequestId,
+    success: data.success,
+    steps: data.steps,
+    navigationUrl: data.navigationUrl,
+  });
+  applyHttpSendResponse(sessionId, data);
+  await afterSendFinished(sessionId);
+}
+
+function applyHttpSendResponse(sessionId: number, response: SendMessageResponse) {
+  if (!response.success) {
+    throw new Error(response.errorMessage || '发送失败');
+  }
+  if (response.navigationUrl) {
+    attachAssistantNavigation(response.navigationUrl);
+  }
+  const finalContent = response.assistantContent || '';
+  if (currentAssistantMessageId.value) {
+    updateSessionMessage(sessionId, currentAssistantMessageId.value, (message) => {
+      message.content = finalContent;
+      if (response.navigationUrl) {
+        message.navigationUrl = response.navigationUrl;
+      }
+    });
+  }
+}
+
+async function appendAssistantChunk(chunk: string) {
+  const sessionId = currentAssistantMessageSessionId.value;
+  if (sessionId && currentAssistantMessageId.value) {
+    updateSessionMessage(sessionId, currentAssistantMessageId.value, (message) => {
+      message.content += chunk;
+    });
+    if (selectedSessionId.value === sessionId) {
+      await scrollMessagesToBottom();
+    }
+  }
+}
+
+async function appendProcessLine(line: string) {
+  const sessionId = currentProcessMessageSessionId.value;
+  if (!sessionId || !currentProcessMessageId.value) {
+    return;
+  }
+  updateSessionMessage(sessionId, currentProcessMessageId.value, (message) => {
+    const nextLine = line.trim();
+    if (!nextLine) {
+      return;
+    }
+    message.content = message.content?.trim()
+      ? message.content + '\n' + nextLine
+      : nextLine;
+    message.processOpen = true;
+    message.processDone = false;
+  });
+  if (selectedSessionId.value === sessionId) {
+    await scrollMessagesToBottom();
+  }
+}
+
+function collapseCurrentProcessMessage() {
+  const sessionId = currentProcessMessageSessionId.value;
+  if (!sessionId || !currentProcessMessageId.value) {
+    return;
+  }
+  updateSessionMessage(sessionId, currentProcessMessageId.value, (message) => {
+    const now = Date.now();
+    message.processOpen = false;
+    message.processDone = true;
+    message.processElapsedMs = message.processStartedAt ? Math.max(0, now - message.processStartedAt) : message.processElapsedMs;
+  });
+}
+
+async function setAssistantContent(content: string) {
+  const sessionId = currentAssistantMessageSessionId.value;
+  if (sessionId && currentAssistantMessageId.value) {
+    updateSessionMessage(sessionId, currentAssistantMessageId.value, (message) => {
+      message.content = content;
+    });
+    if (selectedSessionId.value === sessionId) {
+      await scrollMessagesToBottom();
+    }
+  }
+}
+
+async function scrollMessagesToBottom() {
+  await nextTick();
+  const container = messagesContainerRef.value;
+  if (!container) {
+    return;
+  }
+  const bottom = Math.max(container.scrollHeight - container.clientHeight, 0);
+  container.scrollTo({ top: bottom, behavior: 'auto' });
+  window.requestAnimationFrame(() => {
+    const current = messagesContainerRef.value;
+    if (!current) {
+      return;
+    }
+    current.scrollTop = Math.max(current.scrollHeight - current.clientHeight, 0);
+    syncMinimapViewport();
+  });
+  syncMinimapViewport();
+}
+
+function saveCurrentScrollPosition(sessionId: number | null) {
+  if (!sessionId) {
+    return;
+  }
+  const container = messagesContainerRef.value;
+  if (!container) {
+    return;
+  }
+  sessionScrollPositions.value = {
+    ...sessionScrollPositions.value,
+    [sessionId]: container.scrollTop,
+  };
+}
+
+function setMessageRowRef(el: any, localId: string) {
+  if (el instanceof HTMLElement) {
+    messageRowRefs[localId] = el;
+    return;
+  }
+  if (!el && messageRowRefs[localId]) {
+    delete messageRowRefs[localId];
+  }
+}
+
+function setMinimapItemRef(el: any, localId: string) {
+  if (el instanceof HTMLElement) {
+    minimapItemRefs[localId] = el;
+    return;
+  }
+  if (!el && minimapItemRefs[localId]) {
+    delete minimapItemRefs[localId];
+  }
+}
+
+function pruneMessageRowRefs(currentMessages: ChatMessageView[]) {
+  const validIds = new Set(currentMessages.map((message) => message.localId));
+  Object.keys(messageRowRefs).forEach((localId) => {
+    if (!validIds.has(localId)) {
+      delete messageRowRefs[localId];
+    }
+  });
+  Object.keys(minimapItemRefs).forEach((localId) => {
+    if (!validIds.has(localId)) {
+      delete minimapItemRefs[localId];
+    }
+  });
+}
+
+function handleMessagesScroll() {
+  const sessionId = selectedSessionId.value;
+  if (sessionId) {
+    saveCurrentScrollPosition(sessionId);
+  }
+  syncMinimapViewport();
+}
+
+function syncMinimapPreviewPosition() {
+  const hovered = hoveredMinimapMessage.value;
+  const railEl = chatMinimapRailRef.value;
+  const minimapEl = chatMinimapRef.value;
+  const previewEl = chatMinimapPreviewRef.value;
+  const itemEl = hovered ? minimapItemRefs[hovered.localId] : null;
+  if (!hovered || !railEl || !minimapEl || !previewEl || !itemEl) {
+    minimapPreviewTopPx.value = 8;
+    return;
+  }
+  const railRect = railEl.getBoundingClientRect();
+  const itemRect = itemEl.getBoundingClientRect();
+  const itemCenter = itemRect.top - railRect.top + itemRect.height / 2;
+  const previewHeight = previewEl.offsetHeight || 112;
+  const minTop = 8;
+  const maxTop = Math.max(minTop, railEl.clientHeight - previewHeight - 8);
+  const nextTop = Math.min(Math.max(itemCenter - previewHeight / 2, minTop), maxTop);
+  minimapPreviewTopPx.value = nextTop;
+}
+
+function syncMinimapViewport() {
+  const container = messagesContainerRef.value;
+  const visibleMessages = filteredMessages.value;
+  if (!container || visibleMessages.length === 0) {
+    minimapViewportTop.value = 0;
+    minimapViewportHeight.value = 0.18;
+    activeMinimapMessageId.value = null;
+    return;
+  }
+  const maxScroll = Math.max(container.scrollHeight - container.clientHeight, 1);
+  minimapViewportTop.value = Math.min(container.scrollTop / maxScroll, 1);
+  minimapViewportHeight.value = Math.min(container.clientHeight / Math.max(container.scrollHeight, 1), 1);
+  if (Date.now() < minimapActiveLockUntil) {
+    return;
+  }
+
+  const containerTop = container.getBoundingClientRect().top;
+  const threshold = containerTop + 24;
+  let activeId = minimapMessages.value[minimapMessages.value.length - 1]?.localId || null;
+  for (const message of visibleMessages) {
+    const rowEl = messageRowRefs[message.localId];
+    if (!rowEl) {
+      continue;
+    }
+    if (rowEl.getBoundingClientRect().top >= threshold) {
+      activeId = resolveMinimapActiveId(message.localId);
+      break;
+    }
+  }
+  activeMinimapMessageId.value = activeId;
+}
+
+async function scrollToMessage(localId: string) {
+  const container = messagesContainerRef.value;
+  const target = messageRowRefs[localId];
+  if (!container || !target) {
+    return;
+  }
+  const index = minimapMessages.value.findIndex((message) => message.localId === localId);
+  if (index >= 0) {
+    hoveredMinimapIndex.value = index;
+    pinnedMinimapIndex.value = index;
+  }
+  minimapActiveLockUntil = Date.now() + 420;
+  container.scrollTo({ top: Math.max(target.offsetTop - 70, 0), behavior: 'smooth' });
+  activeMinimapMessageId.value = localId;
+  saveCurrentScrollPosition(selectedSessionId.value);
+}
+
+function resolveMinimapActiveId(localId: string | null) {
+  if (!localId) {
+    return null;
+  }
+  const directMatch = minimapMessages.value.find((message) => message.localId === localId);
+  if (directMatch) {
+    return directMatch.localId;
+  }
+  const sourceIndex = filteredMessages.value.findIndex((message) => message.localId === localId);
+  if (sourceIndex < 0) {
+    return minimapMessages.value[minimapMessages.value.length - 1]?.localId || null;
+  }
+  for (let i = sourceIndex; i >= 0; i -= 1) {
+    const candidate = filteredMessages.value[i];
+    if (candidate?.role === 'user') {
+      return candidate.localId;
+    }
+  }
+  return minimapMessages.value[0]?.localId || null;
+}
+
+function setHoveredMinimapIndex(index: number) {
+  cancelMinimapHoverClear();
+  hoveredMinimapIndex.value = index;
+  pinnedMinimapIndex.value = index;
+}
+
+function clearHoveredMinimapIndex() {
+  cancelMinimapHoverClear();
+  hoveredMinimapIndex.value = null;
+  pinnedMinimapIndex.value = null;
+}
+
+function keepHoveredMinimapIndex() {
+  cancelMinimapHoverClear();
+  if (pinnedMinimapIndex.value != null) {
+    hoveredMinimapIndex.value = pinnedMinimapIndex.value;
+  }
+}
+
+function cancelMinimapHoverClear() {
+  if (minimapHoverClearTimer !== null) {
+    window.clearTimeout(minimapHoverClearTimer);
+    minimapHoverClearTimer = null;
+  }
+}
+
+function scheduleMinimapHoverClear() {
+  cancelMinimapHoverClear();
+  minimapHoverClearTimer = window.setTimeout(() => {
+    hoveredMinimapIndex.value = null;
+    pinnedMinimapIndex.value = null;
+    minimapHoverClearTimer = null;
+  }, 90);
+}
+
+function handleMinimapRailLeave(event?: MouseEvent) {
+  const railEl = chatMinimapRailRef.value;
+  const nextTarget = event?.relatedTarget;
+  if (railEl && nextTarget instanceof Node && railEl.contains(nextTarget)) {
+    return;
+  }
+  scheduleMinimapHoverClear();
+}
+
+function minimapWaveClass(index: number) {
+  const hoveredIndex = hoveredMinimapIndex.value;
+  if (hoveredIndex == null) {
+    return '';
+  }
+  const distance = Math.abs(index - hoveredIndex);
+  if (distance === 0) {
+    return 'chat-minimap__item--wave-0';
+  }
+  if (distance === 1) {
+    return 'chat-minimap__item--wave-1';
+  }
+  if (distance === 2) {
+    return 'chat-minimap__item--wave-2';
+  }
+  if (distance === 3) {
+    return 'chat-minimap__item--wave-3';
+  }
+  return '';
+}
+
+function buildMinimapPreview(message: ChatMessageView | null) {
+  if (!message) {
+    return { user: '', assistant: '' };
+  }
+  return {
+    user: clampMinimapText(message.content),
+    assistant: clampMinimapText(findAssistantReplyForUser(message.localId)),
+  };
+}
+
+function findAssistantReplyForUser(localId: string) {
+  const sourceIndex = filteredMessages.value.findIndex((message) => message.localId === localId);
+  if (sourceIndex < 0) {
+    return '';
+  }
+  for (let i = sourceIndex + 1; i < filteredMessages.value.length; i += 1) {
+    const candidate = filteredMessages.value[i];
+    if (candidate?.role === 'assistant') {
+      return candidate.content;
+    }
+    if (candidate?.role === 'user') {
+      break;
+    }
+  }
+  return '';
+}
+
+function clampMinimapText(content: string) {
+  const normalized = (content || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.length > 84 ? normalized.slice(0, 84) + '...' : normalized;
+}
+
+async function restoreScrollPosition(sessionId: number) {
+  await nextTick();
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+  const container = messagesContainerRef.value;
+  if (!container) {
+    return;
+  }
+  const savedPosition = sessionScrollPositions.value[sessionId];
+  if (typeof savedPosition === 'number') {
+    container.scrollTop = savedPosition;
+    syncMinimapViewport();
+    return;
+  }
+  container.scrollTop = 0;
+  syncMinimapViewport();
+}
+
+function attachAssistantNavigation(navigationUrl: string) {
+  const sessionId = currentAssistantMessageSessionId.value;
+  if (sessionId && currentAssistantMessageId.value) {
+    updateSessionMessage(sessionId, currentAssistantMessageId.value, (message) => {
+      message.navigationUrl = navigationUrl;
+    });
+  }
+}
+
+function removePendingAssistant() {
+  if (!currentAssistantMessageId.value) {
+    return;
+  }
+  removeSessionMessage(currentAssistantMessageSessionId.value, currentAssistantMessageId.value);
+  currentAssistantMessageId.value = null;
+  currentAssistantMessageSessionId.value = null;
+}
+
+async function handleModelChange(value: string) {
+  selectedModelKey.value = value;
+  if (!selectedSessionId.value) {
+    return;
+  }
+  try {
+    const selectedModel = parseModelKey(value);
+    const { data } = await updateAgentSession(selectedSessionId.value, {
+      modelProvider: selectedModel.provider,
+      model: selectedModel.model,
+    });
+    replaceSession(data);
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '切换模型失败');
+  }
+}
+
+async function ensureActiveSessionModelSynced(sessionId: number) {
+  const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+  const active = sessions.value.find((item) => item.id === sessionId);
+  if (active?.modelProvider === selectedModel.provider && active?.model === selectedModel.model) {
+    return;
+  }
+  const { data } = await updateAgentSession(sessionId, {
+    modelProvider: selectedModel.provider,
+    model: selectedModel.model,
+  });
+  replaceSession(data);
+}
+
+async function handleSessionMenuSelect(key: string | number, session: AgentSessionResponse) {
+  if (key === 'rename') {
+    openRenameSession(session);
+    return;
+  }
+  if (key === 'delete') {
+    await handleDeleteSession(session);
+  }
+}
+
+function readStoredBoolean(key: string, fallback: boolean) {
+  if (typeof window === 'undefined') {
+    return fallback;
+  }
+  const value = window.localStorage.getItem(key);
+  if (value == null) {
+    return fallback;
+  }
+  return value === 'true';
+}
+
+function setStoredBoolean(key: string, value: boolean) {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(key, String(value));
+  }
+}
+
+function setChatSidebarCollapsed(collapsed: boolean) {
+  chatSidebarCollapsed.value = collapsed;
+  setStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, collapsed);
+}
+
+function openRenameSession(session: AgentSessionResponse) {
+  renameSessionId.value = session.id;
+  renameDraft.value = session.title || '';
+  renameModalVisible.value = true;
+}
+
+async function confirmRenameSession() {
+  const title = renameDraft.value.trim();
+  if (!renameSessionId.value || !title) {
+    ui.message.warning('请输入会话名称');
+    return;
+  }
+  try {
+    renaming.value = true;
+    const { data } = await updateAgentSession(renameSessionId.value, { title });
+    replaceSession(data);
+    renameModalVisible.value = false;
+    ui.message.success('宸查噸鍛藉悕');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '重命名失败');
+  } finally {
+    renaming.value = false;
+  }
+}
+
+async function handleDeleteSession(session: AgentSessionResponse) {
+  if (sending.value) {
+    ui.message.warning('当前正在回复，暂不能删除会话');
+    return;
+  }
+  const sessionTitle = session.title || ('会话 #' + session.id);
+  if (!window.confirm('确定删除「' + sessionTitle + '」吗？')) {
+    return;
+  }
+  try {
+    await deleteAgentSession(session.id);
+    sessions.value = sessions.value.filter((item) => item.id !== session.id);
+    if (selectedSessionId.value === session.id) {
+      const next = sessions.value[0];
+      if (next) {
+        await selectSession(next.id);
+      } else {
+        clearSessionSelection();
+      }
+    }
+    ui.message.success('已删除会话');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '删除会话失败');
+  }
+}
+
+function replaceSession(session: AgentSessionResponse) {
+  const index = sessions.value.findIndex((item) => item.id === session.id);
+  if (index >= 0) {
+    sessions.value.splice(index, 1, session);
+  } else {
+    sessions.value = [session, ...sessions.value];
+  }
+}
+
+async function afterSendFinished(sessionId: number) {
+  sending.value = false;
+  collapseCurrentProcessMessage();
+  const processMessage = findSessionMessage(currentProcessMessageSessionId.value, currentProcessMessageId.value);
+  currentAssistantMessageId.value = null;
+  currentAssistantMessageSessionId.value = null;
+  await reloadCurrentMessages(sessionId);
+  if (!hasProcessMessageAfterLatestUser(sessionId)) {
+    insertProcessMessageAfterLatestUser(sessionId, processMessage);
+  }
+  currentProcessMessageId.value = null;
+  currentProcessMessageSessionId.value = null;
+  const { data } = await listSessions();
+  sessions.value = data;
+  if (!sessions.value.some((item) => item.id === sessionId)) {
+    clearSessionSelection();
+    return;
+  }
+  applySelectedSession(sessionId);
+  const active = sessions.value.find((item) => item.id === selectedSessionId.value);
+  if (selectedSessionId.value === sessionId && active?.modelProvider && active?.model) {
+    selectedModelKey.value = toModelKey(active.modelProvider, active.model);
+  }
+}
+
+function applySelectedSession(sessionId: number | null) {
+  selectedSessionId.value = sessionId;
+  if (sessionId == null) {
+    clearStoredSessionId();
+    replaceRouteSessionId(null);
+    messages.value = [];
+    return;
+  }
+  storeSelectedSessionId(sessionId);
+  replaceRouteSessionId(sessionId);
+}
+
+function clearSessionSelection() {
+  selectedSessionId.value = null;
+  messages.value = [];
+  currentPlan.value = null;
+  clearStoredSessionId();
+  replaceRouteSessionId(null);
+}
+
+function resolvePreferredSessionId(items: AgentSessionResponse[]) {
+  const candidates = [
+    parseSessionId(route.query.sessionId),
+    readStoredSessionId(),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && items.some((item) => item.id === candidate)) {
+      return candidate;
+    }
+  }
+  return items[0]?.id || null;
+}
+
+function parseSessionId(value: unknown) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string' && typeof raw !== 'number') {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function readStoredSessionId() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  return parseSessionId(window.localStorage.getItem(SESSION_STORAGE_KEY));
+}
+
+function storeSelectedSessionId(sessionId: number) {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, String(sessionId));
+  }
+}
+
+function clearStoredSessionId() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  }
+}
+
+function replaceRouteSessionId(sessionId: number | null) {
+  const currentSessionId = parseSessionId(route.query.sessionId);
+  if (currentSessionId === sessionId) {
+    return;
+  }
+  const nextQuery = { ...route.query };
+  if (sessionId == null) {
+    delete nextQuery.sessionId;
+  } else {
+    nextQuery.sessionId = String(sessionId);
+  }
+  void router.replace({ query: nextQuery });
+}
+
+function buildChatWebSocketUrl(token: string) {
+  const wsOrigin = window.location.origin.replace(/^http/, 'ws');
+  return wsOrigin + '/api/v1/ws/chat?token=' + encodeURIComponent(token);
+}
+
+function buildPlanAssistantContent(plan: AgentPlanResponse) {
+  const lines = [
+    '计划执行状态：' + plan.status,
+    plan.summary ? ('摘要：' + plan.summary) : '',
+    '',
+    '步骤：',
+    ...plan.steps.map((step) => '- [' + step.status + '] ' + step.stepKey + ' ' + (step.title || step.description) + (step.errorMessage ? ('：' + step.errorMessage) : '')),
+  ].filter(Boolean);
+  if (plan.errorMessage) {
+    lines.push('', '错误：' + plan.errorMessage);
+  }
+  return lines.join('\n');
+}
+
+function artifactIconLabel(artifact: ChatArtifactCard) {
+  const type = (artifact.artifactType || '').toUpperCase();
+  if (type === 'TEXT') {
+    return 'TXT';
+  }
+  return 'MD';
+}
+
+async function previewArtifact(artifact: ChatArtifactCard) {
+  previewingArtifactId.value = artifact.id;
+  try {
+    const { data } = await getArtifact(artifact.id);
+    artifactPreviewTitle.value = data.title || artifact.title || artifact.downloadFilename;
+    artifactPreviewType.value = data.artifactType || artifact.artifactType || 'MARKDOWN';
+    artifactPreviewContent.value = data.content || '';
+    artifactPreviewVisible.value = true;
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '预览文档失败');
+  } finally {
+    previewingArtifactId.value = null;
+  }
+}
+
+async function downloadArtifactCard(artifact: ChatArtifactCard) {
+  downloadingArtifactId.value = artifact.id;
+  try {
+    const { data, headers } = await downloadArtifact(artifact.id);
+    const filename = filenameFromDisposition(headers['content-disposition']) || artifact.downloadFilename || `artifact-${artifact.id}.md`;
+    const blob = new Blob([data], { type: artifact.downloadContentType || data.type || 'text/markdown;charset=UTF-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    ui.message.success('下载已开始');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '下载文档失败');
+  } finally {
+    downloadingArtifactId.value = null;
+  }
+}
+
+async function saveArtifactCardToKnowledge(artifact: ChatArtifactCard) {
+  savingArtifactId.value = artifact.id;
+  try {
+    const { data } = await saveArtifactToKnowledge(artifact.id);
+    ui.message.success(`已存入知识库：${data.filename || '文档 #' + data.documentId}`);
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '存入知识库失败');
+  } finally {
+    savingArtifactId.value = null;
+  }
+}
+
+function filenameFromDisposition(disposition?: string | null) {
+  if (!disposition) {
+    return '';
+  }
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].replace(/"/g, ''));
+  }
+  const plainMatch = /filename="?([^";]+)"?/i.exec(disposition);
+  return plainMatch?.[1] || '';
+}
+
+function toViewMessage(message: AgentMessageResponse): ChatMessageView {
+  const content = message.content || '';
+  const role = normalizeRole(message.role);
+  return {
+    localId: 'server-' + message.id,
+    role,
+    content,
+    createdAt: message.createdAt,
+    toolCallsJson: message.toolCallsJson,
+    navigationUrl: extractNavigationUrl(content),
+    processOpen: role === 'process' ? false : undefined,
+    processDone: role === 'process' ? true : undefined,
+  };
+}
+
+function buildViewMessages(serverMessages: AgentMessageResponse[]) {
+  if (serverMessages.some((message) => normalizeRole(message.role) === 'process')) {
+    const result: ChatMessageView[] = [];
+    let latestUserCreatedAt: string | null = null;
+    let pendingToolNames: string[] = [];
+    let pendingArtifacts: ChatArtifactCard[] = [];
+    for (const serverMessage of serverMessages) {
+      const viewMessage = toViewMessage(serverMessage);
+      if (isAssistantToolCallMessage(viewMessage)) {
+        pendingToolNames.push(...summarizeToolRequestProcess(viewMessage).toolNames);
+        continue;
+      }
+      if (viewMessage.role === 'tool') {
+        const toolPayload = parseJsonObject(viewMessage.content);
+        const artifact = extractArtifactFromToolResult(pendingToolNames.shift(), toolPayload);
+        if (artifact) {
+          pendingArtifacts = [...pendingArtifacts, artifact];
+        }
+        continue;
+      }
+      if (viewMessage.role === 'user') {
+        latestUserCreatedAt = viewMessage.createdAt || null;
+      }
+      if (viewMessage.role === 'process' && viewMessage.processElapsedMs == null) {
+        viewMessage.processElapsedMs = elapsedBetween(latestUserCreatedAt, viewMessage.createdAt);
+      }
+      if (viewMessage.role === 'assistant' && pendingArtifacts.length > 0) {
+        viewMessage.artifacts = pendingArtifacts;
+        pendingArtifacts = [];
+      }
+      result.push(viewMessage);
+    }
+    return result;
+  }
+
+  const result: ChatMessageView[] = [];
+  let pendingProcess: {
+    ids: number[];
+    lines: string[];
+    toolNames: string[];
+    startedAt: string | null;
+    endedAt: string | null;
+  } | null = null;
+  let pendingArtifacts: ChatArtifactCard[] = [];
+
+  const flushProcess = () => {
+    if (!pendingProcess || pendingProcess.lines.length === 0) {
+      pendingProcess = null;
+      return;
+    }
+    const ids = pendingProcess.ids.length ? pendingProcess.ids.join('-') : String(Date.now());
+    result.push({
+      localId: 'process-server-' + ids,
+      role: 'process',
+      content: pendingProcess.lines.join('\n\n'),
+      createdAt: pendingProcess.endedAt || pendingProcess.startedAt,
+      processOpen: false,
+      processDone: true,
+      processElapsedMs: elapsedBetween(pendingProcess.startedAt, pendingProcess.endedAt),
+    });
+    pendingProcess = null;
+  };
+
+  for (const serverMessage of serverMessages) {
+    const viewMessage = toViewMessage(serverMessage);
+    if (isAssistantToolCallMessage(viewMessage)) {
+      pendingProcess ||= { ids: [], lines: [], toolNames: [], startedAt: null, endedAt: null };
+      const summary = summarizeToolRequestProcess(viewMessage);
+      pendingProcess.ids.push(serverMessage.id);
+      pendingProcess.lines.push(...summary.lines);
+      pendingProcess.toolNames.push(...summary.toolNames);
+      pendingProcess.startedAt ||= serverMessage.createdAt;
+      pendingProcess.endedAt = serverMessage.createdAt;
+      continue;
+    }
+    if (viewMessage.role === 'tool') {
+      pendingProcess ||= { ids: [], lines: [], toolNames: [], startedAt: null, endedAt: null };
+      pendingProcess.ids.push(serverMessage.id);
+      const toolName = pendingProcess.toolNames.shift();
+      const toolPayload = parseJsonObject(viewMessage.content);
+      pendingProcess.lines.push(formatToolResultProcess(viewMessage, toolName, toolPayload));
+      const artifact = extractArtifactFromToolResult(toolName, toolPayload);
+      if (artifact) {
+        pendingArtifacts = [...pendingArtifacts, artifact];
+      }
+      pendingProcess.startedAt ||= serverMessage.createdAt;
+      pendingProcess.endedAt = serverMessage.createdAt;
+      continue;
+    }
+    flushProcess();
+    if (viewMessage.role === 'assistant' && pendingArtifacts.length > 0) {
+      viewMessage.artifacts = pendingArtifacts;
+      pendingArtifacts = [];
+    }
+    result.push(viewMessage);
+  }
+  flushProcess();
+  return result;
+}
+
+function summarizeToolRequestProcess(message: ChatMessageView) {
+  const calls = parseToolCalls(message.toolCallsJson);
+  if (calls.length === 0) {
+    return {
+      lines: ['正在选择合适的工具。'],
+      toolNames: [],
+    };
+  }
+  const toolNames = calls.map((call) => call.function?.name || 'unknown_tool');
+  return {
+    lines: toolNames.map((name) => toolRequestLabel(name)),
+    toolNames,
+  };
+}
+
+function formatAssistantToolCallProcess(message: ChatMessageView) {
+  return summarizeToolRequestProcess(message).lines.join('\n');
+}
+
+function formatToolResultProcess(message: ChatMessageView, toolName?: string | null, payload = parseJsonObject(message.content)) {
+  if (payload?.success === false) {
+    return '工具调用未完成，已尝试继续处理。';
+  }
+  return toolResultLabel(toolName, payload);
+}
+
+function toolRequestLabel(toolName: string) {
+  if (toolName === 'write_document') {
+    return '正在生成可下载文档。';
+  }
+  switch (toolName) {
+    case 'search_knowledge':
+      return '正在检索知识库。';
+    case 'search_web':
+      return '正在联网搜索资料。';
+    case 'recommend_literature':
+      return '正在检索并整理相关文献。';
+    case 'literature_search_start':
+      return '正在创建文献检索任务。';
+    case 'literature_search_status':
+      return '正在查看文献检索进度。';
+    case 'literature_search_result':
+      return '正在读取文献检索结果。';
+    case 'literature_search_cancel':
+    case 'paper_task_cancel':
+      return '正在取消后台任务。';
+    case 'paper_polish_status':
+      return '正在查看论文润色进度。';
+    case 'paper_polish_result':
+      return '正在读取论文润色结果。';
+    default:
+      return '正在调用辅助工具。';
+  }
+}
+
+function toolResultLabel(toolName?: string | null, payload?: Record<string, any> | null) {
+  if (toolName === 'write_document') {
+    return payload?.artifactId ? '文档已生成，可以预览、下载或存入知识库。' : '文档生成工具已完成。';
+  }
+  const count = extractResultCount(payload);
+  switch (toolName) {
+    case 'search_knowledge':
+      return count > 0 ? '知识库检索完成，找到 ' + count + ' 个相关片段。' : '知识库检索完成，未找到明显相关片段。';
+    case 'search_web':
+      return count > 0 ? '联网搜索完成，获取 ' + count + ' 条候选结果。' : '联网搜索完成，未获取到可靠结果。';
+    case 'recommend_literature':
+    case 'literature_search_result':
+      return count > 0 ? '文献检索完成，找到 ' + count + ' 条候选文献。' : '文献检索完成，暂未找到候选文献。';
+    case 'literature_search_start':
+      return '文献检索任务已创建。';
+    case 'literature_search_status':
+    case 'paper_polish_status':
+      return formatTaskStatus(payload) || '后台任务状态已更新。';
+    case 'literature_search_cancel':
+    case 'paper_task_cancel':
+      return '后台任务已取消。';
+    case 'paper_polish_result':
+      return '论文润色结果已读取。';
+    default:
+      return count > 0 ? '工具调用完成，获取 ' + count + ' 条结果。' : '工具调用完成。';
+  }
+}
+
+function parseToolCalls(value?: string | null): ToolCallSnapshot[] {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonObject(value?: string | null): Record<string, any> | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractArtifactFromToolResult(toolName?: string | null, payload?: Record<string, any> | null): ChatArtifactCard | null {
+  if (toolName !== 'write_document' || !payload || payload.success === false) {
+    return null;
+  }
+  const artifactId = Number(payload.artifactId);
+  if (!Number.isFinite(artifactId) || artifactId <= 0) {
+    return null;
+  }
+  return {
+    id: artifactId,
+    title: String(payload.title || payload.downloadFilename || `Artifact #${artifactId}`),
+    artifactType: String(payload.artifactType || 'MARKDOWN'),
+    downloadUrl: String(payload.downloadUrl || `/api/v1/artifacts/${artifactId}/download`),
+    downloadFilename: String(payload.downloadFilename || `artifact-${artifactId}.md`),
+    downloadContentType: String(payload.downloadContentType || 'text/markdown;charset=UTF-8'),
+    preview: typeof payload.preview === 'string' ? payload.preview : null,
+  };
+}
+
+function extractResultCount(payload?: Record<string, any> | null) {
+  if (!payload) {
+    return 0;
+  }
+  const direct = payload.resultCount ?? payload.count ?? payload.total ?? payload.totalCount;
+  if (typeof direct === 'number' && Number.isFinite(direct)) {
+    return Math.max(0, direct);
+  }
+  for (const key of ['items', 'results', 'chunks', 'documents', 'papers', 'citations']) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      return value.length;
+    }
+  }
+  return 0;
+}
+
+function formatTaskStatus(payload?: Record<string, any> | null) {
+  if (!payload) {
+    return '';
+  }
+  const rawStatus = String(payload.status || payload.state || '').toLowerCase();
+  if (!rawStatus) {
+    return '';
+  }
+  if (['completed', 'success', 'done', 'finished'].includes(rawStatus)) {
+    return '后台任务已完成。';
+  }
+  if (['failed', 'error'].includes(rawStatus)) {
+    return '后台任务执行失败。';
+  }
+  if (['cancelled', 'canceled'].includes(rawStatus)) {
+    return '后台任务已取消。';
+  }
+  return '后台任务仍在处理中。';
+}
+
+function isAssistantToolCallMessage(message: ChatMessageView) {
+  return message.role === 'assistant'
+    && Boolean(message.toolCallsJson);
+}
+
+function hasProcessMessageAfterLatestUser(sessionId: number) {
+  const sessionMessages = messagesBySessionId.value[sessionId] || [];
+  const latestUserIndex = sessionMessages.map((message) => message.role).lastIndexOf('user');
+  if (latestUserIndex < 0) {
+    return false;
+  }
+  return sessionMessages.slice(latestUserIndex + 1).some((message) => message.role === 'process');
+}
+
+function normalizeRole(role: string): MessageRole {
+  switch ((role || '').toLowerCase()) {
+    case 'assistant':
+      return 'assistant';
+    case 'system':
+      return 'system';
+    case 'tool':
+      return 'tool';
+    case 'process':
+      return 'process';
+    default:
+      return 'user';
+  }
+}
+
+function getMessageSegments(content: string): MessageSegment[] {
+  const source = content || '';
+  const fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+  const regex = new RegExp(fence + '([\\\\w-]+)?\\\\n([\\\\s\\\\S]*?)' + fence, 'g');
+  const segments: MessageSegment[] = [];
+  let lastIndex = 0;
+  let matched: RegExpExecArray | null;
+
+  while ((matched = regex.exec(source)) !== null) {
+    const [fullMatch, , codeContent] = matched;
+    const start = matched.index;
+    if (start > lastIndex) {
+      const text = source.slice(lastIndex, start).trim();
+      if (text) {
+        segments.push({ type: 'text', content: text });
+      }
+    }
+    segments.push({ type: 'code', content: codeContent.trimEnd() });
+    lastIndex = start + fullMatch.length;
+  }
+
+  if (lastIndex < source.length) {
+    const text = source.slice(lastIndex).trim();
+    if (text) {
+      segments.push({ type: 'text', content: text });
+    }
+  }
+
+  return segments.length > 0 ? segments : [{ type: 'text', content: source }];
+}
+
+function processSummaryLabel(message: ChatMessageView) {
+  if (!message.processDone) {
+    return '处理中';
+  }
+  return message.processElapsedMs != null
+    ? '已处理 ' + formatProcessElapsed(message.processElapsedMs)
+    : '已处理';
+}
+
+function formatProcessElapsed(value: number) {
+  const totalSeconds = Math.max(0, Math.round(value / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) {
+    return seconds + 's';
+  }
+  return minutes + 'm' + String(seconds).padStart(2, '0') + 's';
+}
+
+function elapsedBetween(start?: string | null, end?: string | null) {
+  if (!start || !end) {
+    return null;
+  }
+  const startTime = new Date(start).getTime();
+  const endTime = new Date(end).getTime();
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) {
+    return null;
+  }
+  return Math.max(0, endTime - startTime);
+}
+
+function extractNavigationUrl(content?: string | null) {
+  const source = content || '';
+  const matched = source.match(/\/paper(?:\?[^\s]+)?/);
+  return matched?.[0] || null;
+}
+
+function toModelKey(provider: string, model: string) {
+  return (provider || 'deepseek') + '::' + (model || DEFAULT_DEEPSEEK_MODEL);
+}
+
+function parseModelKey(key: string) {
+  const [provider, ...modelParts] = (key || '').split('::');
+  const fallback = defaultModelKeyFromSettings(settings.value);
+  if (!provider || modelParts.length === 0) {
+    return parseModelKey(fallback === key ? toModelKey('deepseek', DEFAULT_DEEPSEEK_MODEL) : fallback);
+  }
+  return {
+    provider,
+    model: modelParts.join('::') || DEFAULT_DEEPSEEK_MODEL,
+  };
+}
+
+function defaultModelKeyFromSettings(currentSettings: UserSettingsResponse | null) {
+  const provider = currentSettings?.defaultProvider || 'deepseek';
+  const customModel = currentSettings?.customModels?.find((item) => item.providerKey === provider);
+  const model = customModel?.modelName || (provider === 'glm'
+    ? (currentSettings?.glmModel || DEFAULT_GLM_MODEL)
+    : (currentSettings?.deepseekModel || DEFAULT_DEEPSEEK_MODEL));
+  return toModelKey(provider, model);
+}
+
+function formatProviderName(provider: string) {
+  const lower = (provider || '').toLowerCase();
+  if (lower === 'glm') return 'GLM';
+  if (lower === 'deepseek') return 'DeepSeek';
+  return provider;
+}
+
+function formatSessionUpdatedAt(value: string) {
+  const updatedAt = new Date(value);
+  if (Number.isNaN(updatedAt.getTime())) {
+    return '未知';
+  }
+  const diffMs = Date.now() - updatedAt.getTime();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) {
+    return '刚刚';
+  }
+  if (diffMs < hour) {
+    return String(Math.floor(diffMs / minute)) + ' 分钟前';
+  }
+  if (diffMs < day) {
+    return String(Math.floor(diffMs / hour)) + ' 小时前';
+  }
+  if (diffMs < 7 * day) {
+    return String(Math.floor(diffMs / day)) + ' 天前';
+  }
+  return updatedAt.toLocaleDateString();
+}
+
+function goToNavigation(navigationUrl: string) {
+  void router.push(navigationUrl);
+}
+</script>

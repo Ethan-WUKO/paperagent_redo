@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Roadmap 基线文档
+    url: https://github.com/Ethan-WOKO/paperagent_redo/blob/main/memory-bank/agent-product-reconstruction-roadmap.md
+    about: 创建实现、设计或 spike issue 前，请先阅读该文档。

@@ -1,0 +1,101 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3307/yanban_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: ${MYSQL_USER:yanban}
+    password: ${MYSQL_PASSWORD:yanban_password}
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: ${REDIS_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+yanban:
+  project:
+    # Local IDEA use only. Remote/shared deployments must leave this false.
+    allow-local-absolute-project-folders: ${YANBAN_PROJECT_ALLOW_LOCAL_ABSOLUTE_PROJECT_FOLDERS:true}
+  model:
+    deepseek:
+      api-url: ${DEEPSEEK_API_URL:https://api.deepseek.com/v1/chat/completions}
+      models-url: ${DEEPSEEK_MODELS_URL:https://api.deepseek.com/models}
+      api-key: ${DEEPSEEK_API_KEY:}
+      model: ${DEEPSEEK_MODEL:deepseek-chat}
+      temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+      max-tokens: ${DEEPSEEK_MAX_TOKENS:4096}
+      timeout: 60s
+    glm:
+      api-url: ${GLM_API_URL:https://open.bigmodel.cn/api/paas/v4/chat/completions}
+      api-key: ${GLM_API_KEY:}
+      model: ${GLM_MODEL:glm-5.2}
+      temperature: ${GLM_TEMPERATURE:0.7}
+      max-tokens: ${GLM_MAX_TOKENS:4096}
+      timeout: 60s
+    openrouter:
+      api-url: ${OPENROUTER_API_URL:https://openrouter.ai/api/v1/chat/completions}
+      api-key: ${OPENROUTER_API_KEY:}
+      hy3-free-model: ${OPENROUTER_HY3_FREE_MODEL:tencent/hy3:free}
+      hy3-model: ${OPENROUTER_HY3_MODEL:tencent/hy3}
+  knowledge:
+    elasticsearch:
+      endpoint: ${YANBAN_ES_ENDPOINT:http://localhost:9200}
+      index-name: ${YANBAN_ES_INDEX:yanban-kb-chunks-v1}
+      vector-dimensions: ${YANBAN_ES_VECTOR_DIMS:1024}
+    embedding:
+      api-url: ${YANBAN_EMBEDDING_API_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings}
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: ${YANBAN_EMBEDDING_MODEL:text-embedding-v4}
+      timeout: 30s
+    minio:
+      endpoint: ${YANBAN_MINIO_ENDPOINT:http://localhost:9000}
+      access-key: ${MINIO_ROOT_USER:yanbanminio}
+      secret-key: ${MINIO_ROOT_PASSWORD:yanban_minio_password}
+      bucket: ${YANBAN_MINIO_BUCKET:yanban-agent}
+      secure: ${YANBAN_MINIO_SECURE:false}
+  paper:
+    literature:
+      open-alex-api-key: ${OPENALEX_API_KEY:}
+      open-alex-max-results-per-query: ${OPENALEX_MAX_RESULTS_PER_QUERY:20}
+    model:
+      provider: ${YANBAN_PAPER_MODEL_PROVIDER:}
+      model: ${YANBAN_PAPER_MODEL:}
+      api-url: ${YANBAN_PAPER_MODEL_API_URL:}
+      api-key: ${YANBAN_PAPER_MODEL_API_KEY:}
+    storage:
+      bucket: ${YANBAN_PAPER_BUCKET:${YANBAN_MINIO_BUCKET:yanban-agent}}
+      object-prefix: ${YANBAN_PAPER_OBJECT_PREFIX:paper/originals}
+      prefer-minio: ${YANBAN_PAPER_PREFER_MINIO:true}
+      local-root: ${YANBAN_PAPER_LOCAL_ROOT:data/paper-storage}
+  agent:
+    web-search:
+      provider: ${WEB_SEARCH_PROVIDER:duckduckgo}
+      endpoint: ${WEB_SEARCH_DUCKDUCKGO_ENDPOINT:https://duckduckgo.com/html/}
+      timeout: ${WEB_SEARCH_TIMEOUT:12s}
+      max-results: ${WEB_SEARCH_MAX_RESULTS:8}
+      cache-ttl: ${WEB_SEARCH_CACHE_TTL:30m}
+      fallback-to-duck-duck-go: ${WEB_SEARCH_FALLBACK_TO_DUCKDUCKGO:true}
+      tavily:
+        endpoint: ${TAVILY_API_URL:https://api.tavily.com/search}
+        api-key: ${TAVILY_API_KEY:}
+        search-depth: ${TAVILY_SEARCH_DEPTH:basic}
+        auto-parameters: ${TAVILY_AUTO_PARAMETERS:false}
+        topic: ${TAVILY_TOPIC:general}
+        include-answer: ${TAVILY_INCLUDE_ANSWER:false}
+        include-raw-content: ${TAVILY_INCLUDE_RAW_CONTENT:false}
+        include-images: ${TAVILY_INCLUDE_IMAGES:false}
+        include-usage: ${TAVILY_INCLUDE_USAGE:true}
+  mcp:
+    github:
+      enabled: ${YANBAN_MCP_GITHUB_ENABLED:false}
+      command: ${YANBAN_MCP_GITHUB_COMMAND:cmd,/c,npx,-y,@modelcontextprotocol/server-github}
+      allowed-commands: ${YANBAN_MCP_GITHUB_ALLOWED_COMMANDS:cmd,npx,node}
+      request-timeout: 20s
+    filesystem:
+      enabled: ${YANBAN_MCP_FILESYSTEM_ENABLED:true}
+      command: ${YANBAN_MCP_FILESYSTEM_COMMAND:cmd,/c,npx,-y,@modelcontextprotocol/server-filesystem}
+      allowed-commands: ${YANBAN_MCP_FILESYSTEM_ALLOWED_COMMANDS:cmd,npx,node}
+      request-timeout: 20s

@@ -1,0 +1,30 @@
+\documentclass{article}
+\title{Evidence-Grounded Literature Assistance for LaTeX Papers}
+\author{Yanban Evaluation Team}
+\keywords{scientific writing, literature review, grounded generation}
+\begin{document}
+\maketitle
+
+\section{Abstract}
+This paper studies an assistant that helps authors revise LaTeX manuscripts while keeping citations and mathematical expressions intact. The assistant combines section-level polishing with evidence-grounded literature suggestions.
+
+\section{Introduction}
+Recent large language models can improve scientific writing fluency, but unconstrained generation may invent citations or alter technical notation. Retrieval-augmented methods reduce hallucination by grounding generated text in external documents\cite{lewis2020rag}. However, paper revision also requires preserving LaTeX structures such as Equation~\ref{eq:score} and figure references.
+
+\section{Method}
+For each section, protected LaTeX spans are masked before generation. The quality score is defined as
+\begin{equation}
+S = \alpha G + (1-\alpha) P,
+\label{eq:score}
+\end{equation}
+where $G$ denotes grounding and $P$ denotes placeholder preservation.
+
+\section{Discussion}
+The current prototype focuses on text and bibliographic evidence. It does not yet evaluate figures or tables with a multimodal model.
+
+\section{Conclusion}
+A grounded revision assistant should improve readability without compromising traceability. Future work will add compile-time validation and human-in-the-loop patch acceptance.
+
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}

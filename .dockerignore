@@ -1,0 +1,14 @@
+**/target/
+**/node_modules/
+**/dist/
+**/.vite/
+**/.pnpm-store/
+.git/
+.env
+.env.*
+!.env.example
+storage/
+logs/
+uploads/
+tmp/
+docs/evaluation/runs/
