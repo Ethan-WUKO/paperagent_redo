@@ -2,11 +2,12 @@
 
 > 文档状态：执行中
 > 创建日期：2026-07-12
-> 当前工程基线：`7ef6ecff0cd831abf1345aaf29c86436b75f5769`
+> 已审查工程基线：`da8eaf6`（Project Markdown 与输出格式修复）
+> Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
 > 当前发布状态：`ENGINEERING_GATE_PASSED / LOCAL_ACCEPTANCE_PENDING`
 > 设计依据：《通用 Agent Runtime 设计》《通用 Agent Runtime 实施方案与进度》
 
-> 夜间串行进度：前序 Project 变更已于 2026-07-12 完成主对话复审，结论 `ACCEPTED`。独立验证为 Markdown fixtures 6/6、frontend build 通过、后端冻结定向回归 38/38。下一步仅启动 Worker 1“MVP 本地验收矩阵”；在新 baseline commit 形成前不得启动。
+> 夜间串行进度：前序 Project 变更已于 2026-07-12 完成主对话复审，结论 `ACCEPTED`。独立验证为 Markdown fixtures 6/6、frontend build 通过、后端冻结定向回归 38/38。已形成工程基线 `da8eaf6`；下一步仅启动 Worker 1“MVP 本地验收矩阵”。
 
 ## 1. 目标与边界
 
