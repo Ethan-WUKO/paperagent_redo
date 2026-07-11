@@ -87,6 +87,34 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
+    void projectRequestReceivesCoherentMarkdownFormattingInstruction() {
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
+                .thenReturn(answer("bounded answer"));
+        LangChain4jToolCallingStrategy strategy = new LangChain4jToolCallingStrategy(
+                chatModel, toolProvider(new ToolRegistry()), objectMapper);
+        AgentRuntimeRequest projectRequest = request(List.of(), 0, 0)
+                .withProjectContext(new ProjectRuntimeContext(8L, 42L));
+
+        strategy.run(projectRequest);
+
+        ArgumentCaptor<ChatRequest> requestCaptor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel).chat(requestCaptor.capture(), any(AgentRuntimeRequest.class));
+        String projectPrompt = requestCaptor.getValue().messages().stream()
+                .filter(message -> message instanceof dev.langchain4j.data.message.SystemMessage)
+                .map(message -> ((dev.langchain4j.data.message.SystemMessage) message).text())
+                .filter(prompt -> prompt.contains("authenticated read-only Project"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(projectPrompt.replaceAll("\\s+", " "))
+                .contains("one coherent final answer")
+                .contains("short standalone phrase")
+                .contains("space after the heading marker")
+                .contains("Never format a complete sentence or paragraph as a heading")
+                .contains("hyphen followed by a space");
+    }
+
+    @Test
     void blocksDuplicateToolCallsBeyondBudget() {
         ToolRegistry registry = new ToolRegistry().register(new StubToolExecutor("search_web", objectMapper));
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);

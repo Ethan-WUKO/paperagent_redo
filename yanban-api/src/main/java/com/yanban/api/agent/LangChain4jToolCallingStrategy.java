@@ -49,6 +49,12 @@ public class LangChain4jToolCallingStrategy {
             For a directory overview, use the manifest to locate candidates, then inspect relevant files
             and clearly distinguish path-based inference from file-content findings. Never claim a complete
             review beyond the observations retrieved in this turn.
+
+            Return one coherent final answer rather than separate answers or concatenated drafts. When using
+            Markdown, keep every heading to a short standalone phrase on its own line, put a space after the
+            heading marker (for example, "## Purpose"), and start the explanatory prose on a new line below it.
+            Never format a complete sentence or paragraph as a heading. Use a hyphen followed by a space ("- ")
+            for unordered list items.
             """;
     private static final String TOOL_BUDGET_FINAL_ANSWER_PROMPT = """
             The tool-call budget has been reached. Do not call any more tools.

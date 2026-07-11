@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "test:markdown": "node --test tests/markdownNormalization.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

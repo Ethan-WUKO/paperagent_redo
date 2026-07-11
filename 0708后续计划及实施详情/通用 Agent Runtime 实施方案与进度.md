@@ -922,3 +922,12 @@ worker 提交报告后，主对话至少检查：
 - 安全范围没有变化：没有新增 Project 文件写入、Apply、移动、重命名、递归删除或命令执行能力；Agent、Evidence、Candidate、WebSocket 与普通 API 继续只投影 Project 内相对路径。未新增 migration。
 - 独立整合回归：Project path/controller/delete、Runtime/Reflection/Evidence、Project React/Plan、Candidate、普通与 Project WebSocket 共 19 类 **123 tests，0 failures，0 errors，0 skipped，BUILD SUCCESS**。`scripts/Invoke-MvpReleaseGate.ps1` exit 0，聚合结果 **160 tests，0 failures，0 errors，0 skipped**；Surefire fork JVM 退出等待与 Mockito 动态 agent 仍为既有测试基础设施 warning。前端 `npm.cmd run build` exit 0，`vue-tsc -b && vite build`，2975 modules transformed；仅保留既有 large-chunk warning。测试过程没有启动或占用 8080/5173 服务。
 - 残余风险：真实模型仍可能拒绝 read/search；此时系统会返回单个 `INSUFFICIENT_EVIDENCE`，不会降低证据门。修复前已经持久化的重复消息不会自动删除，用户应在 Project 页点击 `New conversation`；旧 Session 仍作为 Workspace 历史保留。Project WebSocket 握手和 evidence current 投影会使用现有 manifest 校验，大型但仍在 traversal limit 内的 Project 可能有额外首包延迟。
+
+### 2026-07-12：Project 回答 Markdown 与字体层级修复
+
+- 对截图对应的真实会话做只读核对：该请求只有一个 completed turn 和一条 chat-visible final assistant；其他 assistant/tool 行均是隐藏的工具过程。Project streaming 仍只发送 verifier 选出的单一 canonical answer，64-code-point chunks 精确重组并在 done 时由完整 `assistantContent` 覆盖。本次不修改回答聚合、repair、streaming 或 Evidence 逻辑。
+- 根因是模型返回 malformed Markdown：短标题之外，又把完整正文写成 `##长段落`，并把列表写成 `-内容`。原 `MarkdownMessage` 会无条件修复无空格 heading，而 Project 正文 12px、全局 h2 18px/粗体/下边框，造成视觉上类似多份答案拼接。
+- 新增共享 `markdownNormalization.mjs`：代码围栏、inline code、四空格/Tab 缩进代码保持原样；无空格短标题补空格；句子长度/正文标点命中的伪标题降级为普通段落；Project variant 还会防御已经带空格的长伪标题，避免影响 Workspace/Artifact 中合法的长标题；仅保守修正中文或 Markdown inline 起始的 `-内容`，负数、命令参数和分隔线不变。`MarkdownMessage` 继续在 Markdown-It 后经 DOMPurify 输出。
+- Project assistant typography 单独调整为正文 14px，h1/h2/h3 为 18/16/15px，收紧标题间距并移除 h2 强分隔线；Workspace 与其他页面样式不变。
+- Project system prompt 新增格式约束：只返回一份连贯 final answer；标题必须为短独立短语、单独一行且 `#` 后留空格；正文另起行；禁止整句/整段充当标题；无序列表使用 `- `。
+- 回归：真实 assistant 形态与 code/list/heading 边界 Node fixture **6 tests，6 passed**，并直接断言最终 HTML 只有一个 h2 和三个 li；`npm.cmd run build` 通过（2976 modules，仅既有 large-chunk warning）；`LangChain4jToolCallingStrategyTest,CompletionVerifierTest,ProjectAgentRuntimeStreamingTest,ProjectChatWebSocketHandlerTest` 共 **38 tests，0 failures，0 errors，0 skipped，BUILD SUCCESS**。未启动 8080/5173。
