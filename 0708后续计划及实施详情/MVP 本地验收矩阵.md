@@ -1,7 +1,7 @@
 # MVP 本地验收矩阵
 
-> 适用基线：`f53313a8cc57bb254994faa93bef4662476ceab3`。  
-> 范围：Project 只读 MVP 的本地发布与科研用户验收；不授予文件写入、命令执行、网络、真实模型、Pro 或多 Agent 权限。  
+> 适用基线：`f53313a8cc57bb254994faa93bef4662476ceab3`。
+> 范围：Project 只读 MVP 的本地发布与科研用户验收；不授予文件写入、命令执行、网络、真实模型、Pro 或多 Agent 权限。
 > 冻结契约：受信任的 authenticated principal 与 route-bound `projectId`；受控本地绑定可使用绝对路径，但 Agent/Evidence/Candidate/UI 的普通投影只使用 Project 内相对路径；Candidate 永远 `NOT_APPLIED`。
 
 ## 判定方式与失败等级

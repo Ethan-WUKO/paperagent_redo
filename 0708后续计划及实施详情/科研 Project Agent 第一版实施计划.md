@@ -3,6 +3,7 @@
 > 文档状态：执行中
 > 创建日期：2026-07-12
 > 已审查工程基线：`da8eaf6`（Project Markdown 与输出格式修复）
+> Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
 > 当前发布状态：`ENGINEERING_GATE_PASSED / LOCAL_ACCEPTANCE_PENDING`
 > 设计依据：《通用 Agent Runtime 设计》《通用 Agent Runtime 实施方案与进度》
