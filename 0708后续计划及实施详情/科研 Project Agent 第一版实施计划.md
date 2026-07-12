@@ -5,11 +5,12 @@
 > 已审查工程基线：`da8eaf6`（Project Markdown 与输出格式修复）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
+> Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
 > 当前发布状态：`ENGINEERING_GATE_PASSED / LOCAL_ACCEPTANCE_PENDING`
 > 设计依据：《通用 Agent Runtime 设计》《通用 Agent Runtime 实施方案与进度》
 
-> 夜间串行进度：Worker 1“MVP 本地验收矩阵”和 Worker 2“科研工具与结构化索引契约”均已完成主对话复审。Worker 2 独立 core 定向测试为 29/29，完整离线发布门为 Java 170/170、frontend 6/6、exit 0。五个科研工具仍为 `CONTRACT_ONLY`，没有 executor、注册或动态暴露。下一步仅启动 Worker 3“第一批低风险只读科研工具”。
+> 夜间串行进度：Worker 1“MVP 本地验收矩阵”、Worker 2“科研工具与结构化索引契约”、Worker 3“第一批低风险只读科研工具”均已完成主对话复审。Worker 3 独立定向测试为 Core 29/29、API 154/154（合计 183/183），完整离线发布门为 Java 172/172、frontend 6/6、exit 0。五个科研工具已在 PROJECT + READ_ONLY + 精确 allowedTools 治理下实现并接入 DIRECT/REACT/PLAN Evidence 闭环；本地人工科研验收仍待用户完成。按当前任务边界不自动启动 Worker 4。
 
 ## 1. 目标与边界
 
@@ -382,13 +383,16 @@ Worker 开发
 
 前置条件：Worker 2 验收通过。
 
-状态：`READY_AFTER_BASELINE_COMMIT`
+状态：`ACCEPTED_READ_ONLY_IMPLEMENTATION / LOCAL_MANUAL_ACCEPTANCE_PENDING`
 
 - LaTeX outline。
 - BibTeX audit。
 - Code symbols。
 - Experiment summary。
 - Cross-material search。
+- 主对话复审：权限/路径、manifest-read TOCTOU、typed Evidence、预算、EMPTY/PARTIAL/TRUNCATED/PARSE_FAILED、DIRECT/REACT/PLAN、deny-all 与旧 Project 工具兼容均通过。
+- 独立测试：Core 29/29、API 154/154；完整发布门 Java 172/172、frontend 6/6。
+- 工程基线：`1fc1e0f`。
 
 ### Worker 4：Task Workspace 设计与最小骨架
 
