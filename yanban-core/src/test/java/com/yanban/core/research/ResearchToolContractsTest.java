@@ -37,7 +37,10 @@ class ResearchToolContractsTest {
             assertThat(contract.definition().parameters().path("additionalProperties").asBoolean()).isFalse();
             assertThat(contract.inputPolicy().allowedFields()).doesNotContain("projectId", "userId", "capability");
             assertThat(contract.outputSchema().toString()).doesNotContain("projectId", "userId", "capability", "absolutePath");
-            assertThat(contract.outputSchema().path("properties").path("items").path("items").path("additionalProperties").asBoolean()).isFalse();
+            JsonNode itemSchema = contract.outputSchema().path("properties").path("items").path("items");
+            if (itemSchema.has("oneOf")) {
+                itemSchema.path("oneOf").forEach(schema -> assertThat(schema.path("additionalProperties").asBoolean()).isFalse());
+            } else assertThat(itemSchema.path("additionalProperties").asBoolean()).isFalse();
         }
         assertItemProperties(ResearchToolContracts.PROJECT_LATEX_OUTLINE, "kind", "identifier", "detail", "content");
         assertItemProperties(ResearchToolContracts.PROJECT_BIBTEX_AUDIT, "issue", "citationKey", "detail", "content");
@@ -186,7 +189,9 @@ class ResearchToolContractsTest {
     }
 
     private void assertItemProperties(String name, String... fields) {
-        JsonNode properties = ResearchToolContracts.byName(name).outputSchema().path("properties").path("items").path("items").path("properties");
+        JsonNode itemSchema = ResearchToolContracts.byName(name).outputSchema().path("properties").path("items").path("items");
+        if (itemSchema.has("oneOf")) itemSchema = itemSchema.path("oneOf").get(0);
+        JsonNode properties = itemSchema.path("properties");
         for (String field : fields) assertThat(properties.has(field)).isTrue();
     }
 
@@ -208,6 +213,7 @@ class ResearchToolContractsTest {
             case CODE_SYMBOL -> new CodeSymbolItem("METHOD", "pkg.Main.run", "pkg.Helper", content);
             case EXPERIMENT_SUMMARY -> new ExperimentSummaryItem("CSV_METRIC", "accuracy", "0.95", content);
             case CROSS_MATERIAL_LINK -> new CrossMaterialLinkItem("learning rate", "configured-by", List.of(evidence(), evidence()), content);
+            case LITERAL_MATCH -> new LiteralMatchItem("learning", ProjectRelativePath.of("paper/main.tex"), 1, content);
         };
     }
 

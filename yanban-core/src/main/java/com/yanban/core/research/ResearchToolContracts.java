@@ -44,9 +44,9 @@ public final class ResearchToolContracts {
                             + "For a large or unfamiliar Project, first call project_manifest, select concrete relevant files, "
                             + "then pass them in relativePaths; prefer maxMatches 10-20 to control input and result cost. "
                             + "Do not repeatedly search the entire Project after an input/result byte-budget error.",
-                    policy(Set.of("query"), Set.of("query", "relativePaths", "maxMatches"),
+                    policy(Set.of("query"), Set.of("query", "relativePaths", "maxMatches", "caseSensitive"),
                             Map.of("relativePaths", 50), Map.of("relativePaths", 256), Map.of("query", 200),
-                            Set.of("relativePaths"), Set.of(),
+                            Set.of("relativePaths"), Set.of("caseSensitive"),
                             Map.of("maxMatches", new ResearchToolInputPolicy.IntegerRange(1, 100))),
                     ResearchToolItemType.CROSS_MATERIAL_LINK, new ResearchBudget(50, 100, 300, 5_000_000))
     );
@@ -124,7 +124,13 @@ public final class ResearchToolContracts {
         ObjectNode status = properties.putObject("status"); status.put("type", "string");
         ArrayNode statusValues = status.putArray("enum");
         for (ResearchToolResultState value : ResearchToolResultState.values()) statusValues.add(value.name());
-        ObjectNode items = properties.putObject("items"); items.put("type", "array"); items.set("items", itemSchema(itemType));
+        ObjectNode items = properties.putObject("items"); items.put("type", "array");
+        if (itemType == ResearchToolItemType.CROSS_MATERIAL_LINK) {
+            ObjectNode alternatives = JsonNodeFactory.instance.objectNode();
+            alternatives.putArray("oneOf").add(itemSchema(ResearchToolItemType.CROSS_MATERIAL_LINK))
+                    .add(itemSchema(ResearchToolItemType.LITERAL_MATCH));
+            items.set("items", alternatives);
+        } else items.set("items", itemSchema(itemType));
         properties.putObject("evidenceRefs").put("type", "array").set("items", evidenceSchema());
         properties.putObject("partial").put("type", "boolean");
         properties.putObject("truncated").put("type", "boolean");
@@ -149,6 +155,12 @@ public final class ResearchToolContracts {
                 strings(properties, required, "concept", "relation");
                 ObjectNode linked = properties.putObject("linkedEvidence"); linked.put("type", "array"); linked.put("minItems", 2); linked.set("items", evidenceSchema());
                 required.add("linkedEvidence");
+            }
+            case LITERAL_MATCH -> {
+                strings(properties, required, "query");
+                properties.putObject("relativePath").put("type", "string").put("minLength", 1);
+                properties.putObject("lineNumber").put("type", "integer").put("minimum", 1);
+                required.add("relativePath").add("lineNumber");
             }
         }
         properties.set("content", untrustedContentSchema()); required.add("content");

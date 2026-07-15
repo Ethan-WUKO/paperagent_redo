@@ -170,6 +170,37 @@ class ResearchProjectToolExecutorTest {
     }
 
     @Test
+    void crossMaterialSingleFileReturnsCaseInsensitiveLiteralMatchesWithEvidence() throws Exception {
+        ProjectService service = serviceWithFixture(); authorizeAll();
+        Files.writeString(tempDir.resolve("server/study/paper.tex"), "Objective one\nSINR objective two\n");
+        var arguments = queryPaths("objective", "paper.tex").put("caseSensitive", false);
+
+        var result = new ProjectCrossMaterialSearchToolExecutor(service, json).execute(
+                new ToolCall("single", "project_cross_material_search", arguments));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output().path("status").asText()).isEqualTo("COMPLETE");
+        assertThat(result.output().path("items")).hasSize(2);
+        assertThat(result.output().path("items").get(0).path("relativePath").asText()).isEqualTo("paper.tex");
+        assertThat(result.output().path("items").get(0).path("lineNumber").asInt()).isEqualTo(1);
+        assertThat(result.output().path("evidenceRefs")).hasSize(2);
+    }
+
+    @Test
+    void crossMaterialMultiFileWithOnlyOneFileMatchingReturnsObservablePartial() throws Exception {
+        ProjectService service = serviceWithFixture(); authorizeAll();
+
+        var result = new ProjectCrossMaterialSearchToolExecutor(service, json).execute(
+                new ToolCall("one-sided", "project_cross_material_search",
+                        queryPaths("learning_rate", "paper.tex", "Main.java")));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output().path("status").asText()).isEqualTo("PARTIAL");
+        assertThat(result.output().path("items").get(0).path("relativePath").asText()).isEqualTo("paper.tex");
+        assertThat(result.output().path("errorCode").asText()).isEqualTo("PARTIAL_RESULT");
+    }
+
+    @Test
     void largeProjectRequiresExplicitRelativePathsBeforeCrossMaterialSearch() {
         ProjectService service = org.mockito.Mockito.mock(ProjectService.class);
         when(service.manifest(7L, 42L)).thenReturn(new ProjectManifestResponse(

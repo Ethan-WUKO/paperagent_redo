@@ -251,6 +251,31 @@ class ProjectControllerIntegrationTest {
     }
 
     @Test
+    void browserFolderUploadPreservesUnicodeParenthesizedMultipartFilename() throws Exception {
+        ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
+        ProjectUploadService uploadService = mock(ProjectUploadService.class);
+        when(uploadService.upload(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyList(),
+                org.mockito.ArgumentMatchers.anyList())).thenReturn(
+                Project.managedUpload(7L, "Uploaded", projectRoot.toRealPath().toString(), "[\"**\"]", "[]"));
+        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service, null, uploadService))
+                .setControllerAdvice(new ProjectExceptionHandler()).setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
+
+        MockMultipartFile file = new MockMultipartFile("files",
+                "P-FDA-MIMO_v3(agent_test)/中文目录/波形(最终版).m", "text/plain", "safe".getBytes());
+        mockMvc.perform(multipart("/api/v1/projects").file(file).param("name", "Uploaded").param("includeRules", "**"))
+                .andExpect(status().isCreated());
+
+        org.mockito.ArgumentCaptor<List<org.springframework.web.multipart.MultipartFile>> files =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(uploadService).upload(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("Uploaded"), org.mockito.ArgumentMatchers.eq(List.of("**")),
+                org.mockito.ArgumentMatchers.eq(List.of()), files.capture());
+        assertThat(files.getValue().get(0).getOriginalFilename())
+                .isEqualTo("P-FDA-MIMO_v3(agent_test)/中文目录/波形(最终版).m");
+    }
+
+    @Test
     void deleteRemovesOnlyTheAuthenticatedUsersProjectBinding() throws Exception {
         mockMvc.perform(delete("/api/v1/projects/42"))
                 .andExpect(status().isNoContent());

@@ -20,6 +20,8 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -28,6 +30,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class MinioProjectObjectStorage implements ProjectObjectStorage {
 
+    private static final Logger log = LoggerFactory.getLogger(MinioProjectObjectStorage.class);
     private static final long MAX_MANIFEST_BYTES = 5L * 1024 * 1024;
 
     private final MinioClient minioClient;
@@ -72,6 +75,10 @@ public class MinioProjectObjectStorage implements ProjectObjectStorage {
             return new ProjectObjectEntry(portablePath, file.getSize(), Instant.now(),
                     HexFormat.of().formatHex(digest.digest()));
         } catch (Exception ex) {
+            log.error("Project object upload failed bucket={} objectKey={} sizeBytes={} contentType={} causeType={} causeMessage={}",
+                    bucket(), fileKey(safePrefix, portablePath), file == null ? null : file.getSize(),
+                    file == null ? null : contentType(file.getContentType()), rootCause(ex).getClass().getName(),
+                    safeCauseMessage(rootCause(ex)));
             throw unavailable("Project file upload failed", ex);
         }
     }
@@ -201,5 +208,20 @@ public class MinioProjectObjectStorage implements ProjectObjectStorage {
 
     private ResponseStatusException unavailable(String reason, Exception cause) {
         return new ResponseStatusException(HttpStatus.BAD_GATEWAY, reason, cause);
+    }
+
+    private Throwable rootCause(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) current = current.getCause();
+        return current;
+    }
+
+    static String safeCauseMessage(Throwable error) {
+        if (error == null || error.getMessage() == null) return null;
+        String message = error.getMessage()
+                .replaceAll("(?i)\\bbearer\\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>")
+                .replaceAll("(?i)\\b(access[_-]?key(?:[_-]?id)?|secret[_-]?key|authorization|token|password)\\b\\s*[:=]\\s*(\"[^\"]*\"|'[^']*'|[^,;\\s]+)",
+                        "$1=<redacted>");
+        return message.length() <= 500 ? message : message.substring(0, 500);
     }
 }

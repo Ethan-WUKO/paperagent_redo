@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -504,7 +505,7 @@ public class AgentService {
                     toolPolicy.resolved(),
                     toolPolicy.maxToolCalls(),
                     toolPolicy.maxDuplicateToolCalls(),
-                    MDC.get(TraceIdFilter.TRACE_ID_MDC_KEY),
+                    resolvedRuntimeTraceId(),
                     tokenConsumer,
                     processConsumer
             );
@@ -774,6 +775,17 @@ public class AgentService {
             log.warn("Failed to save agent context snapshot turnId={} sessionId={} userId={}",
                     turn.getId(), turn.getSessionId(), turn.getUserId(), ex);
         }
+    }
+
+    /**
+     * Servlet requests receive a trace id from {@link TraceIdFilter}. WebSocket messages run
+     * after the HTTP upgrade filter has restored MDC, so the runtime assembly must create a
+     * server-owned trace id for that production entry point instead of passing an unresolved
+     * request to the coordinator.
+     */
+    static String resolvedRuntimeTraceId() {
+        String traceId = MDC.get(TraceIdFilter.TRACE_ID_MDC_KEY);
+        return StringUtils.hasText(traceId) ? traceId : UUID.randomUUID().toString();
     }
 
     private void updateSessionSummaryAfterSuccess(AgentSession session,

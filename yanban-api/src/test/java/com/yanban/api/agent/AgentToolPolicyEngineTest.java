@@ -128,6 +128,7 @@ class AgentToolPolicyEngineTest {
 
         assertThat(decision.allowedTools()).containsExactly("project_read", "project_audit");
         assertThat(decision.allowedTools()).doesNotContain("project_write");
+        assertThat(decision.maxToolCalls()).isEqualTo(12);
     }
 
     @Test

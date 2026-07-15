@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.api.agent.ProjectAgentRuntimeService;
 import com.yanban.api.agent.SendMessageRequest;
 import com.yanban.api.agent.SendMessageResponse;
+import com.yanban.api.agent.AgentStopReason;
+import com.yanban.api.agent.CompletionStatus;
 import com.yanban.api.security.JwtUser;
 import java.io.IOException;
 import org.slf4j.Logger;
@@ -88,7 +90,7 @@ public class ProjectChatWebSocketHandler extends TextWebSocketHandler {
                     }
             );
 
-            if (!response.success()) {
+            if (!response.success() && !isControlledPartial(response)) {
                 if (response.debug() != null) {
                     sendSafe(session, WsChatEvent.debug(request.sessionId(), response.debug(), request.clientRequestId()));
                 }
@@ -161,6 +163,20 @@ public class ProjectChatWebSocketHandler extends TextWebSocketHandler {
             return DEFAULT_WS_ERROR;
         }
         return error;
+    }
+
+    private boolean isControlledPartial(SendMessageResponse response) {
+        return response != null
+                && response.completionStatus() == CompletionStatus.PARTIAL
+                && "PARTIAL".equals(response.outcome())
+                && isAllowedPartialStopReason(response.stopReason())
+                && StringUtils.hasText(response.assistantContent());
+    }
+
+    private boolean isAllowedPartialStopReason(AgentStopReason stopReason) {
+        return stopReason == AgentStopReason.TOOL_CALL_BUDGET_EXHAUSTED
+                || stopReason == AgentStopReason.MAX_STEPS_BUDGET_EXHAUSTED
+                || stopReason == AgentStopReason.PLAN_PARTIAL;
     }
 
     private void send(WebSocketSession session, WsChatEvent event) throws IOException {

@@ -121,8 +121,10 @@ class ProjectChatWebSocketHandlerTest {
                 .thenAnswer(invocation -> {
                     Consumer<String> canonical = invocation.getArgument(4);
                     canonical.accept("Useful bounded partial answer.");
-                    return new SendMessageResponse(true, "Useful bounded partial answer.", 3, null, null,
-                            List.of(), null, List.of(), CompletionStatus.PARTIAL,
+                    return new SendMessageResponse(false, "Useful bounded partial answer.", 3,
+                            "Tool-call budget exceeded: maxToolCalls=6", null,
+                            List.of(), null, List.of(new ProjectEvidenceResponse(
+                            "partial-e1", "paper.tex", "h1", "h1", "tool:call-1", true, true)), CompletionStatus.PARTIAL,
                             AgentStopReason.TOOL_CALL_BUDGET_EXHAUSTED, "PARTIAL");
                 });
         List<String> outbound = new ArrayList<>();
@@ -136,7 +138,48 @@ class ProjectChatWebSocketHandlerTest {
                 .contains("\"completionStatus\":\"PARTIAL\"")
                 .contains("\"stopReason\":\"TOOL_CALL_BUDGET_EXHAUSTED\"")
                 .contains("\"outcome\":\"PARTIAL\"")
+                .contains("\"relativePath\":\"paper.tex\"")
                 .doesNotContain("\"type\":\"error\"");
+    }
+
+    @Test
+    void partialWithoutCanonicalAnswerRemainsFailClosedAsError() throws Exception {
+        ProjectAgentRuntimeService runtime = mock(ProjectAgentRuntimeService.class);
+        ProjectChatWebSocketHandler handler = new ProjectChatWebSocketHandler(new ObjectMapper(), runtime);
+        when(runtime.sendStreaming(
+                eq(7L), eq(18L), eq(34L), any(),
+                Mockito.<Consumer<String>>any(), Mockito.<Consumer<String>>any()))
+                .thenReturn(new SendMessageResponse(false, null, 3, "Budget exhausted before synthesis", null,
+                        List.of(), null, List.of(), CompletionStatus.PARTIAL,
+                        AgentStopReason.TOOL_CALL_BUDGET_EXHAUSTED, "PARTIAL"));
+        List<String> outbound = new ArrayList<>();
+
+        handler.handleTextMessage(session(7L, 18L, outbound), new TextMessage(
+                "{\"sessionId\":34,\"content\":\"inspect broadly\",\"clientRequestId\":\"request-empty-partial\"}"));
+
+        assertThat(outbound).hasSize(2);
+        assertThat(outbound.get(1)).contains("\"type\":\"error\"")
+                .doesNotContain("\"type\":\"done\"");
+    }
+
+    @Test
+    void runtimeExceptionPartialWithCanonicalTextRemainsFailClosedAsError() throws Exception {
+        ProjectAgentRuntimeService runtime = mock(ProjectAgentRuntimeService.class);
+        ProjectChatWebSocketHandler handler = new ProjectChatWebSocketHandler(new ObjectMapper(), runtime);
+        when(runtime.sendStreaming(
+                eq(7L), eq(18L), eq(34L), any(),
+                Mockito.<Consumer<String>>any(), Mockito.<Consumer<String>>any()))
+                .thenReturn(new SendMessageResponse(false, "Stale text emitted before the exception.", 3,
+                        "Runtime execution failed", null, List.of(), null, List.of(), CompletionStatus.PARTIAL,
+                        AgentStopReason.RUNTIME_EXCEPTION, "PARTIAL"));
+        List<String> outbound = new ArrayList<>();
+
+        handler.handleTextMessage(session(7L, 18L, outbound), new TextMessage(
+                "{\"sessionId\":34,\"content\":\"inspect\",\"clientRequestId\":\"request-runtime-partial\"}"));
+
+        assertThat(outbound).hasSize(2);
+        assertThat(outbound.get(1)).contains("\"type\":\"error\"")
+                .doesNotContain("\"type\":\"done\"");
     }
 
     private WebSocketSession session(Long userId, Long projectId, List<String> outbound) throws Exception {

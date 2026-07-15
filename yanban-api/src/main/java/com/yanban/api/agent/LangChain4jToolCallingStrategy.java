@@ -32,6 +32,8 @@ import org.springframework.util.StringUtils;
 public class LangChain4jToolCallingStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(LangChain4jToolCallingStrategy.class);
+    private static final int PROJECT_TOOL_EXTENSION_BATCH = 4;
+    private static final int PROJECT_TOOL_HARD_LIMIT = 24;
     private static final Set<String> ASYNC_NON_TERMINAL_STATES = Set.of("RUNNING", "WAITING");
     private static final Set<String> ASYNC_TERMINAL_STATES = Set.of(
             "COMPLETED", "DONE", "SUCCEEDED", "FAILED", "ERROR", "CANCELLED", "STOPPED");
@@ -110,11 +112,16 @@ public class LangChain4jToolCallingStrategy {
         List<String> toolTrace = new ArrayList<>();
         List<String> fallbacks = new ArrayList<>();
         Map<String, InvocationState> invocationStates = new LinkedHashMap<>();
+        Set<String> verifiedObservations = new LinkedHashSet<>();
         Set<String> allowedTools = new LinkedHashSet<>(request.toolPolicy().allowedTools());
         ToolProviderResult toolProviderResult = toolProvider.provideTools(request);
         List<ToolSpecification> toolSpecifications = new ArrayList<>(toolProviderResult.tools().keySet());
         TokenUsage totalUsage = null;
         int toolCalls = 0;
+        int effectiveToolLimit = request.toolPolicy().maxToolCalls();
+        int successfulCallsSinceExtension = 0;
+        boolean adaptiveProjectBudget = request.projectContext() != null
+                && request.toolPolicy().maxToolCalls() >= 12;
         log.info("LangChain4j tool run start sessionId={} userId={} model={} allowedTools={} maxSteps={} maxToolCalls={} maxDuplicateToolCalls={}",
                 request.sessionId(),
                 request.userId(),
@@ -189,8 +196,22 @@ public class LangChain4jToolCallingStrategy {
                             repeatError);
                     continue;
                 }
-                if (toolCalls >= request.toolPolicy().maxToolCalls()) {
-                    String error = "Tool-call budget exceeded: maxToolCalls=" + request.toolPolicy().maxToolCalls();
+                if (toolCalls >= effectiveToolLimit && adaptiveProjectBudget
+                        && successfulCallsSinceExtension > 0 && effectiveToolLimit < PROJECT_TOOL_HARD_LIMIT) {
+                    int previousLimit = effectiveToolLimit;
+                    effectiveToolLimit = Math.min(PROJECT_TOOL_HARD_LIMIT,
+                            effectiveToolLimit + PROJECT_TOOL_EXTENSION_BATCH);
+                    successfulCallsSinceExtension = 0;
+                    fallbacks.add("Project tool budget extended after verified progress: "
+                            + previousLimit + "->" + effectiveToolLimit);
+                    log.info("Project tool budget extended sessionId={} previousLimit={} effectiveLimit={} hardLimit={}",
+                            request.sessionId(), previousLimit, effectiveToolLimit, PROJECT_TOOL_HARD_LIMIT);
+                }
+                if (toolCalls >= effectiveToolLimit) {
+                    String error = adaptiveProjectBudget
+                            ? "Tool-call budget exceeded: effectiveMaxToolCalls=" + effectiveToolLimit
+                                    + ", hardMaxToolCalls=" + PROJECT_TOOL_HARD_LIMIT
+                            : "Tool-call budget exceeded: maxToolCalls=" + effectiveToolLimit;
                     fallbacks.add(error);
                     addSkippedToolResults(messages, toolTrace, requests, i, step + 1, error);
                     return finalAnswerWithoutMoreTools(messages, toolTrace, fallbacks, step + 1, totalUsage, request, error)
@@ -207,6 +228,10 @@ public class LangChain4jToolCallingStrategy {
                             + toolRequest.name());
                 }
                 invocationStates.put(signature, InvocationState.after(previous, toolRequest.id(), toolResult));
+                if (toolResult.success() && !toolResult.scopeRefinementRequired()
+                        && registerVerifiedNewObservation(toolResult.content(), verifiedObservations)) {
+                    successfulCallsSinceExtension++;
+                }
                 log.info("LangChain4j tool step={} tool={} args={} success={} error={}",
                         step + 1,
                         toolRequest.name(),
@@ -485,6 +510,26 @@ public class LangChain4jToolCallingStrategy {
             // Tool content remains available in the transcript; trace summaries are best effort only.
         }
         return "";
+    }
+
+    private boolean registerVerifiedNewObservation(String content, Set<String> observed) {
+        if (!StringUtils.hasText(content)) return false;
+        try {
+            JsonNode result = objectMapper.readTree(content);
+            boolean added = registerArrayEntries(result.path("items"), "item:", observed);
+            return registerArrayEntries(result.path("evidenceRefs"), "evidence:", observed) || added;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean registerArrayEntries(JsonNode values, String prefix, Set<String> observed) {
+        if (!values.isArray() || values.isEmpty()) return false;
+        boolean added = false;
+        for (JsonNode value : values) {
+            added |= observed.add(prefix + value.toString());
+        }
+        return added;
     }
 
     private String reusedToolResult(InvocationState previous, String reason) {

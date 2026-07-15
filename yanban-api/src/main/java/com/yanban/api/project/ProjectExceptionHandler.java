@@ -34,11 +34,17 @@ class ProjectExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<ProjectErrorResponse> responseStatus(ResponseStatusException exception) {
         int status = exception.getStatusCode().value();
-        String code = status == HttpStatus.BAD_GATEWAY.value()
-                ? "PROJECT_PLAN_FAILED" : "PROJECT_REQUEST_FAILED";
         String message = StringUtils.hasText(exception.getReason())
                 ? exception.getReason() : "Project request failed (HTTP " + status + ").";
+        String code = status == HttpStatus.BAD_GATEWAY.value()
+                ? isStorageFailure(message) ? "PROJECT_STORAGE_UNAVAILABLE" : "PROJECT_PLAN_FAILED"
+                : "PROJECT_REQUEST_FAILED";
         return ResponseEntity.status(exception.getStatusCode())
                 .body(new ProjectErrorResponse(code, message));
+    }
+
+    private boolean isStorageFailure(String message) {
+        return message.startsWith("Project file ") || message.startsWith("Project manifest ")
+                || message.startsWith("Project object ");
     }
 }

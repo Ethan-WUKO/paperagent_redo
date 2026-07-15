@@ -596,6 +596,71 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
+    void productionProjectBudgetExtendsAfterUniqueSuccessfulProgress() {
+        ToolRegistry registry = new ToolRegistry().register(
+                new ProjectResearchStubToolExecutor("project_cross_material_search", objectMapper));
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
+                .thenReturn(toolCalls(
+                        toolRequest("p1", "project_cross_material_search", "{\"query\":\"q1\"}"),
+                        toolRequest("p2", "project_cross_material_search", "{\"query\":\"q2\"}"),
+                        toolRequest("p3", "project_cross_material_search", "{\"query\":\"q3\"}"),
+                        toolRequest("p4", "project_cross_material_search", "{\"query\":\"q4\"}"),
+                        toolRequest("p5", "project_cross_material_search", "{\"query\":\"q5\"}"),
+                        toolRequest("p6", "project_cross_material_search", "{\"query\":\"q6\"}"),
+                        toolRequest("p7", "project_cross_material_search", "{\"query\":\"q7\"}"),
+                        toolRequest("p8", "project_cross_material_search", "{\"query\":\"q8\"}"),
+                        toolRequest("p9", "project_cross_material_search", "{\"query\":\"q9\"}"),
+                        toolRequest("p10", "project_cross_material_search", "{\"query\":\"q10\"}"),
+                        toolRequest("p11", "project_cross_material_search", "{\"query\":\"q11\"}"),
+                        toolRequest("p12", "project_cross_material_search", "{\"query\":\"q12\"}"),
+                        toolRequest("p13", "project_cross_material_search", "{\"query\":\"q13\"}")))
+                .thenReturn(answer("All thirteen observations synthesized."));
+
+        AgentRuntimeResult result = new LangChain4jToolCallingStrategy(chatModel, toolProvider(registry), objectMapper)
+                .run(request(List.of("project_cross_material_search"), 12, 1)
+                        .withProjectContext(new ProjectRuntimeContext(8L, 42L)));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.toolTrace()).hasSize(13);
+        assertThat(result.fallbacks()).contains("Project tool budget extended after verified progress: 12->16");
+    }
+
+    @Test
+    void productionProjectBudgetDoesNotExtendAfterUniqueEmptyResults() {
+        ToolRegistry registry = new ToolRegistry().register(
+                new EmptyProjectResearchStubToolExecutor("project_cross_material_search", objectMapper));
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
+                .thenReturn(toolCalls(
+                        toolRequest("e1", "project_cross_material_search", "{\"query\":\"q1\"}"),
+                        toolRequest("e2", "project_cross_material_search", "{\"query\":\"q2\"}"),
+                        toolRequest("e3", "project_cross_material_search", "{\"query\":\"q3\"}"),
+                        toolRequest("e4", "project_cross_material_search", "{\"query\":\"q4\"}"),
+                        toolRequest("e5", "project_cross_material_search", "{\"query\":\"q5\"}"),
+                        toolRequest("e6", "project_cross_material_search", "{\"query\":\"q6\"}"),
+                        toolRequest("e7", "project_cross_material_search", "{\"query\":\"q7\"}"),
+                        toolRequest("e8", "project_cross_material_search", "{\"query\":\"q8\"}"),
+                        toolRequest("e9", "project_cross_material_search", "{\"query\":\"q9\"}"),
+                        toolRequest("e10", "project_cross_material_search", "{\"query\":\"q10\"}"),
+                        toolRequest("e11", "project_cross_material_search", "{\"query\":\"q11\"}"),
+                        toolRequest("e12", "project_cross_material_search", "{\"query\":\"q12\"}"),
+                        toolRequest("e13", "project_cross_material_search", "{\"query\":\"q13\"}")))
+                .thenReturn(answer("The twelve completed searches returned no matches; the thirteenth was not executed."));
+
+        AgentRuntimeResult result = new LangChain4jToolCallingStrategy(chatModel, toolProvider(registry), objectMapper)
+                .run(request(List.of("project_cross_material_search"), 12, 1)
+                        .withProjectContext(new ProjectRuntimeContext(8L, 42L)));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.runtimeStopSignal()).isEqualTo(AgentRuntimeStopSignal.TOOL_CALL_BUDGET_EXHAUSTED);
+        assertThat(result.toolTrace()).hasSize(13);
+        assertThat(result.toolTrace()).filteredOn(value -> value.contains("success=true")).hasSize(12);
+        assertThat(result.toolTrace().get(12)).contains("success=false", "Tool-call budget exceeded");
+        assertThat(result.fallbacks()).doesNotContain("Project tool budget extended after verified progress: 12->16");
+    }
+
+    @Test
     void annotatedToolReceivesUserIdAsToolMemoryId() {
         ToolRegistry registry = new ToolRegistry().register(new UserAwareStubToolExecutor("search_knowledge", objectMapper));
         LangChain4jToolProvider provider = toolProvider(registry);
@@ -812,12 +877,40 @@ class LangChain4jToolCallingStrategyTest {
             output.put("status", "COMPLETE");
             output.putArray("items");
             ObjectNode evidence = output.putArray("evidenceRefs").addObject();
+            String query = call.arguments().path("query").asText();
+            int line = query.matches("q\\d+") ? Integer.parseInt(query.substring(1)) : 1;
             evidence.put("projectVersion", "a".repeat(64));
             evidence.put("relativePath", definition.name().equals("project_latex_outline") ? "paper.tex" : "notes.txt");
             evidence.put("fileHash", "b".repeat(64));
-            evidence.putObject("range").put("startLine", 1).put("endLine", 1);
+            evidence.putObject("range").put("startLine", line).put("endLine", line);
             evidence.put("parserVersion", "test@1");
             evidence.put("trustLabel", "SERVER_ATTESTED_METADATA");
+            return ToolResult.success(call.id(), call.name(), output);
+        }
+    }
+
+    private static final class EmptyProjectResearchStubToolExecutor implements ToolExecutor {
+        private final ToolDefinition definition;
+        private final ObjectMapper objectMapper;
+
+        private EmptyProjectResearchStubToolExecutor(String name, ObjectMapper objectMapper) {
+            this.objectMapper = objectMapper;
+            ObjectNode parameters = objectMapper.createObjectNode();
+            parameters.put("type", "object");
+            parameters.putObject("properties").putObject("query").put("type", "string");
+            parameters.putArray("required").add("query");
+            this.definition = new ToolDefinition(name, "empty project research stub", parameters);
+        }
+
+        @Override public ToolDefinition definition() { return definition; }
+        @Override public ToolDescriptor descriptor() { return visibleSyncDescriptor(definition.name()); }
+
+        @Override
+        public ToolResult execute(ToolCall call) {
+            ObjectNode output = objectMapper.createObjectNode();
+            output.put("status", "EMPTY");
+            output.putArray("items");
+            output.putArray("evidenceRefs");
             return ToolResult.success(call.id(), call.name(), output);
         }
     }

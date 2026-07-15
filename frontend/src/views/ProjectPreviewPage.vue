@@ -672,12 +672,15 @@ function revealFileInTree(path: string) {
 }
 
 function apiError(value: unknown) {
-  const item = value as { response?: { data?: { message?: string } }; message?: string };
+  const item = value as { response?: { data?: { code?: string; message?: string }; headers?: Record<string, string> }; message?: string };
   const message = item.response?.data?.message || item.message;
   if (message === 'Network Error') {
     return 'The upload connection was interrupted. Check the folder size and try again.';
   }
-  return message || 'Request failed.';
+  const code = item.response?.data?.code;
+  const traceId = item.response?.headers?.['x-trace-id'];
+  const details = [code, traceId ? `traceId=${traceId}` : null].filter(Boolean).join(', ');
+  return `${message || 'Request failed.'}${details ? ` (${details})` : ''}`;
 }
 
 function shortHash(value?: string) {

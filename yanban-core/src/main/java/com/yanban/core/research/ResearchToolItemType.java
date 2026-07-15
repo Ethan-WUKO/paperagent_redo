@@ -6,5 +6,6 @@ public enum ResearchToolItemType {
     BIBTEX_AUDIT,
     CODE_SYMBOL,
     EXPERIMENT_SUMMARY,
-    CROSS_MATERIAL_LINK
+    CROSS_MATERIAL_LINK,
+    LITERAL_MATCH
 }

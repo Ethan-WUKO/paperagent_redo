@@ -85,6 +85,21 @@ class ProjectUploadServiceTest {
                 List.of(oversized))).isInstanceOf(ProjectTraversalLimitException.class);
     }
 
+    @Test
+    void uploadPreservesUnicodeParenthesesAndNestedRelativePaths() {
+        MockMultipartFile source = new MockMultipartFile("files",
+                "P-FDA-MIMO_v3(agent_test)/中文目录/波形(最终版).m", "text/plain",
+                "disp('ok')".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        Project project = service.upload(7L, "极化滤波器", List.of("**"), List.of(), List.of(source));
+
+        assertThat(objectStorage.readManifest(project.getRootPath()))
+                .extracting(ProjectObjectEntry::path)
+                .containsExactly("中文目录/波形(最终版).m");
+        assertThat(objectStorage.readFile(project.getRootPath(), "中文目录/波形(最终版).m", 1024))
+                .isEqualTo("disp('ok')".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     private static final class InMemoryObjectStorage implements ProjectObjectStorage {
         private final String prefix = "projects/7/11111111-1111-1111-1111-111111111111";
         private final Map<String, byte[]> objects = new HashMap<>();

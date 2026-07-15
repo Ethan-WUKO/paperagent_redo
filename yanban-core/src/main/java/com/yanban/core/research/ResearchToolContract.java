@@ -29,7 +29,7 @@ public record ResearchToolContract(ToolDefinition definition, JsonNode outputSch
 
     /** Contract-only type/budget validation for a future executor result. */
     public void validateOutcome(ResearchToolOutcome outcome) {
-        if (outcome == null || outcome.items().stream().anyMatch(item -> item.itemType() != itemType)) {
+        if (outcome == null || outcome.items().stream().anyMatch(item -> !accepts(item.itemType()))) {
             throw new ResearchContractException(ResearchToolErrorCode.INTERNAL_CONTRACT_FAILURE,
                     "outcome item type does not match tool contract");
         }
@@ -45,5 +45,10 @@ public record ResearchToolContract(ToolDefinition definition, JsonNode outputSch
             }
         }
         budget.validate(outcome.budgetUsage());
+    }
+
+    private boolean accepts(ResearchToolItemType actual) {
+        return actual == itemType || (itemType == ResearchToolItemType.CROSS_MATERIAL_LINK
+                && actual == ResearchToolItemType.LITERAL_MATCH);
     }
 }

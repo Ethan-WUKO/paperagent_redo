@@ -13,6 +13,7 @@ public class AgentToolPolicyEngine {
 
     private static final String SEARCH_KNOWLEDGE = "search_knowledge";
     private static final int GENERAL_MAX_TOOL_CALLS = 6;
+    private static final int PROJECT_INITIAL_MAX_TOOL_CALLS = 12;
     private static final Set<String> LEGACY_CHAT_RESEARCH_PERMISSIONS = Set.of("research:web", "research:literature");
     private static final Set<String> HIDDEN_AGENT_TOOLS = Set.of(
             "literature_search_start",
@@ -78,7 +79,9 @@ public class AgentToolPolicyEngine {
                 : request.ragDisabled() ? "llm_native_tool_routing_rag_disabled"
                 : "llm_native_tool_routing";
         List<String> resolved = List.copyOf(allowed);
-        return new Decision(resolved, resolved.isEmpty() ? 0 : GENERAL_MAX_TOOL_CALLS, 1, reason);
+        int initialBudget = request.capabilityProfile() == ToolDescriptor.CapabilityProfile.PROJECT
+                ? PROJECT_INITIAL_MAX_TOOL_CALLS : GENERAL_MAX_TOOL_CALLS;
+        return new Decision(resolved, resolved.isEmpty() ? 0 : initialBudget, 1, reason);
     }
 
     private boolean isEligible(ToolDescriptor descriptor, ToolPolicyRequest request) {
