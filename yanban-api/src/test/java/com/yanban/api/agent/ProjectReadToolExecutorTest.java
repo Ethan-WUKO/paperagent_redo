@@ -42,6 +42,8 @@ class ProjectReadToolExecutorTest {
         assertThat(result.output().path("relativePath").asText()).isEqualTo("src/Main.java");
         assertThat(result.output().path("hash").asText()).isEqualTo(FILE_HASH);
         assertThat(result.output().path("projectVersion").asText()).isEqualTo(PROJECT_VERSION);
+        assertThat(result.output().path("parserVersion").asText())
+                .isEqualTo(ProjectReadFileToolExecutor.PARSER_VERSION);
         assertThat(result.output().path("trust").asText()).isEqualTo("UNTRUSTED");
         Mockito.verify(projects, Mockito.times(1)).manifest(7L, 11L);
     }
@@ -110,6 +112,9 @@ class ProjectReadToolExecutorTest {
         assertThat(result.output().path("hits").get(1).path("lineNumber").asInt()).isEqualTo(107);
         assertThat(result.output().path("hits")).allSatisfy(hit ->
                 assertThat(hit.path("projectVersion").asText()).isEqualTo(PROJECT_VERSION));
+        assertThat(result.output().path("hits")).allSatisfy(hit ->
+                assertThat(hit.path("parserVersion").asText())
+                        .isEqualTo(ProjectSearchToolExecutor.PARSER_VERSION));
         Mockito.verify(projects, Mockito.times(1)).manifest(7L, 11L);
     }
 

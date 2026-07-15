@@ -132,6 +132,24 @@ class AgentToolPolicyEngineTest {
     }
 
     @Test
+    void projectPolicyAllowsOnlyTheExactProposalCreateDescriptorAndChatCannotSeeIt() {
+        ToolRegistry registry = new ToolRegistry()
+                .register(candidateProposalStub(ProjectCandidateProposalToolExecutor.TOOL_NAME,
+                        ProjectCandidateProposalToolExecutor.CAPABILITY_DOMAIN,
+                        ProjectCandidateProposalToolExecutor.REQUIRED_PERMISSION))
+                .register(candidateProposalStub("project_write_candidate", "project-write", "project:read"));
+        AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry);
+
+        assertThat(engine.decideProject(null, null).allowedTools())
+                .containsExactly(ProjectCandidateProposalToolExecutor.TOOL_NAME);
+        assertThat(engine.decide("propose", true,
+                Set.of(ProjectCandidateProposalToolExecutor.TOOL_NAME)).allowedTools()).isEmpty();
+        assertThat(engine.decideProject(Set.of(), null).allowedTools()).isEmpty();
+        assertThat(engine.decideProject(Set.of(ProjectCandidateProposalToolExecutor.TOOL_NAME), Set.of()).allowedTools())
+                .isEmpty();
+    }
+
+    @Test
     void unknownSideEffectsAndHiddenInternalNamesFailClosed() {
         ToolRegistry registry = new ToolRegistry()
                 .register(new StubTool("unknown", ToolDescriptor.CapabilityProfile.CHAT,
@@ -234,6 +252,24 @@ class AgentToolPolicyEngineTest {
 
             @Override
             public ToolResult execute(ToolCall call) {
+                return ToolResult.success(call.id(), call.name(), objectMapper.createObjectNode());
+            }
+        };
+    }
+
+    private ToolExecutor candidateProposalStub(String name, String domain, String permission) {
+        ToolDefinition definition = new ToolDefinition(name,
+                "candidate proposal", objectMapper.createObjectNode().put("type", "object"));
+        return new ToolExecutor() {
+            @Override public ToolDefinition definition() { return definition; }
+            @Override public ToolDescriptor descriptor() {
+                return new ToolDescriptor(name, "v1", domain,
+                        List.of(ToolDescriptor.CapabilityProfile.PROJECT), List.of(permission),
+                        List.of(ToolDescriptor.ResourceScope.PROJECT), ToolDescriptor.SideEffectType.CREATE,
+                        ToolDescriptor.ConfirmationPolicy.NEVER, ToolDescriptor.AsyncMode.SYNC,
+                        ToolDescriptor.IdempotencyPolicy.NONE, ToolDescriptor.RepeatPolicy.DENY_SAME_INPUT, true);
+            }
+            @Override public ToolResult execute(ToolCall call) {
                 return ToolResult.success(call.id(), call.name(), objectMapper.createObjectNode());
             }
         };

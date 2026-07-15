@@ -12,6 +12,7 @@ import org.springframework.util.StringUtils;
 
 @Component
 public class ProjectReadFileToolExecutor extends AbstractProjectReadToolExecutor {
+    static final String PARSER_VERSION = "project-read-file@1";
     private final ToolDefinition definition;
     public ProjectReadFileToolExecutor(ProjectService projects, ObjectMapper objectMapper) {
         super(projects, objectMapper);
@@ -39,7 +40,8 @@ public class ProjectReadFileToolExecutor extends AbstractProjectReadToolExecutor
         String content = String.join("\n", java.util.Arrays.copyOfRange(lines, startLine - 1, endLine));
         ObjectNode output = objectMapper.createObjectNode(); evidence(output, project, file.path(), file.sha256());
         output.put("sizeBytes", file.sizeBytes()); output.put("modifiedAt", file.modifiedAt().toString());
-        output.put("startLine", startLine); output.put("endLine", endLine); output.put("content", content);
+        output.put("startLine", startLine); output.put("endLine", endLine);
+        output.put("parserVersion", PARSER_VERSION); output.put("content", content);
         return success(call, output, project.projectId(), file.path(), file.sha256());
     }
 }

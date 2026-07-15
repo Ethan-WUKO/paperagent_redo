@@ -13,6 +13,7 @@ import org.springframework.util.StringUtils;
 
 @Component
 public class ProjectSearchToolExecutor extends AbstractProjectReadToolExecutor {
+    static final String PARSER_VERSION = "project-search@1";
     private final ToolDefinition definition;
     public ProjectSearchToolExecutor(ProjectService projects, ObjectMapper objectMapper) {
         super(projects, objectMapper);
@@ -35,7 +36,7 @@ public class ProjectSearchToolExecutor extends AbstractProjectReadToolExecutor {
         List<ProjectSearchHit> hits = projects.search(project.userId(), project.projectId(), query, max);
         ObjectNode output = objectMapper.createObjectNode(); output.put("projectId", project.projectId());
         output.put("projectVersion", project.manifest().version()); output.put("query", query); output.put("trust", "UNTRUSTED");
-        var items = output.putArray("hits"); for (ProjectSearchHit hit : hits) { ObjectNode item = items.addObject(); evidence(item, project, hit.path(), hit.sha256()); item.put("lineNumber", hit.lineNumber()); item.put("line", hit.line()); }
+        var items = output.putArray("hits"); for (ProjectSearchHit hit : hits) { ObjectNode item = items.addObject(); evidence(item, project, hit.path(), hit.sha256()); item.put("lineNumber", hit.lineNumber()); item.put("parserVersion", PARSER_VERSION); item.put("line", hit.line()); }
         String version = hits.isEmpty() ? "no-hit" : hits.get(0).sha256();
         if (!hits.isEmpty()) evidence(output, project, hits.get(0).path(), version);
         return success(call, output, project.projectId(), "search:" + query, version);

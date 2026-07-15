@@ -596,7 +596,8 @@ public class AgentService {
                         projectEvidence(result),
                         completionStatus(result),
                         result.stopReason(),
-                        result.outcome()
+                        result.outcome(),
+                        result.candidateArtifact()
                 );
             }
 
@@ -614,7 +615,7 @@ public class AgentService {
                 return new SendMessageResponse(
                         false, result.assistantContent(), result.steps(), result.errorMessage(), null,
                         sendResponseMessages(saved), debugPayload, projectEvidence(result),
-                        completionStatus(result), result.stopReason(), result.outcome());
+                        completionStatus(result), result.stopReason(), result.outcome(), result.candidateArtifact());
             }
 
             return failTurn(

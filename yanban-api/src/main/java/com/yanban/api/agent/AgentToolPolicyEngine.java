@@ -52,7 +52,8 @@ public class AgentToolPolicyEngine {
                 // Research executors additionally re-attest ProjectService READ_ONLY ownership.
                 // This permission only makes a registered descriptor eligible; the resolved
                 // skill/step allow-list remains the final model and execution boundary.
-                Set.of("project:read", "research:project-read"),
+                Set.of("project:read", "research:project-read",
+                        ProjectCandidateProposalToolExecutor.REQUIRED_PERMISSION),
                 stepAllowedTools,
                 Set.of(ToolDescriptor.ResourceScope.PROJECT),
                 true));
@@ -85,17 +86,28 @@ public class AgentToolPolicyEngine {
     }
 
     private boolean isEligible(ToolDescriptor descriptor, ToolPolicyRequest request) {
+        boolean projectSideEffectAllowed = request.capabilityProfile() != ToolDescriptor.CapabilityProfile.PROJECT
+                || descriptor.sideEffectType() == ToolDescriptor.SideEffectType.NONE
+                || descriptor.sideEffectType() == ToolDescriptor.SideEffectType.READ_ONLY
+                || isCandidateProposalOnly(descriptor);
         return descriptor.modelVisible()
                 && descriptor.sideEffectType() != ToolDescriptor.SideEffectType.UNKNOWN
-                && (request.capabilityProfile() != ToolDescriptor.CapabilityProfile.PROJECT
-                    || descriptor.sideEffectType() == ToolDescriptor.SideEffectType.NONE
-                    || descriptor.sideEffectType() == ToolDescriptor.SideEffectType.READ_ONLY)
+                && projectSideEffectAllowed
                 && descriptor.confirmationPolicy() == ToolDescriptor.ConfirmationPolicy.NEVER
                 && descriptor.supportedProfiles().contains(request.capabilityProfile())
                 && request.userPermissions().containsAll(descriptor.requiredPermissions())
                 && request.availableResourceScopes().containsAll(descriptor.resourceScopes())
                 && !HIDDEN_AGENT_TOOLS.contains(descriptor.name())
                 && (!request.ragDisabled() || !SEARCH_KNOWLEDGE.equals(descriptor.name()));
+    }
+
+    private boolean isCandidateProposalOnly(ToolDescriptor descriptor) {
+        return ProjectCandidateProposalToolExecutor.TOOL_NAME.equals(descriptor.name())
+                && ProjectCandidateProposalToolExecutor.CAPABILITY_DOMAIN.equals(descriptor.capabilityDomain())
+                && descriptor.sideEffectType() == ToolDescriptor.SideEffectType.CREATE
+                && descriptor.requiredPermissions().equals(List.of(
+                        ProjectCandidateProposalToolExecutor.REQUIRED_PERMISSION))
+                && descriptor.resourceScopes().equals(List.of(ToolDescriptor.ResourceScope.PROJECT));
     }
 
     private Set<String> intersectIfExplicit(Set<String> candidates, Set<String> allowlist) {

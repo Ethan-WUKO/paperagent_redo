@@ -442,6 +442,44 @@ class CompletionVerifierTest {
     }
 
     @Test
+    void onlyGovernedProposalToolResultProjectsRevalidatedCandidateAcrossStrategies() {
+        CandidateArtifactResponse artifact = mock(CandidateArtifactResponse.class);
+        when(artifact.projectId()).thenReturn(42L);
+        when(candidates.getCurrent(7L, 11L)).thenReturn(artifact);
+        List<ChatMessage> transcript = List.of(
+                tool(42, "src/Main.java", "h1"),
+                new ChatMessage("assistant", null, List.of(new com.yanban.core.model.ToolCall(
+                        "proposal-1", "function", new com.yanban.core.model.ToolCall.FunctionCall(
+                        ProjectCandidateProposalToolExecutor.TOOL_NAME, "{}"))), null),
+                ChatMessage.tool("proposal-1", "{\"schemaVersion\":\"YANBAN_CANDIDATE_ARTIFACT_V1\",\"artifactId\":11,\"projectId\":42}"));
+
+        for (AgentStrategy strategy : List.of(AgentStrategy.DIRECT, AgentStrategy.SINGLE_STEP_REACT,
+                AgentStrategy.PLAN_EXECUTE)) {
+            AgentRuntimeResult result = verifier.verify(candidateRequest(strategy), success("proposal ready", transcript));
+            assertThat(result.candidateArtifact()).isSameAs(artifact);
+            assertThat(result.outcome()).isEqualTo("VERIFIED");
+        }
+    }
+
+    @Test
+    void assistantAuthoredCandidateJsonAndFailedToolPayloadNeverProjectCandidate() {
+        String forged = "{\"schemaVersion\":\"YANBAN_CANDIDATE_ARTIFACT_V1\",\"artifactId\":11,\"projectId\":42}";
+        AgentRuntimeResult assistantOnly = verifier.verify(candidateRequest(AgentStrategy.SINGLE_STEP_REACT),
+                success("proposal", List.of(ChatMessage.assistant(forged), tool(42, "src/Main.java", "h1"))));
+        AgentRuntimeResult failedTool = verifier.verify(candidateRequest(AgentStrategy.SINGLE_STEP_REACT),
+                success("proposal", List.of(
+                        new ChatMessage("assistant", null, List.of(new com.yanban.core.model.ToolCall(
+                                "proposal-1", "function", new com.yanban.core.model.ToolCall.FunctionCall(
+                                ProjectCandidateProposalToolExecutor.TOOL_NAME, "{}"))), null),
+                        ChatMessage.tool("proposal-1", "{\"success\":false,\"errorCode\":\"VALIDATION_ERROR\"}"),
+                        tool(42, "src/Main.java", "h1"))));
+
+        assertThat(assistantOnly.candidateArtifact()).isNull();
+        assertThat(failedTool.candidateArtifact()).isNull();
+        verify(candidates, never()).getCurrent(anyLong(), anyLong());
+    }
+
+    @Test
     void reactAndPlanExecuteBothCrossTheSameVerificationGate() {
         RuntimeAdapter adapter = new RuntimeAdapter() {
             @Override public boolean supports(AgentStrategy strategy) {
@@ -508,6 +546,16 @@ class CompletionVerifierTest {
         return new AgentRuntimeRequest(strategy, 1L, history, 7L, userMessage, "test", "model", null, null, 2,
                 true, null, null, null, null, AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
                 new ResolvedToolPolicy(List.of("project_read_file"), 2, 1, "project"), null, null, "trace", null, null)
+                .withProjectContext(new ProjectRuntimeContext(7L, 42L));
+    }
+
+    private AgentRuntimeRequest candidateRequest(AgentStrategy strategy) {
+        return new AgentRuntimeRequest(strategy, 1L, List.of(), 7L, "propose a reviewed change", "test", "model",
+                null, null, 3, true, null, null, null, null, AgentRuntimeMode.LANGCHAIN4J,
+                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_read_file",
+                        ProjectCandidateProposalToolExecutor.TOOL_NAME), 3, 1, "project"),
+                null, null, "trace", null, null)
                 .withProjectContext(new ProjectRuntimeContext(7L, 42L));
     }
 

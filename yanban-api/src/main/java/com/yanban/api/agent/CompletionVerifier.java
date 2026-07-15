@@ -29,8 +29,10 @@ public class CompletionVerifier {
     }
 
     public AgentRuntimeResult verify(AgentRuntimeRequest request, AgentRuntimeResult raw) {
-        EvidenceLedger ledger = observedEvidence(request, raw);
-        AgentRuntimeResult observed = raw.withEvidenceLedger(ledger);
+        CandidateArtifactResponse toolArtifact = candidateToolArtifact(request, raw);
+        AgentRuntimeResult projected = toolArtifact == null ? raw : raw.withCandidateArtifact(toolArtifact);
+        EvidenceLedger ledger = observedEvidence(request, projected);
+        AgentRuntimeResult observed = projected.withEvidenceLedger(ledger);
         if (request.projectContext() != null) observed = observed.withTrustedEvidenceLedger(ledger);
         CompletionVerification decision = decide(request, observed, ledger, 0);
         return apply(observed, request, decision);
@@ -38,8 +40,10 @@ public class CompletionVerifier {
 
     public AgentRuntimeResult verifyAfterReflection(AgentRuntimeRequest request, AgentRuntimeResult raw,
                                                     CompletionVerification first) {
-        EvidenceLedger ledger = observedEvidence(request, raw);
-        AgentRuntimeResult observed = raw.withEvidenceLedger(ledger);
+        CandidateArtifactResponse toolArtifact = candidateToolArtifact(request, raw);
+        AgentRuntimeResult projected = toolArtifact == null ? raw : raw.withCandidateArtifact(toolArtifact);
+        EvidenceLedger ledger = observedEvidence(request, projected);
+        AgentRuntimeResult observed = projected.withEvidenceLedger(ledger);
         if (request.projectContext() != null) observed = observed.withTrustedEvidenceLedger(ledger);
         CompletionVerification second = decide(request, observed, ledger,
                 first == null ? 1 : first.reflectionAttempts() + 1);
@@ -143,10 +147,13 @@ public class CompletionVerifier {
 
     private CandidateArtifactResponse candidateFor(AgentRuntimeRequest request, AgentRuntimeResult result,
                                                     CompletionVerification verification) {
-        if (request.projectContext() == null || verification.status() != CompletionStatus.VERIFIED
-                || result.candidateIntent() == null) {
+        if (request.projectContext() == null) {
             return null;
         }
+        if (result.candidateArtifact() != null) {
+            return result.candidateArtifact();
+        }
+        if (verification.status() != CompletionStatus.VERIFIED || result.candidateIntent() == null) return null;
         try {
             return candidateArtifacts.store(request.userId(), request.sessionId(), request.projectContext(),
                     result.candidateIntent(), result.trustedEvidenceLedger());
@@ -156,6 +163,43 @@ public class CompletionVerifier {
                     request.projectContext().projectId(), ex.getClass().getSimpleName());
             return null;
         }
+    }
+
+    private CandidateArtifactResponse candidateToolArtifact(AgentRuntimeRequest request, AgentRuntimeResult result) {
+        if (request == null || result == null || request.projectContext() == null
+                || !request.toolPolicy().allowedTools().contains(ProjectCandidateProposalToolExecutor.TOOL_NAME)) {
+            return result == null ? null : result.candidateArtifact();
+        }
+        Map<String, String> candidateCalls = new LinkedHashMap<>();
+        List<ChatMessage> messages = result.messages();
+        for (int index = Math.max(0, request.history().size()); index < messages.size(); index++) {
+            ChatMessage message = messages.get(index);
+            if (message == null || message.toolCalls() == null) continue;
+            message.toolCalls().stream()
+                    .filter(call -> call != null && call.function() != null
+                            && ProjectCandidateProposalToolExecutor.TOOL_NAME.equals(call.function().name()))
+                    .forEach(call -> candidateCalls.put(call.id(), call.function().name()));
+        }
+        CandidateArtifactResponse latest = null;
+        for (int index = Math.max(0, request.history().size()); index < messages.size(); index++) {
+            ChatMessage message = messages.get(index);
+            if (message == null || !"tool".equals(message.role())
+                    || !candidateCalls.containsKey(message.toolCallId()) || !StringUtils.hasText(message.content())) continue;
+            try {
+                JsonNode projected = objectMapper.readTree(message.content());
+                if (!"YANBAN_CANDIDATE_ARTIFACT_V1".equals(projected.path("schemaVersion").asText())
+                        || projected.path("artifactId").asLong(-1) < 1
+                        || projected.path("projectId").asLong(-1) != request.projectContext().projectId()) continue;
+                CandidateArtifactResponse current = candidateArtifacts.getCurrent(
+                        request.userId(), projected.path("artifactId").longValue());
+                if (current.projectId() == request.projectContext().projectId()) latest = current;
+            } catch (RuntimeException ignored) {
+                // A failed/legacy tool payload cannot be projected as a Candidate.
+            } catch (Exception ignored) {
+                // Ordinary text and malformed JSON never become a Candidate.
+            }
+        }
+        return latest == null ? result.candidateArtifact() : latest;
     }
 
     private EvidenceLedger observedEvidence(AgentRuntimeRequest request, AgentRuntimeResult result) {

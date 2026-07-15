@@ -178,20 +178,81 @@
                 </div>
 
                 <div class="project-candidate-list">
-                  <button v-for="candidate in candidates" :key="candidate.artifactId" :class="{ active: selectedCandidate?.artifactId === candidate.artifactId }" @click="selectCandidate(candidate)">
-                    <strong :title="candidate.relativePath">{{ candidate.relativePath }}</strong>
+                  <button v-for="candidate in candidates" :key="candidate.artifact.id" :class="{ active: selectedCandidate?.artifact.id === candidate.artifact.id }" @click="selectCandidate(candidate)">
+                    <strong :title="candidateTitle(candidate)">{{ candidateTitle(candidate) }}</strong>
                     <span>
-                      <NTag size="tiny" type="info">{{ candidate.applicationStatus }}</NTag>
-                      <NTag size="tiny" :type="candidate.status === 'STALE' ? 'warning' : 'success'">{{ candidate.status }}</NTag>
+                      <NTag size="tiny" type="info">NOT_APPLIED</NTag>
+                      <NTag size="tiny" :type="candidateStateType(candidate.state)">{{ candidate.state }}</NTag>
+                      <small v-if="candidate.candidate">{{ candidate.candidate.changes.length }} file{{ candidate.candidate.changes.length === 1 ? '' : 's' }}</small>
                     </span>
                   </button>
-                  <NEmpty v-if="!loading.candidates && candidates.length === 0" size="small" description="Ask the Agent to modify a file to create a read-only proposal." />
+                  <NEmpty v-if="!loading.candidates && candidates.length === 0" size="small" description="No read-only Candidate proposals yet." />
                 </div>
 
                 <div v-if="selectedCandidate" class="project-diff">
-                  <div class="project-panel__title"><strong>Readonly diff</strong><span>{{ selectedCandidate.applicationStatus }}</span></div>
-                  <p>{{ selectedCandidate.summary }}</p>
-                  <pre>{{ selectedCandidate.patchOrSuggestion }}</pre>
+                  <div class="project-panel__title"><strong>Read-only Candidate</strong><span>artifact {{ selectedCandidate.artifact.id }}</span></div>
+                  <NAlert v-if="selectedCandidate.error" :type="selectedCandidate.state === 'STALE' ? 'warning' : 'error'" :show-icon="false">
+                    {{ selectedCandidate.error }}
+                  </NAlert>
+
+                  <template v-if="selectedCandidate.candidate">
+                    <dl class="project-candidate-meta">
+                      <dt>schema</dt><dd>{{ selectedCandidate.candidate.schemaVersion }}</dd>
+                      <dt>Project version</dt><dd :title="selectedCandidate.candidate.projectVersion">{{ selectedCandidate.candidate.projectVersion }}</dd>
+                      <dt>fingerprint</dt><dd :title="selectedCandidate.candidate.fingerprint">{{ selectedCandidate.candidate.fingerprint }}</dd>
+                      <dt>state</dt><dd>{{ selectedCandidate.candidate.governanceStatus }} / {{ selectedCandidate.candidate.applicationStatus }}</dd>
+                      <dt>review format</dt><dd>{{ selectedCandidate.candidate.reviewDiff.format }}</dd>
+                    </dl>
+
+                    <section class="project-candidate-validation">
+                      <div class="project-panel__title"><strong>Validation</strong><span>{{ candidateValidationLabel(selectedCandidate.candidate) }}</span></div>
+                      <div class="project-validation-checks">
+                        <NTag v-for="check in selectedCandidate.candidate.validation.checks" :key="check.area" size="tiny" :type="check.status === 'PASSED' ? 'success' : check.status === 'FAILED' ? 'error' : 'warning'">
+                          {{ check.area }} {{ check.status }}
+                        </NTag>
+                      </div>
+                      <ul v-if="selectedCandidate.candidate.validation.issues.length" class="project-validation-issues">
+                        <li v-for="issue in selectedCandidate.candidate.validation.issues" :key="`${issue.area}:${issue.code}:${issue.relativePath || ''}`">
+                          <strong>{{ issue.code }}</strong><span v-if="issue.relativePath">{{ issue.relativePath }}</span>
+                        </li>
+                      </ul>
+                      <dl class="project-candidate-usage">
+                        <dt>changes</dt><dd>{{ selectedCandidate.candidate.validation.usage.inspectedChanges }} / {{ selectedCandidate.candidate.validation.usage.requestedChanges }}</dd>
+                        <dt>Evidence</dt><dd>{{ selectedCandidate.candidate.validation.usage.inspectedEvidenceRefs }} / {{ selectedCandidate.candidate.validation.usage.requestedEvidenceRefs }}</dd>
+                        <dt>candidate UTF-8</dt><dd>{{ formatBytes(selectedCandidate.candidate.validation.usage.inspectedCandidateUtf8Bytes) }} / {{ formatBytes(selectedCandidate.candidate.validation.usage.requestedCandidateUtf8Bytes) }}</dd>
+                      </dl>
+                    </section>
+
+                    <section class="project-candidate-files">
+                      <article v-for="entry in selectedCandidate.candidate.reviewDiff.entries" :key="`${entry.type}:${entry.relativePath}`">
+                        <header>
+                          <NTag size="tiny" :type="candidateChangeType(entry.type)">{{ entry.type }}</NTag>
+                          <strong :title="entry.relativePath">{{ entry.relativePath }}</strong>
+                        </header>
+                        <dl>
+                          <dt>base hash</dt><dd :title="entry.baseFileHash || '-'">{{ entry.baseFileHash || '-' }}</dd>
+                          <dt>result hash</dt><dd :title="entry.resultFileHash || '-'">{{ entry.resultFileHash || '-' }}</dd>
+                        </dl>
+                        <details open>
+                          <summary>Review replacement</summary>
+                          <pre v-if="entry.replacementText !== null">{{ entry.replacementText }}</pre>
+                          <p v-else class="project-delete-marker">File deletion only. No replacement content.</p>
+                        </details>
+                        <details>
+                          <summary>Evidence provenance ({{ candidateEvidence(selectedCandidate.candidate, entry.relativePath).length }})</summary>
+                          <div class="project-candidate-evidence">
+                            <dl v-for="(ref, index) in candidateEvidence(selectedCandidate.candidate, entry.relativePath)" :key="`${ref.relativePath}:${ref.range.startLine}:${ref.range.endLine}:${index}`">
+                              <dt>path</dt><dd :title="ref.relativePath">{{ ref.relativePath }}</dd>
+                              <dt>lines</dt><dd>{{ ref.range.startLine }}-{{ ref.range.endLine }}</dd>
+                              <dt>file hash</dt><dd :title="ref.fileHash">{{ ref.fileHash }}</dd>
+                              <dt>parser</dt><dd>{{ ref.parserVersion }}</dd>
+                              <dt>trust</dt><dd>{{ ref.trustLabel }}</dd>
+                            </dl>
+                          </div>
+                        </details>
+                      </article>
+                    </section>
+                  </template>
                 </div>
               </template>
             </div>
@@ -420,7 +481,7 @@ import { NAlert, NButton, NDropdown, NEmpty, NForm, NFormItem, NInput, NModal, N
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { deleteSession as deleteAgentSession, listMessages, listPlans, updateSession as updateAgentSession, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse } from '@/api/agent';
-import { getCandidateChange, listArtifacts, type CandidateChangeSet } from '@/api/artifact';
+import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
 import { createProjectPlan, createProjectSession, deleteProject, filterProjectUploadFiles, getProjectManifest, listProjectEvidence, listProjectSessions, listProjects, readProjectFile, searchProject, sendProjectMessage, uploadProject, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
@@ -461,6 +522,13 @@ interface ProjectContentNavItem {
   planId?: number;
 }
 
+interface CandidateReviewItem {
+  artifact: ArtifactResponse;
+  candidate: CandidateArtifactResponse | null;
+  state: CandidateReviewState;
+  error: string | null;
+}
+
 const authStore = useAuthStore();
 const { isEnglish } = useI18n();
 const projects = ref<ProjectSummaryResponse[]>([]);
@@ -475,8 +543,8 @@ const messages = ref<ProjectChatMessage[]>([]);
 const plans = ref<AgentPlanResponse[]>([]);
 const selectedPlan = ref<AgentPlanResponse | null>(null);
 const evidence = ref<ProjectEvidenceResponse[]>([]);
-const candidates = ref<CandidateChangeSet[]>([]);
-const selectedCandidate = ref<CandidateChangeSet | null>(null);
+const candidates = ref<CandidateReviewItem[]>([]);
+const selectedCandidate = ref<CandidateReviewItem | null>(null);
 const centerTab = ref<'chat' | 'plan'>('chat');
 const inspectorTab = ref<ProjectInspectorTab>('preview');
 const inspectorOpen = ref(true);
@@ -681,6 +749,10 @@ function apiError(value: unknown) {
   const traceId = item.response?.headers?.['x-trace-id'];
   const details = [code, traceId ? `traceId=${traceId}` : null].filter(Boolean).join(', ');
   return `${message || 'Request failed.'}${details ? ` (${details})` : ''}`;
+}
+
+function apiStatus(value: unknown) {
+  return (value as { response?: { status?: number } }).response?.status;
 }
 
 function shortHash(value?: string) {
@@ -926,9 +998,38 @@ function showInspector(tab: ProjectInspectorTab) {
   inspectorOpen.value = true;
 }
 
-function selectCandidate(candidate: CandidateChangeSet) {
+function selectCandidate(candidate: CandidateReviewItem) {
   selectedCandidate.value = candidate;
   showInspector('changes');
+}
+
+function candidateTitle(item: CandidateReviewItem) {
+  const firstPath = item.candidate?.changes[0]?.relativePath;
+  if (!firstPath) return item.artifact.title || `Candidate ${item.artifact.id}`;
+  const remaining = (item.candidate?.changes.length || 1) - 1;
+  return remaining > 0 ? `${firstPath} +${remaining}` : firstPath;
+}
+
+function candidateStateType(state: CandidateReviewState): 'success' | 'warning' | 'error' | 'info' {
+  if (state === 'VALIDATED') return 'success';
+  if (state === 'STALE' || state === 'DRAFT') return 'warning';
+  if (state === 'INVALID' || state === 'ERROR') return 'error';
+  return 'info';
+}
+
+function candidateChangeType(type: CandidateChangeType): 'success' | 'warning' | 'error' {
+  if (type === 'ADD') return 'success';
+  if (type === 'DELETE') return 'error';
+  return 'warning';
+}
+
+function candidateValidationLabel(candidate: CandidateArtifactResponse) {
+  return candidate.validation.issues.length === 0
+    && candidate.validation.checks.every((check) => check.status === 'PASSED') ? 'PASSED' : 'FAILED';
+}
+
+function candidateEvidence(candidate: CandidateArtifactResponse, relativePath: string): CandidateEvidenceRef[] {
+  return candidate.changes.find((change) => change.relativePath === relativePath)?.evidenceRefs || [];
 }
 
 function syncProcessOpen(message: ProjectChatMessage, event: Event) {
@@ -1443,10 +1544,23 @@ async function loadCandidates(sessionId: number, epoch = projectEpoch) {
   loading.candidates = true;
   try {
     const artifacts = (await listArtifacts(sessionId)).data.filter((item) => item.sourceType === 'CANDIDATE_CHANGESET');
-    const details = await Promise.allSettled(artifacts.map((item) => getCandidateChange(item.id)));
+    const details = await Promise.all(artifacts.map(async (artifact): Promise<CandidateReviewItem> => {
+      try {
+        const response = (await getCandidateChange(artifact.id)).data;
+        if (!isCandidateArtifactV1(response)) {
+          return { artifact, candidate: null, state: 'INVALID', error: 'Unsupported or incomplete Candidate schema. This artifact is not presented as validated.' };
+        }
+        if (response.projectId !== activeProjectId.value) {
+          return { artifact, candidate: null, state: 'ERROR', error: 'Candidate belongs to a different Project and was rejected.' };
+        }
+        return { artifact, candidate: response, state: response.governanceStatus, error: null };
+      } catch (cause) {
+        return { artifact, candidate: null, state: candidateReviewFailure(apiStatus(cause)), error: apiError(cause) };
+      }
+    }));
     if (epoch !== projectEpoch) return;
-    candidates.value = details.flatMap((item) => item.status === 'fulfilled' && item.value.data.projectId === activeProjectId.value ? [item.value.data] : []);
-    if (selectedCandidate.value) selectedCandidate.value = candidates.value.find((item) => item.artifactId === selectedCandidate.value?.artifactId) || null;
+    candidates.value = details;
+    if (selectedCandidate.value) selectedCandidate.value = candidates.value.find((item) => item.artifact.id === selectedCandidate.value?.artifact.id) || null;
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
   } finally {
@@ -1913,10 +2027,29 @@ onUnmounted(() => {
 .project-candidate-list { display: flex; flex-direction: column; gap: 4px; min-height: 0; max-height: 180px; }
 .project-candidate-list button { padding: 7px; }
 .project-candidate-list strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.project-candidate-list span { display: flex; gap: 4px; margin-top: 4px; }
+.project-candidate-list span { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.project-candidate-list small { margin-left: auto; color: var(--yb-text-muted); font-size: 9px; }
 
-.project-diff { min-height: 180px; overflow: hidden; display: flex; flex-direction: column; padding-top: 10px; border-top: 1px solid var(--yb-border); font-size: 11px; }
-.project-diff p { flex: 0 0 auto; margin: 7px 0; color: var(--yb-text-secondary); line-height: 1.45; }
+.project-diff { min-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid var(--yb-border); font-size: 11px; scrollbar-gutter: stable; }
+.project-candidate-meta, .project-candidate-usage, .project-candidate-files article > dl, .project-candidate-evidence dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; margin: 0; font: 9px ui-monospace, SFMono-Regular, monospace; }
+.project-candidate-meta dt, .project-candidate-usage dt, .project-candidate-files dt, .project-candidate-evidence dt { color: var(--yb-text-muted); }
+.project-candidate-meta dd, .project-candidate-usage dd, .project-candidate-files dd, .project-candidate-evidence dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.project-candidate-validation { display: flex; flex-direction: column; gap: 8px; padding-block: 9px; border-block: 1px solid var(--yb-border); }
+.project-validation-checks { display: flex; flex-wrap: wrap; gap: 4px; }
+.project-validation-issues { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 17px; }
+.project-validation-issues li { color: var(--yb-text-secondary); overflow-wrap: anywhere; }
+.project-validation-issues span { display: block; color: var(--yb-text-muted); }
+.project-candidate-files { display: flex; flex-direction: column; gap: 8px; }
+.project-candidate-files article { min-width: 0; padding: 9px; border: 1px solid var(--yb-border); border-radius: 7px; background: var(--yb-bg-elevated); }
+.project-candidate-files article > header { display: flex; align-items: flex-start; gap: 7px; margin-bottom: 8px; }
+.project-candidate-files article > header strong { min-width: 0; overflow-wrap: anywhere; font: 10px ui-monospace, SFMono-Regular, monospace; line-height: 1.45; }
+.project-candidate-files article > dl { margin-bottom: 8px; }
+.project-candidate-files details { border-top: 1px solid var(--yb-border); }
+.project-candidate-files summary { padding: 7px 0; cursor: pointer; color: var(--yb-text-secondary); font-size: 10px; font-weight: 650; }
+.project-candidate-files pre { box-sizing: border-box; max-height: 300px; margin: 0; padding: 8px; overflow: auto; border-radius: 6px; background: var(--yb-bg-muted); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 10px; line-height: 1.5; }
+.project-delete-marker { margin: 0; padding: 7px 0; color: var(--yb-text-muted); }
+.project-candidate-evidence { display: flex; flex-direction: column; gap: 7px; padding-bottom: 4px; }
+.project-candidate-evidence dl + dl { padding-top: 7px; border-top: 1px dashed var(--yb-border); }
 
 .project-delete-copy { margin: 0 0 20px; color: var(--yb-text-secondary); line-height: 1.6; }
 .project-create-header { display: flex; flex-direction: column; gap: 4px; }

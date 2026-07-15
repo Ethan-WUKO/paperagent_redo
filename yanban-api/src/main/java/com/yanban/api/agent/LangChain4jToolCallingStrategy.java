@@ -52,6 +52,10 @@ public class LangChain4jToolCallingStrategy {
             Otherwise, before making Project conclusions, capture at least one relevant current observation
             with project_read_file or project_search. Follow each tool's JSON schema exactly, especially
             array-valued relativePaths fields.
+            project_propose_candidate is the only proposal entry point. Call it only when the user explicitly asks
+            for changes and after current Project tools have returned exact portable Evidence provenance. Supply full
+            replacement text and never place patch JSON in ordinary assistant text. A successful proposal remains
+            NOT_APPLIED and never changes Project files.
             To inspect all applicable files, call project_manifest, select its concrete relative paths, and
             pass those paths to the specialized tool. Never use ".", "*", "**", or "/" as a file path.
             For project_cross_material_search on a large or unfamiliar Project, first use project_manifest,
@@ -221,7 +225,15 @@ public class LangChain4jToolCallingStrategy {
                 newToolCallsThisStep++;
 
                 emitProcess(request, "正在调用工具：" + toolRequest.name());
-                ToolExecutionOutcome toolResult = executeTool(toolProviderResult, toolRequest, request.userId(), allowedTools);
+                ToolExecutionOutcome toolResult;
+                if (request.projectContext() == null) {
+                    toolResult = executeTool(toolProviderResult, toolRequest, request.userId(), allowedTools);
+                } else {
+                    try (CandidateProposalExecutionScope ignored = CandidateProposalExecutionScope.open(
+                            request, toCoreMessages(messages))) {
+                        toolResult = executeTool(toolProviderResult, toolRequest, request.userId(), allowedTools);
+                    }
+                }
                 if (toolResult.scopeRefinementRequired()) {
                     toolCalls--;
                     fallbacks.add("Tool scope refinement required; execution budget was not consumed: "
