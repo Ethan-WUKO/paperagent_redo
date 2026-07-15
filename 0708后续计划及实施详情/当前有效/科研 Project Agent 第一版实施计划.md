@@ -3,16 +3,16 @@
 > 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
 > 最近同步：2026-07-15
-> 已审查工程基线：`5732490`（Worker 7D：长期记忆治理界面与真实 API 闭环）
+> 已审查工程基线：`d4970cd`（Worker 8A：沙箱与 Candidate ChangeSet 纯契约）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
-> 当前工程基线：`5732490`（长期记忆后端治理、只读接入与用户可见治理闭环）
+> 当前工程基线：`d4970cd`（受信沙箱快照、不可变 Candidate、审查 diff 与确定性验证契约）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`WORKER_7_ENGINEERING_ACCEPTED / STAGE_3_QUEUED`
+> 当前发布状态：`WORKER_8A_ENGINEERING_ACCEPTED / WORKER_8B_QUEUED`
 > 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
-> 当前进度：Worker 1 至 Worker 7 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome、canonical answer 与 PARTIAL/取消/失败语义。Worker 5 基线 `1c40159` 在该投影上增加 L0 Task Workspace，保存目标、成功条件、计划引用、观测步骤摘要、剩余工作和有界短期记忆；任意 JSON 快照中的记忆只能降级为明确标记的非权威审计摘要，不能伪造 Evidence、Candidate、Artifact、失败结果或工具观察。`823a820` 在不扩权的前提下完成 Worker 5 后本地回归闭环。Worker 6 基线 `956ce42` 以服务端 manifest 的 portable relative path、文件大小和 SHA-256 内容哈希确定性派生 ProjectVersion，并将 Project Evidence、Plan 持久化 Evidence、Candidate 与 Artifact 绑定到同一版本；旧 Evidence 缺少完整版本、范围或 parser provenance 时保持 fail-closed，不能伪造 VERIFIED。Worker 7A 基线 `b83bb52` 只读接入经过服务器过滤的 USER 范围长期记忆；Worker 7B 基线 `01fece6` 通过 V33 增加 confirmation、provenance、ProjectVersion、expiry 和 invalidation 治理字段；Worker 7C 基线 `4367960` 增加受信确认、拒绝、纠正、过期与软删除接口；Worker 7D 基线 `5732490` 增加双语长期记忆治理界面并完成真实 MySQL 8、真实后端、真实 API 和三档桌面视口复审。主对话独立复跑前端 11 项、后端 29 项、生产构建和现场 DOM 检查，均通过；构建仅保留既有的大 chunk 警告。长期记忆列表仍受后端 200 条上限约束，真实 PROJECT stale 场景本轮由后端契约和前端定向测试覆盖，未伪装为用户本地真实验收。MVP 发布门脚本仍有基线遗留的绝对路径创建用例禁用治理项，发布前必须单独收口。该结论不表示用户本地科研验收完成，也不表示持久化 checkpoint/重启恢复、多版本历史与导出、沙箱或安全应用已经完成。
+> 当前进度：Worker 1 至 Worker 7 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome、canonical answer 与 PARTIAL/取消/失败语义。Worker 5 基线 `1c40159` 在该投影上增加 L0 Task Workspace，保存目标、成功条件、计划引用、观测步骤摘要、剩余工作和有界短期记忆；任意 JSON 快照中的记忆只能降级为明确标记的非权威审计摘要，不能伪造 Evidence、Candidate、Artifact、失败结果或工具观察。`823a820` 在不扩权的前提下完成 Worker 5 后本地回归闭环。Worker 6 基线 `956ce42` 以服务端 manifest 的 portable relative path、文件大小和 SHA-256 内容哈希确定性派生 ProjectVersion，并将 Project Evidence、Plan 持久化 Evidence、Candidate 与 Artifact 绑定到同一版本；旧 Evidence 缺少完整版本、范围或 parser provenance 时保持 fail-closed，不能伪造 VERIFIED。Worker 7A 至 7D 完成长短期记忆治理、受信只读接入、用户确认/拒绝/纠正/删除和双语治理界面。Worker 8A 基线 `d4970cd` 冻结受信 ProjectVersion 沙箱快照、不可变 UTF-8 全文替换 Candidate、base/result hash、EvidenceRefs、审查 diff、预算和 `NOT_APPLIED` 验证契约；快照证明必须绑定服务器 `ResearchRuntimeScope` 和 `research:project-read` 能力，证明、验证决策与运行时权限均不可序列化。主对话独立验证：core 定向 18/18、core 全量 85/85、完整 reactor API 聚合 594 项零失败且 8 项既有条件跳过，`git diff --check` 通过。Worker 8A 不包含沙箱工作副本执行、生产写入、命令、Controller、前端、migration 或自动应用。MVP 发布门脚本仍有基线遗留的绝对路径创建用例禁用治理项，发布前必须单独收口。该结论不表示用户本地科研验收完成，也不表示持久化 checkpoint/重启恢复、多版本历史与导出或安全应用已经完成。
 
 ## 1. 目标与边界
 
@@ -352,7 +352,7 @@ stopConditions
 当前基线：
 
 ```text
-5732490
+d4970cd
 ```
 
 任何前序 Worker 的变更必须先完成主对话复审并提交，才能成为下一 Worker 的基线。
@@ -443,10 +443,12 @@ Worker 开发
 
 ### Worker 8：沙箱与 Candidate ChangeSet
 
-状态：`8A_CONTRACT_QUEUED`
+状态：`8A_ENGINEERING_ACCEPTED / 8B_QUEUED`
 
-- Worker 8A 先冻结沙箱工作副本、受信 ProjectVersion、Candidate ChangeSet、base hash、EvidenceRefs、diff、验证结果和 `NOT_APPLIED` 状态机契约；仅允许契约、序列化兼容和确定性测试，不实现命令执行、生产写入、自动应用、Controller、前端或 migration。
-- Worker 8A 通过主对话复审、独立测试和 baseline 提交后，才允许串行进入沙箱工作副本与候选生成实现；每个后续子任务仍须单独冻结文件所有权、权限和停止条件。
+- Worker 8A 已冻结受信 ProjectVersion 沙箱快照、不可变 UTF-8 全文替换 Candidate ChangeSet、base/result hash、EvidenceRefs、审查 diff、逐项/总量预算和 `NOT_APPLIED` 验证契约；ADD/MODIFY/DELETE 对目标存在性、路径大小写、base hash、Evidence 文件与哈希和结果内容哈希均 fail-closed。
+- Worker 8A 的快照身份由 `ProjectManifestIdentity` 确定性派生；服务器证明必须同时匹配 `ResearchRuntimeScope` 的 projectId、ProjectVersion 和既有 `research:project-read` 能力。运行时身份、能力、证明和验证决策不可被 Candidate、快照或审查 diff 序列化后伪造。
+- Worker 8A 主对话独立验证：定向 18/18、core 全量 85/85、完整 reactor API 聚合 594 项零失败且 8 项既有条件跳过；`git diff --check` 通过。基线提交为 `d4970cd`。
+- Worker 8B 才进入受信沙箱工作副本与候选生成适配；必须继续保持真实 Project 只读、Candidate `NOT_APPLIED`，不得借此引入命令、外部网络、自动应用、Controller、前端或 migration。
 - 未经专门审查，不开放宿主机任意命令、外部网络、密钥、自动应用或多 Agent 并行写入；Candidate 必须始终从 `NOT_APPLIED` 开始，不能覆盖用户当前 Project。
 
 ## 16. 审查与停止条件
