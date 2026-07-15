@@ -1,16 +1,18 @@
 # 科研 Project Agent 第一版实施计划
 
-> 文档状态：执行中
+> 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
+> 最近同步：2026-07-15
 > 已审查工程基线：`da8eaf6`（Project Markdown 与输出格式修复）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
+> 当前工程基线：`56e6b5c`（Project 文件夹上传、托管存储、Project UI/会话、Plan/Verifier 修复与双语 UI）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`ENGINEERING_GATE_PASSED / LOCAL_ACCEPTANCE_PENDING`
-> 设计依据：《通用 Agent Runtime 设计》《通用 Agent Runtime 实施方案与进度》
+> 当前发布状态：`READ_ONLY_PROJECT_AND_PLAN_ENGINEERING_ACCEPTED / FIRST_VERSION_IN_PROGRESS`
+> 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
-> 夜间串行进度：Worker 1“MVP 本地验收矩阵”、Worker 2“科研工具与结构化索引契约”、Worker 3“第一批低风险只读科研工具”均已完成主对话复审。Worker 3 独立定向测试为 Core 29/29、API 154/154（合计 183/183），完整离线发布门为 Java 172/172、frontend 6/6、exit 0。五个科研工具已在 PROJECT + READ_ONLY + 精确 allowedTools 治理下实现并接入 DIRECT/REACT/PLAN Evidence 闭环；本地人工科研验收仍待用户完成。按当前任务边界不自动启动 Worker 4。
+> 当前进度：Worker 1 至 Worker 3 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。2026-07-15 独立回归：Plan 定向 39/39，Plan + ReAct + Completion 联合 88/88，frontend build 通过。该结论不表示持久化生命周期、ProjectVersion、长期记忆主链、沙箱或安全应用已经完成。
 
 ## 1. 目标与边界
 
@@ -72,6 +74,7 @@ Pro 模式仍必须具备：
 | 多 Agent | 只有协议设计 | 第一版后期仅验证受控只读 Worker |
 | Project 工具 | manifest/read/search | 增加 LaTeX、BibTeX、代码和实验语义工具 |
 | Project 索引 | manifest 与文本检索 | 增加章节、符号、引用和实验结构索引 |
+| Project 输入 | 浏览器文件夹上传与托管存储已接入 | 增加不可变 ProjectVersion、多版本历史、导出和回滚 |
 | 文件修改 | 仅 Candidate、NOT_APPLIED | 增加沙箱、diff、确认、应用和回滚 |
 | 生命周期 | L1、进程内任务为主 | 建立持久化托管、checkpoint 和恢复 |
 | 短期记忆 | 会话、摘要、ContextPackage | 增加任务工作记忆和结构化发现 |
@@ -270,12 +273,12 @@ Plan：
 
 ## 13. 实施阶段
 
-### 阶段 0：MVP 本地验收与基线稳定
+### 阶段 0：只读 MVP、本地验收与基线稳定
 
-状态：`IN_PROGRESS`
+状态：`ACCEPTED_FOR_FIRST_VERSION_FOUNDATION`
 
 - 保留自动发布门已通过结论。
-- 完成用户本地真实科研场景验收。
+- 用户已完成 Project 文件浏览、科研工具、ReAct 和 Plan 关键场景验收；后续阶段继续保留真实科研回归。
 - 建立缺陷清单与回归用例。
 - 修复 P0/P1 后形成新的稳定基线 commit。
 
@@ -288,11 +291,25 @@ Plan：
 
 ### 阶段 1：科研语义工具与索引
 
+状态：`ACCEPTED_READ_ONLY_FOUNDATION`
+
 冻结工具契约和索引模型，实现第一批只读科研工具并接入 ToolDescriptor、策略、证据和预算。不包含写文件、命令执行和多 Agent。
 
-### 阶段 2：Task Workspace 与持久化生命周期
+### 阶段 2A：统一 Task Run 与持久化生命周期
 
-统一任务运行空间和关键生命周期语义，建立 checkpoint 和恢复基础。
+统一普通 Chat、Project Chat、ReAct 和 Plan 的单次运行抽象、权威状态、phase、outcome、事件和 canonical answer，建立取消、暂停、恢复、checkpoint 和重启恢复边界。
+
+### 阶段 2B：Task Workspace 与短期工作记忆
+
+保存当前目标、成功条件、计划、步骤、受信 Evidence、工具观察、失败原因、候选产物和剩余工作；统一上下文裁剪、观察复用和 checkpoint 恢复，不保存模型内部思维链。
+
+### 阶段 2C：ProjectVersion 与版本证据
+
+在现有文件夹上传和对象存储基础上增加不可变 ProjectVersion、版本化 manifest、索引版本、Evidence 绑定、版本比较和导出基础。任何 migration 必须先单独审查。
+
+### 阶段 2D：长期记忆治理与受控接入
+
+先完成用户可见的来源、scope、provenance、confidence、修正、删除、过期和注入审计，再把经过确认的长期记忆只读接入主链。禁止自动保存模型猜测或直接打开全量历史注入。
 
 ### 阶段 3：沙箱与候选修改
 
@@ -302,7 +319,7 @@ Plan：
 
 实现逐条 diff 审核、接受、拒绝、冲突检测、原子生成新 Project 版本、回滚和导出。
 
-### 阶段 5：跨材料科研编排
+### 阶段 5：统一策略选择与跨材料科研编排
 
 实现自动 ReAct/Plan 选择、论文代码实验文献联合分析、领域 Verifier 和受限 Reflection。
 
@@ -328,10 +345,10 @@ requiredTests
 stopConditions
 ```
 
-当前首个基线：
+当前基线：
 
 ```text
-7ef6ecff0cd831abf1345aaf29c86436b75f5769
+56e6b5cdc80b3b0cca9888f6bdd71ae1b56666f2
 ```
 
 任何前序 Worker 的变更必须先完成主对话复审并提交，才能成为下一 Worker 的基线。
@@ -355,53 +372,49 @@ Worker 开发
 
 ## 15. 当前串行执行队列
 
-### Worker 1：MVP 本地验收矩阵
+### 已完成：Worker 1 至 Worker 3
 
-前置条件：当前 Project 开发对话结束、主对话复审并形成新基线。
+- Worker 1：`ACCEPTED_ENGINEERING_GATE`，MVP 本地验收矩阵和离线发布门隔离完成。
+- Worker 2：`ACCEPTED / CONTRACT_ONLY`，科研工具和结构化索引契约完成，基线 `8e274ab`。
+- Worker 3：`ACCEPTED_READ_ONLY_IMPLEMENTATION`，五个受治理科研工具完成，基线 `1fc1e0f`。
+- 2026-07-15 收口基线：`56e6b5c`。
 
-状态：`ACCEPTED_ENGINEERING_GATE / LOCAL_MANUAL_ACCEPTANCE_PENDING`
+### Worker 4：统一 Task Run 与生命周期契约/最小骨架
 
-- 整理真实验收场景。
-- 补充自动化辅助测试。
-- 不默认修改生产代码。
-- 发现生产缺陷即停止并报告。
+状态：`NEXT`
 
-### Worker 2：科研语义工具契约
+- 普通 Chat、Project Chat、ReAct、Plan 的统一 run 语义。
+- 唯一权威 status/phase/outcome 映射。
+- 统一 run trace、事件、canonical answer 和错误分类。
+- 暂停、取消、恢复、重试和 checkpoint 边界。
+- 只允许契约和最小骨架；如需 migration，先停下并单独评审。
 
-前置条件：Worker 1 验收通过。
+### Worker 5：Task Workspace 与短期工作记忆
 
-状态：`ACCEPTED / CONTRACT_ONLY`
+状态：`QUEUED`
 
-- 定义第一批工具输入、输出、权限、Evidence、重复和预算。
-- 定义结构化索引最小模型。
-- 先完成契约和测试基线，不批量实现。
-- 主对话复审结论：五类 typed output、trusted scope、Project 相对路径、版本/hash/parser token、Evidence/provenance、预算、错误、去重和序列化边界均已冻结。
-- 独立测试：core 定向 29/29；完整离线发布门 Java 170/170、frontend 6/6。
-- 工程基线：`8e274ab`。
+- 当前目标、成功条件、计划、步骤和剩余工作。
+- 受信 Evidence、工具观察、失败结果和 Candidate 引用。
+- 上下文裁剪、观察复用、会话摘要和 checkpoint 恢复。
+- 不保存或展示模型内部思维链。
 
-### Worker 3：第一批只读科研工具
+### Worker 6：ProjectVersion 与版本化 Evidence
 
-前置条件：Worker 2 验收通过。
+状态：`QUEUED`
 
-状态：`ACCEPTED_READ_ONLY_IMPLEMENTATION / LOCAL_MANUAL_ACCEPTANCE_PENDING`
+- 不可变 ProjectVersion 和版本化 manifest。
+- 索引、Evidence、Artifact、Candidate 的版本绑定。
+- 多版本历史、比较和导出基础。
+- 不开放直接覆盖用户 Project。
 
-- LaTeX outline。
-- BibTeX audit。
-- Code symbols。
-- Experiment summary。
-- Cross-material search。
-- 主对话复审：权限/路径、manifest-read TOCTOU、typed Evidence、预算、EMPTY/PARTIAL/TRUNCATED/PARSE_FAILED、DIRECT/REACT/PLAN、deny-all 与旧 Project 工具兼容均通过。
-- 独立测试：Core 29/29、API 154/154；完整发布门 Java 172/172、frontend 6/6。
-- 工程基线：`1fc1e0f`。
+### Worker 7：长期记忆治理与只读接入
 
-### Worker 4：Task Workspace 设计与最小骨架
+状态：`QUEUED`
 
-前置条件：Worker 3 验收通过。
-
-- 任务工作空间契约。
-- 基线 ProjectVersion。
-- Evidence、Artifact、Candidate 引用。
-- 生命周期 checkpoint 边界。
+- 来源、scope、provenance、confidence、确认和过期契约。
+- 用户查看、修正、删除与注入审计。
+- 只读接入经过确认且与当前任务相关的记忆。
+- 不自动写入模型推测，不注入已删除或越权记忆。
 
 夜间无人值守时不启动沙箱写入、命令执行、自动应用或多 Agent 写入任务。
 
