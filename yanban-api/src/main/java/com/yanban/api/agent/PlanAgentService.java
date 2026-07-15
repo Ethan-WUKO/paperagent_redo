@@ -21,6 +21,7 @@ import com.yanban.core.agent.AgentPlanStepRepository;
 import com.yanban.core.agent.AgentPlanStepStatus;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.model.ChatMessage;
+import com.yanban.core.model.ToolCall;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -482,7 +483,7 @@ public class PlanAgentService {
             ProjectRuntimeContext projectContext = restoreProjectContext(plan, userId);
             String projectManifestSummary = projectContext == null ? ""
                     : buildPlanManifestSummary(userId, projectContext.projectId());
-            Map<String, String> sharedExecutionState = new ConcurrentHashMap<>();
+            Map<String, String> sharedExecutionState = restoreExecutionState(plan.getId());
             plan.markRunning();
             plans.saveAndFlush(plan);
             LocalDateTime deadlineAt = LocalDateTime.now().plusSeconds(PLAN_BUDGET_SECONDS);
@@ -641,7 +642,7 @@ public class PlanAgentService {
                 "traceId", traceId
         ));
         String previousError = step.getErrorMessage();
-        String executionStateSummary = "";
+        String executionStateSummary = sharedExecutionState.getOrDefault(step.getStepKey(), "");
         for (int attempt = Math.max(0, step.getAttemptCount()); attempt < MAX_STEP_ATTEMPTS; attempt++) {
             if (deadlineExceeded(deadlineAt)) {
                 step.markFailed("Plan execution budget exceeded before this step completed.");
@@ -682,7 +683,11 @@ public class PlanAgentService {
                     null,
                     null
             );
-            if (projectContext != null) runtimeRequest = runtimeRequest.withProjectContext(revalidateProject(plan.getUserId(), projectContext.projectId()));
+            if (projectContext != null) {
+                runtimeRequest = runtimeRequest
+                        .withProjectContext(revalidateProject(plan.getUserId(), projectContext.projectId()))
+                        .withInheritedTrustedEvidence(dependencyEvidence(plan.getId(), allSteps, step));
+            }
             AgentRuntimeResult result;
             try {
                 result = agentRuntimeService.run(runtimeRequest);
@@ -713,7 +718,11 @@ public class PlanAgentService {
                         : "Step completed.";
                 List<String> projectEvidenceRefs = projectContext == null ? List.of() : extractProjectEvidenceRefs(result, projectContext,
                         runtimeRequest.toolPolicy().allowedTools());
-                if (projectContext != null && projectEvidenceRefs.isEmpty()) {
+                boolean hasDependencyEvidence = projectContext != null
+                        && hasTrustedDependencyEvidence(plan.getId(), allSteps, step);
+                boolean stepCanCallTools = !runtimeRequest.toolPolicy().allowedTools().isEmpty();
+                if (projectContext != null && projectEvidenceRefs.isEmpty()
+                        && stepCanCallTools && !hasDependencyEvidence) {
                     String error = "INSUFFICIENT_EVIDENCE: Project step completed without a current authorized file observation.";
                     previousError = error;
                     if (attempt + 1 >= MAX_STEP_ATTEMPTS) {
@@ -724,29 +733,39 @@ public class PlanAgentService {
                     }
                     continue;
                 }
+                if (projectContext != null && projectEvidenceRefs.isEmpty() && hasDependencyEvidence) {
+                    recordEvent(plan.getId(), step.getId(), "step_dependency_evidence_reused", Map.of(
+                            "stepKey", step.getStepKey(),
+                            "projectId", projectContext.projectId(),
+                            "dependencies", readStringList(step.getDependenciesJson()),
+                            "traceId", traceId
+                    ));
+                }
                 if (!projectEvidenceRefs.isEmpty()) {
                     content += "\n[projectEvidenceRefs=" + String.join(",", projectEvidenceRefs) + "]";
                     List<EvidenceRef> typedEvidence = trustedStepEvidence(result, projectContext,
-                            runtimeRequest.toolPolicy().allowedTools());
+                            runtimeRequest.toolPolicy().allowedTools(), runtimeRequest.inheritedTrustedEvidence(),
+                            plan, step, attempt + 1);
                     recordEvent(plan.getId(), step.getId(), "step_project_evidence", Map.of(
                             "stepKey", step.getStepKey(), "projectId", projectContext.projectId(),
                             "evidenceRefs", projectEvidenceRefs, "evidence", typedEvidence, "traceId", traceId));
                 }
-                if (result.runtimeStopSignal() != AgentRuntimeStopSignal.NONE
-                        || "PARTIAL".equalsIgnoreCase(result.outcome())) {
-                    String limitation = StringUtils.hasText(result.errorMessage())
-                            ? result.errorMessage()
-                            : result.fallbacks().stream().reduce((first, second) -> second)
-                            .orElse("Runtime stopped after preserving available evidence.");
-                    step.markDegraded(content, "CONTROLLED_PARTIAL: " + abbreviate(limitation, 1200));
-                    recordEvent(plan.getId(), step.getId(), "step_completed_partial", Map.of(
+                boolean controlledPartial = result.runtimeStopSignal() != AgentRuntimeStopSignal.NONE
+                        || "PARTIAL".equalsIgnoreCase(result.outcome());
+                String controlledLimitation = controlledPartial
+                        ? (StringUtils.hasText(result.errorMessage())
+                        ? result.errorMessage()
+                        : result.fallbacks().stream().reduce((first, second) -> second)
+                        .orElse("Runtime stopped after preserving available evidence."))
+                        : null;
+                if (controlledPartial) {
+                    recordEvent(plan.getId(), step.getId(), "step_controlled_stop_ready_for_verification", Map.of(
                             "stepKey", step.getStepKey(),
                             "result", abbreviate(content, 1200),
-                            "reason", abbreviate(limitation, 1200),
+                            "reason", abbreviate(controlledLimitation, 1200),
                             "stopSignal", result.runtimeStopSignal().name(),
                             "traceId", traceId
                     ));
-                    return;
                 }
                 PlanStepVerifier.VerificationResult verification = stepVerifier.verify(new PlanStepVerifier.VerificationRequest(
                         plan,
@@ -754,6 +773,7 @@ public class PlanAgentService {
                         step,
                         allSteps,
                         content,
+                        verifierExecutionFacts(result),
                         endpoint.apiKey(),
                         endpoint.apiUrl(),
                         traceId
@@ -787,6 +807,18 @@ public class PlanAgentService {
                             "candidateResult", abbreviate(content, 1200),
                             "traceId", traceId
                     ));
+                    boolean hasTrustedProjectEvidence = projectContext != null
+                            && !result.trustedEvidenceLedger().evidence().isEmpty();
+                    if (controlledPartial || hasTrustedProjectEvidence) {
+                        step.markDegraded(content, "VERIFICATION_PARTIAL: " + abbreviate(error, 1200));
+                        recordEvent(plan.getId(), step.getId(), "step_completed_unverified", Map.of(
+                                "stepKey", step.getStepKey(),
+                                "result", abbreviate(content, 1200),
+                                "reason", abbreviate(error, 1200),
+                                "traceId", traceId
+                        ));
+                        return;
+                    }
                     if (attempt + 1 >= MAX_STEP_ATTEMPTS) {
                         step.markFailed(error, content);
                         recordEvent(plan.getId(), step.getId(), "step_failed", Map.of(
@@ -805,10 +837,12 @@ public class PlanAgentService {
                     continue;
                 }
                 step.markCompleted(content);
-                recordEvent(plan.getId(), step.getId(), "step_completed", Map.of(
+                recordEvent(plan.getId(), step.getId(), controlledPartial
+                                ? "step_completed_after_controlled_stop" : "step_completed", Map.of(
                         "stepKey", step.getStepKey(),
                         "steps", result.steps(),
                         "result", abbreviate(content, 1200),
+                        "controlledStop", controlledPartial,
                         "traceId", traceId
                 ));
                 return;
@@ -1353,7 +1387,7 @@ public class PlanAgentService {
                 .append("- description: ").append(step.getDescription()).append("\n")
                 .append("- success criteria: ").append(blankToDefault(step.getSuccessCriteria(), "")).append("\n")
                 .append("- preferred tools: ").append(readStringList(step.getAllowedToolsJson())).append("\n")
-                .append("  The preferred tools are planning hints, not the complete tool set. You may use any exposed read-only Project tool needed to complete this step.\n\n")
+                .append("  These are planning hints, not the complete tool set. You may use any exposed low-risk read-only Project tool needed to complete this step.\n\n")
                 .append("Completed dependency results:\n");
         if (StringUtils.hasText(projectManifestSummary)) {
             sb.append("\nServer-cached Project manifest (reuse this inventory; do not call project_manifest again unless it is explicitly stale):\n")
@@ -1366,17 +1400,22 @@ public class PlanAgentService {
                 hasDependencyResult = true;
                 sb.append("## ").append(item.getStepKey()).append(" ")
                         .append(blankToDefault(item.getTitle(), "")).append("\n")
-                        .append(abbreviate(item.getResult(), 1800)).append("\n\n");
+                        .append(abbreviate(item.getResult(), 3200)).append("\n\n");
                 String dependencyState = sharedExecutionState.get(item.getStepKey());
                 if (StringUtils.hasText(dependencyState)) {
-                    sb.append("Reusable tool observations from ").append(item.getStepKey()).append(":\n")
-                            .append(abbreviate(dependencyState, 1800))
+                    sb.append("Reusable tool observations from ").append(item.getStepKey())
+                            .append(" (including bounded results):\n")
+                            .append(abbreviate(dependencyState, 3600))
                             .append("\nDo not repeat successful or zero-result searches; narrow or change the query only for a stated gap.\n\n");
                 }
             }
         }
         if (!hasDependencyResult) {
             sb.append("None.\n");
+        } else {
+            sb.append("\nThe dependency results above are authoritative inputs for this step. Synthesize them first. ")
+                    .append("Call a tool only after naming one success-criterion fact that is genuinely missing; ")
+                    .append("never re-run a dependency tool merely to recapture its output.\n");
         }
         if (StringUtils.hasText(previousError)) {
             sb.append("\nPrevious attempt error:\n")
@@ -1412,6 +1451,17 @@ public class PlanAgentService {
                 + "\n\nSuccess criteria:\n" + blankToDefault(step.getSuccessCriteria(), "");
     }
 
+    private String verifierExecutionFacts(AgentRuntimeResult result) {
+        if (result == null || result.toolTrace() == null || result.toolTrace().isEmpty()) return "";
+        StringBuilder facts = new StringBuilder();
+        for (String trace : result.toolTrace()) {
+            if (!StringUtils.hasText(trace)) continue;
+            facts.append("- ").append(abbreviate(trace, 700)).append("\n");
+            if (facts.length() >= 4000) break;
+        }
+        return abbreviate(facts.toString(), 4000);
+    }
+
     private void recordToolObservations(AgentPlan plan,
                                         AgentPlanStep step,
                                         AgentRuntimeResult result,
@@ -1432,6 +1482,17 @@ public class PlanAgentService {
             if (projectContext != null) payload.put("projectId", projectContext.projectId());
             recordEvent(plan.getId(), step.getId(), "step_tool_observation", payload);
         }
+        for (BoundedToolResult toolResult : boundedToolResults(result)) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("stepKey", step.getStepKey());
+            payload.put("attempt", attempt);
+            payload.put("toolName", toolResult.toolName());
+            payload.put("toolCallId", toolResult.toolCallId());
+            payload.put("result", toolResult.content());
+            payload.put("traceId", traceId);
+            if (projectContext != null) payload.put("projectId", projectContext.projectId());
+            recordEvent(plan.getId(), step.getId(), "step_tool_result", payload);
+        }
     }
 
     private String mergeExecutionState(String existing, AgentRuntimeResult result) {
@@ -1443,11 +1504,133 @@ public class PlanAgentService {
                         .append(abbreviate(trace, 600)).append("\n");
             }
         }
+        for (BoundedToolResult toolResult : boundedToolResults(result)) {
+            state.append("- REUSABLE RESULT tool=").append(toolResult.toolName()).append(": ")
+                    .append(toolResult.content()).append("\n");
+        }
         if (result != null && StringUtils.hasText(result.assistantContent())) {
             state.append("- Candidate result already produced: ")
                     .append(abbreviate(result.assistantContent(), 800)).append("\n");
         }
-        return abbreviate(state.toString(), 3200);
+        return abbreviate(state.toString(), 6000);
+    }
+
+    private Map<String, String> restoreExecutionState(Long planId) {
+        Map<String, StringBuilder> restored = new LinkedHashMap<>();
+        List<AgentPlanEvent> persisted = events.findByPlanIdOrderByCreatedAtAsc(planId);
+        if (persisted == null) {
+            return new ConcurrentHashMap<>();
+        }
+        for (AgentPlanEvent event : persisted) {
+            if (!("step_tool_observation".equals(event.getEventType())
+                    || "step_tool_result".equals(event.getEventType()))
+                    || !StringUtils.hasText(event.getPayloadJson())) {
+                continue;
+            }
+            try {
+                JsonNode payload = objectMapper.readTree(event.getPayloadJson());
+                String stepKey = payload.path("stepKey").asText("");
+                if (!StringUtils.hasText(stepKey)) {
+                    continue;
+                }
+                StringBuilder state = restored.computeIfAbsent(stepKey, ignored -> new StringBuilder());
+                if ("step_tool_result".equals(event.getEventType())) {
+                    String content = payload.path("result").asText("");
+                    if (StringUtils.hasText(content)) {
+                        state.append("- REUSABLE RESULT tool=").append(payload.path("toolName").asText("unknown"))
+                                .append(": ").append(abbreviate(content, 2400)).append("\n");
+                    }
+                } else {
+                    String trace = payload.path("trace").asText("");
+                    if (StringUtils.hasText(trace)) {
+                        String prefix = payload.path("success").asBoolean(false) ? "- SUCCESS: " : "- FAILED: ";
+                        state.append(prefix).append(abbreviate(trace, 600)).append("\n");
+                    }
+                }
+            } catch (Exception ignored) {
+                // Malformed diagnostic events cannot become reusable execution state.
+            }
+        }
+        Map<String, String> result = new ConcurrentHashMap<>();
+        restored.forEach((key, value) -> result.put(key, abbreviate(value.toString(), 6000)));
+        return result;
+    }
+
+    private List<BoundedToolResult> boundedToolResults(AgentRuntimeResult result) {
+        if (result == null || result.messages() == null) return List.of();
+        Map<String, String> toolNames = new LinkedHashMap<>();
+        for (ChatMessage message : result.messages()) {
+            if (message == null || message.toolCalls() == null) continue;
+            for (ToolCall call : message.toolCalls()) {
+                if (call != null && StringUtils.hasText(call.id()) && call.function() != null) {
+                    toolNames.put(call.id(), blankToDefault(call.function().name(), "unknown"));
+                }
+            }
+        }
+        List<BoundedToolResult> bounded = new ArrayList<>();
+        for (ChatMessage message : result.messages()) {
+            if (message == null || !"tool".equals(message.role()) || !StringUtils.hasText(message.content())) continue;
+            String callId = blankToDefault(message.toolCallId(), "unknown");
+            bounded.add(new BoundedToolResult(callId, toolNames.getOrDefault(callId, "unknown"),
+                    abbreviate(message.content(), 2400)));
+        }
+        return bounded;
+    }
+
+    private record BoundedToolResult(String toolCallId, String toolName, String content) {}
+
+    private boolean hasTrustedDependencyEvidence(Long planId,
+                                                 List<AgentPlanStep> allSteps,
+                                                 AgentPlanStep step) {
+        return !dependencyEvidence(planId, allSteps, step).evidence().isEmpty();
+    }
+
+    /** Reads only trusted observations produced by the current step's persisted dependencies. */
+    private EvidenceLedger dependencyEvidence(Long planId,
+                                              List<AgentPlanStep> allSteps,
+                                              AgentPlanStep step) {
+        Set<String> dependencyKeys = new LinkedHashSet<>(readStringList(step.getDependenciesJson()));
+        if (dependencyKeys.isEmpty()) {
+            return EvidenceLedger.empty();
+        }
+        Set<Long> dependencyIds = allSteps.stream()
+                .filter(item -> dependencyKeys.contains(item.getStepKey()))
+                .map(AgentPlanStep::getId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        if (dependencyIds.isEmpty()) {
+            return EvidenceLedger.empty();
+        }
+        List<AgentPlanEvent> persisted = events.findByPlanIdOrderByCreatedAtAsc(planId);
+        if (persisted == null) {
+            return EvidenceLedger.empty();
+        }
+        Map<String, EvidenceRef> trusted = new LinkedHashMap<>();
+        for (AgentPlanEvent event : persisted) {
+            if (!dependencyIds.contains(event.getStepId())
+                    || !"step_project_evidence".equals(event.getEventType())
+                    || !StringUtils.hasText(event.getPayloadJson())) {
+                continue;
+            }
+            try {
+                JsonNode values = objectMapper.readTree(event.getPayloadJson()).path("evidence");
+                if (!values.isArray()) {
+                    continue;
+                }
+                for (JsonNode value : values) {
+                    EvidenceRef ref = objectMapper.treeToValue(value, EvidenceRef.class);
+                    if (ref != null && ProjectEvidenceValidator.isTrusted(ref)) {
+                        EvidenceRef existing = trusted.putIfAbsent(ref.id(), ref);
+                        if (existing != null && !existing.equals(ref)) {
+                            throw new IllegalArgumentException("conflicting inherited evidence id: " + ref.id());
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // Malformed events never satisfy a Project evidence dependency.
+            }
+        }
+        return new EvidenceLedger(List.copyOf(trusted.values()));
     }
 
     private String buildFinalSummary(AgentPlan plan, List<AgentPlanStep> allSteps) {
@@ -1609,10 +1792,17 @@ public class PlanAgentService {
     }
 
     private List<EvidenceRef> trustedStepEvidence(AgentRuntimeResult result, ProjectRuntimeContext context,
-                                                  List<String> allowedTools) {
+                                                  List<String> allowedTools, EvidenceLedger inherited,
+                                                  AgentPlan plan, AgentPlanStep step, int attempt) {
+        Set<String> inheritedIds = inherited == null ? Set.of() : inherited.evidence().stream()
+                .map(EvidenceRef::id).collect(java.util.stream.Collectors.toSet());
         List<EvidenceRef> trusted = result.trustedEvidenceLedger().evidence().stream()
-                .filter(ProjectEvidenceValidator::isTrusted).toList();
-        if (!trusted.isEmpty()) return trusted;
+                .filter(ProjectEvidenceValidator::isTrusted)
+                .filter(ref -> !inheritedIds.contains(ref.id()))
+                .toList();
+        if (!trusted.isEmpty()) {
+            return trusted.stream().map(ref -> persistedStepEvidence(ref, context, plan, step, attempt)).toList();
+        }
         Map<String, EvidenceRef> observed = new LinkedHashMap<>();
         // Preserve the legacy top-level Project tool path, but never let its adapter pass
         // reintroduce a research observation outside the step's exact allowed-tool set.
@@ -1622,10 +1812,20 @@ public class PlanAgentService {
         ResearchProjectEvidenceAdapter.extract(objectMapper, result.messages(), 0, context,
                         ResearchProjectEvidenceAdapter.allowedResearchTools(allowedTools)).evidence()
                 .forEach(ref -> observed.putIfAbsent(ref.id(), ref));
-        return observed.values().stream().map(ref -> new EvidenceRef(
-                "trusted-plan:" + context.projectId() + ":" + ref.file() + ":" + ref.version() + ":" + ref.chunk(),
+        return observed.values().stream().map(ref -> persistedStepEvidence(ref, context, plan, step, attempt)).toList();
+    }
+
+    private EvidenceRef persistedStepEvidence(EvidenceRef ref, ProjectRuntimeContext context,
+                                               AgentPlan plan, AgentPlanStep step, int attempt) {
+        String identity = String.join("|",
+                blankToDefault(ref.id(), ""), blankToDefault(ref.file(), ""), blankToDefault(ref.version(), ""),
+                blankToDefault(ref.chunk(), ""), blankToDefault(ref.citation(), ""));
+        String observationId = java.util.UUID.nameUUIDFromBytes(
+                identity.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return new EvidenceRef("trusted-plan:" + context.projectId() + ":" + plan.getId() + ":"
+                + step.getId() + ":" + attempt + ":" + observationId,
                 EvidenceSourceType.PROJECT, "PROJECT", ref.file(), ref.chunk(), ref.citation(), ref.version(),
-                "persisted plan step project observation")).toList();
+                "persisted plan step project observation");
     }
 
     private AgentPlan getOwnedPlan(Long userId, Long planId) {

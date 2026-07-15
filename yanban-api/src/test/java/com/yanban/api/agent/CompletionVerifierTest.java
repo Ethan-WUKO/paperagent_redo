@@ -83,6 +83,24 @@ class CompletionVerifierTest {
     }
 
     @Test
+    void failedToolCallDoesNotEraseLaterTrustedEvidenceAndUsefulAnswer() {
+        AgentRuntimeResult raw = new AgentRuntimeResult(true, "Useful answer from the narrower successful read.",
+                List.of(tool(42, "src/Main.java", "h1")), 2, null,
+                List.of(
+                        "step=1 tool=project_search args={query=wide} success=false error=input scope too large",
+                        "step=2 tool=project_read_file args={relativePath=src/Main.java} success=true"),
+                List.of(), null, null, null);
+
+        AgentRuntimeResult result = verifier.verify(projectRequest(AgentStrategy.SINGLE_STEP_REACT), raw);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.outcome()).isEqualTo("PARTIAL");
+        assertThat(result.stopReason()).isEqualTo(AgentStopReason.PLAN_PARTIAL);
+        assertThat(result.completionVerification().status()).isEqualTo(CompletionStatus.PARTIAL);
+        assertThat(result.trustedEvidenceLedger().evidence()).singleElement();
+    }
+
+    @Test
     void governedResearchEnvelopeClosesCompletionEvidenceLoopAndStaleHashIsDiscarded() {
         ProjectService researchProjects = mock(ProjectService.class);
         String hash = "a".repeat(64);
@@ -115,6 +133,64 @@ class CompletionVerifierTest {
         assertThat(historicalOnly.completionVerification().status()).isEqualTo(CompletionStatus.INSUFFICIENT_EVIDENCE);
         assertThat(foreignResult.completionVerification().status()).isEqualTo(CompletionStatus.INSUFFICIENT_EVIDENCE);
         assertThat(candidate.revalidate(wrongHash).status()).isEqualTo(CandidateChangeStatus.STALE);
+    }
+
+    @Test
+    void currentInheritedPlanEvidenceCanGroundSummaryWithoutANewToolCall() {
+        EvidenceRef inherited = new EvidenceRef("trusted-plan:42:src/Main.java:h1:step-1",
+                EvidenceSourceType.PROJECT, "PROJECT", "src/Main.java", "tool:step-1", null, "h1", "test");
+        AgentRuntimeRequest request = projectRequest(AgentStrategy.SINGLE_STEP_REACT)
+                .withInheritedTrustedEvidence(new EvidenceLedger(List.of(inherited)));
+
+        AgentRuntimeResult result = verifier.verify(request, success("summary from completed dependencies", List.of()));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.completionVerification().status()).isEqualTo(CompletionStatus.VERIFIED);
+        assertThat(result.trustedEvidenceLedger().evidence()).containsExactly(inherited);
+    }
+
+    @Test
+    void staleInheritedPlanEvidenceCannotGroundSummary() {
+        EvidenceRef stale = new EvidenceRef("trusted-plan:42:src/Main.java:old:step-1",
+                EvidenceSourceType.PROJECT, "PROJECT", "src/Main.java", "tool:step-1", null, "old", "test");
+        AgentRuntimeRequest request = projectRequest(AgentStrategy.SINGLE_STEP_REACT)
+                .withInheritedTrustedEvidence(new EvidenceLedger(List.of(stale)));
+
+        AgentRuntimeResult result = verifier.verify(request, success("stale summary", List.of()));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.completionVerification().status()).isEqualTo(CompletionStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(result.trustedEvidenceLedger().evidence()).isEmpty();
+    }
+
+    @Test
+    void foreignProjectInheritedEvidenceCannotGroundSummaryEvenWithMatchingPathAndHash() {
+        EvidenceRef foreign = new EvidenceRef("trusted-plan:99:src/Main.java:h1:step-1",
+                EvidenceSourceType.PROJECT, "PROJECT", "src/Main.java", "tool:step-1", null, "h1", "test");
+        AgentRuntimeRequest request = projectRequest(AgentStrategy.SINGLE_STEP_REACT)
+                .withInheritedTrustedEvidence(new EvidenceLedger(List.of(foreign)));
+
+        AgentRuntimeResult result = verifier.verify(request, success("foreign summary", List.of()));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.completionVerification().status()).isEqualTo(CompletionStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(result.trustedEvidenceLedger().evidence()).isEmpty();
+    }
+
+    @Test
+    void planNamespacedInheritedEvidenceDoesNotCollideWithReusedProviderToolCallId() {
+        EvidenceRef inherited = new EvidenceRef("trusted-plan:42:19:101:1:stable-observation",
+                EvidenceSourceType.PROJECT, "PROJECT", "src/Main.java", "tool:call-1", null, "h1", "dependency");
+        AgentRuntimeRequest request = projectRequest(AgentStrategy.SINGLE_STEP_REACT)
+                .withInheritedTrustedEvidence(new EvidenceLedger(List.of(inherited)));
+
+        AgentRuntimeResult result = verifier.verify(request,
+                success("summary with one fresh observation", List.of(tool(42, "src/Main.java", "h1"))));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.trustedEvidenceLedger().evidence()).hasSize(2);
+        assertThat(result.trustedEvidenceLedger().evidence()).extracting(EvidenceRef::id)
+                .contains(inherited.id(), "trusted-tool:42:src/Main.java:h1:call-1");
     }
 
     @Test

@@ -1,5 +1,5 @@
 <template>
-  <NConfigProvider :theme="naiveTheme" :theme-overrides="themeOverrides">
+  <NConfigProvider :theme="naiveTheme" :theme-overrides="themeOverrides" :locale="naiveLocale" :date-locale="naiveDateLocale">
     <NLoadingBarProvider>
       <NDialogProvider>
         <NNotificationProvider>
@@ -7,6 +7,7 @@
             <div class="app-scale-root" :class="{ 'app-scale-root--canvas': useCanvasScale }">
               <RouterView />
             </div>
+            <LanguageToggle v-if="!useCanvasScale" class="app-guest-language-toggle" />
           </NMessageProvider>
         </NNotificationProvider>
       </NDialogProvider>
@@ -23,13 +24,22 @@ import {
   NMessageProvider,
   NNotificationProvider,
   darkTheme,
+  dateEnUS,
+  dateZhCN,
+  enUS,
   lightTheme,
+  zhCN,
 } from 'naive-ui';
 import { RouterView } from 'vue-router';
 import { useRoute } from 'vue-router';
 import { useTheme } from '@/composables/useTheme';
+import LanguageToggle from '@/components/LanguageToggle.vue';
+import { useI18n } from '@/composables/useI18n';
+import { useUiTranslationBridge } from '@/composables/useUiTranslationBridge';
 
 const { isDark } = useTheme();
+const { locale } = useI18n();
+useUiTranslationBridge(locale);
 const route = useRoute();
 // Fixed design canvas: the authenticated app is rendered at this exact size,
 // then uniformly scaled (contain-fit = min of width/height ratio) to fill the
@@ -41,6 +51,8 @@ const MIN_SCALE = 0.2;
 const MAX_SCALE = 3.0;
 
 const naiveTheme = computed(() => (isDark.value ? darkTheme : lightTheme));
+const naiveLocale = computed(() => (locale.value === 'zh-CN' ? zhCN : enUS));
+const naiveDateLocale = computed(() => (locale.value === 'zh-CN' ? dateZhCN : dateEnUS));
 const useCanvasScale = computed(() => route.meta.requiresAuth === true);
 const canvasWidth = computed(() => (route.path.startsWith('/chat') ? CHAT_CANVAS_WIDTH : DEFAULT_CANVAS_WIDTH));
 

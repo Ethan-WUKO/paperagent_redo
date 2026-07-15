@@ -91,9 +91,10 @@ public class CompletionVerifier {
             case VERIFIED -> result.withCompletionVerification(verification).withCandidateChangeSet(candidate)
                     .withCoordination(result.selectedStrategy(), AgentStopReason.COMPLETED, "VERIFIED", result.degraded(), result.degradedFrom());
             case PARTIAL -> controlledBudgetPartial(request, result)
-                    ? result.asControlledPartial().withCompletionVerification(verification).withCandidateChangeSet(candidate)
-                    .withCoordination(result.selectedStrategy(), AgentStopReason.TOOL_CALL_BUDGET_EXHAUSTED,
-                            "PARTIAL", result.degraded(), result.degradedFrom())
+                    ? controlledPartial(result, verification, candidate,
+                            AgentStopReason.TOOL_CALL_BUDGET_EXHAUSTED)
+                    : controlledEvidencePartial(request, result)
+                    ? controlledPartial(result, verification, candidate, AgentStopReason.PLAN_PARTIAL)
                     : failure(result, verification, AgentStopReason.PLAN_PARTIAL, "PARTIAL", candidate);
             case INSUFFICIENT_EVIDENCE -> failure(request.projectContext() == null
                             ? result : result.insufficientProjectEvidence(result.evidenceLedger(), request.history().size()), verification,
@@ -110,6 +111,23 @@ public class CompletionVerifier {
         return request.projectContext() == null
                 || !requiresProjectFileEvidence(request.userMessage())
                 || hasCurrentProjectFileEvidence(result.evidenceLedger(), request.projectContext().projectId());
+    }
+
+    private boolean controlledEvidencePartial(AgentRuntimeRequest request, AgentRuntimeResult result) {
+        if (!result.success() || !StringUtils.hasText(result.assistantContent()) || request.projectContext() == null) {
+            return false;
+        }
+        return !requiresProjectFileEvidence(request.userMessage())
+                || hasCurrentProjectFileEvidence(result.evidenceLedger(), request.projectContext().projectId());
+    }
+
+    private AgentRuntimeResult controlledPartial(AgentRuntimeResult result,
+                                                 CompletionVerification verification,
+                                                 CandidateChangeSet candidate,
+                                                 AgentStopReason stopReason) {
+        return result.asControlledPartial().withCompletionVerification(verification).withCandidateChangeSet(candidate)
+                .withCoordination(result.selectedStrategy(), stopReason, "PARTIAL",
+                        true, result.degradedFrom() == null ? result.selectedStrategy() : result.degradedFrom());
     }
 
     private AgentRuntimeResult failure(AgentRuntimeResult result, CompletionVerification verification,
@@ -134,7 +152,8 @@ public class CompletionVerifier {
 
     private EvidenceLedger observedEvidence(AgentRuntimeRequest request, AgentRuntimeResult result) {
         if (request.projectContext() == null) return merge(result.evidenceLedger(), EvidenceLedger.empty());
-        EvidenceLedger trusted = merge(collectCurrentProjectEvidence(request, result), result.trustedEvidenceLedger());
+        EvidenceLedger trusted = merge(collectCurrentProjectEvidence(request, result),
+                merge(request.inheritedTrustedEvidence(), result.trustedEvidenceLedger()));
         return projectEvidenceValidator.current(request.userId(), request.projectContext(), trusted);
     }
 

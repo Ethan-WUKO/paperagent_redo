@@ -519,6 +519,31 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
+    void scopeRefinementValidationDoesNotConsumeExecutionBudget() {
+        ToolRegistry registry = new ToolRegistry().register(new ScopeRefinementStubToolExecutor(objectMapper));
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
+                .thenReturn(toolCalls(toolRequest("call-1", "project_cross_material_search",
+                        "{\"query\":\"objective\"}")))
+                .thenReturn(toolCalls(
+                        toolRequest("call-2", "project_cross_material_search",
+                                "{\"query\":\"objective\",\"relativePaths\":[\"paper.tex\"]}"),
+                        toolRequest("call-3", "project_cross_material_search",
+                                "{\"query\":\"constraint\",\"relativePaths\":[\"code.py\"]}")))
+                .thenReturn(answer("Both scoped searches completed."));
+
+        AgentRuntimeResult result = new LangChain4jToolCallingStrategy(chatModel, toolProvider(registry), objectMapper)
+                .run(request(List.of("project_cross_material_search"), 2, 1));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.runtimeStopSignal()).isEqualTo(AgentRuntimeStopSignal.NONE);
+        assertThat(result.assistantContent()).isEqualTo("Both scoped searches completed.");
+        assertThat(result.toolTrace()).hasSize(3);
+        assertThat(result.fallbacks()).contains(
+                "Tool scope refinement required; execution budget was not consumed: project_cross_material_search");
+    }
+
+    @Test
     void batchLargerThanRemainingBudgetExecutesOnlyRemainingCallsAndSynthesizesFromEvidence() throws Exception {
         ToolRegistry registry = new ToolRegistry().register(
                 new ProjectResearchStubToolExecutor("project_cross_material_search", objectMapper));
@@ -794,6 +819,34 @@ class LangChain4jToolCallingStrategyTest {
             evidence.put("parserVersion", "test@1");
             evidence.put("trustLabel", "SERVER_ATTESTED_METADATA");
             return ToolResult.success(call.id(), call.name(), output);
+        }
+    }
+
+    private static final class ScopeRefinementStubToolExecutor implements ToolExecutor {
+        private final ToolDefinition definition;
+        private final ObjectMapper objectMapper;
+
+        private ScopeRefinementStubToolExecutor(ObjectMapper objectMapper) {
+            this.objectMapper = objectMapper;
+            ObjectNode parameters = objectMapper.createObjectNode();
+            parameters.put("type", "object");
+            ObjectNode properties = parameters.putObject("properties");
+            properties.putObject("query").put("type", "string");
+            properties.putObject("relativePaths").put("type", "array").putObject("items").put("type", "string");
+            parameters.putArray("required").add("query");
+            this.definition = new ToolDefinition("project_cross_material_search", "scope refinement stub", parameters);
+        }
+
+        @Override public ToolDefinition definition() { return definition; }
+        @Override public ToolDescriptor descriptor() { return visibleSyncDescriptor(definition.name()); }
+
+        @Override
+        public ToolResult execute(ToolCall call) {
+            if (!call.arguments().path("relativePaths").isArray()) {
+                return ToolResult.failure(call.id(), call.name(), com.yanban.core.tool.ToolErrorCode.VALIDATION_ERROR,
+                        "Large Project requires relativePaths before execution");
+            }
+            return ToolResult.success(call.id(), call.name(), objectMapper.createObjectNode().put("status", "COMPLETE"));
         }
     }
 

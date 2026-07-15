@@ -68,13 +68,19 @@ class PlanStepVerifierTest {
         assertThat(request.responseFormat()).isEqualTo(ChatRequest.ResponseFormat.jsonObject());
         assertThat(request.thinking()).isEqualTo(ChatRequest.Thinking.disabled());
         assertThat(request.messages()).hasSize(2);
+        assertThat(request.messages().get(0).content())
+                .contains("a documented zero-match result satisfies the")
+                .contains("Never require a positive finding")
+                .contains("require paths and line numbers only for actual matches");
         assertThat(request.messages().get(1).content())
                 .contains("Overall goal")
                 .contains("Complete the research task")
                 .contains("success criteria")
                 .contains("The step has produced a usable result")
                 .contains("dependency result")
-                .contains("candidate artifact path");
+                .contains("candidate artifact path")
+                .contains("Server-observed tool facts")
+                .contains("observation=hits:0");
     }
 
     @Test
@@ -99,6 +105,55 @@ class PlanStepVerifierTest {
                 .contains("too vague")
                 .contains("specific source")
                 .contains("reusable conclusion");
+    }
+
+    @Test
+    void verifyRequiresOneDecisionForEveryServerNumberedCriterion() {
+        when(modelProvider.chat(any())).thenReturn(new ChatResponse(
+                ChatMessage.assistant("""
+                        {
+                          "criteria": [
+                            {"id":"c1","satisfied":true,"reason":"Sections are listed"},
+                            {"id":"c2","satisfied":false,"reason":"Line references are missing"}
+                          ],
+                          "reason":"The result is only partially complete"
+                        }
+                        """),
+                "stop",
+                null
+        ));
+
+        PlanStepVerifier.VerificationRequest request = newRequest("sections without line references");
+        ReflectionTestUtils.setField(request.step(), "successCriteria",
+                "List the section structure; Provide relative paths and line references");
+        PlanStepVerifier.VerificationResult result = verifier.verify(request);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(result.conclusive()).isTrue();
+        assertThat(result.criteria()).extracting(PlanStepVerifier.CriterionDecision::id)
+                .containsExactly("c1", "c2");
+        assertThat(result.criteria()).extracting(PlanStepVerifier.CriterionDecision::satisfied)
+                .containsExactly(true, false);
+    }
+
+    @Test
+    void verifyIsInconclusiveWhenStructuredDecisionOmitsACriterion() {
+        when(modelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {"criteria":[{"id":"c1","satisfied":true,"reason":"Sections are listed"}]}
+                        """), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {"criteria":[{"id":"c1","satisfied":true,"reason":"Sections are listed"}]}
+                        """), "stop", null));
+
+        PlanStepVerifier.VerificationRequest request = newRequest("sections only");
+        ReflectionTestUtils.setField(request.step(), "successCriteria",
+                "List the section structure; Provide relative paths and line references");
+        PlanStepVerifier.VerificationResult result = verifier.verify(request);
+
+        assertThat(result.conclusive()).isFalse();
+        assertThat(result.reason()).contains("criterion c2");
+        verify(modelProvider, org.mockito.Mockito.times(2)).chat(any());
     }
 
     @Test
@@ -189,7 +244,10 @@ class PlanStepVerifierTest {
                 step,
                 List.of(dependency, step),
                 candidateResult,
-                "test-api-key"
+                "step=1 tool=project_search success=true observation=hits:0",
+                "test-api-key",
+                null,
+                "trace-test"
         );
     }
 }

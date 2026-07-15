@@ -196,6 +196,9 @@ import AppLayout from '@/components/AppLayout.vue';
 import WorkspaceHero from '@/components/WorkspaceHero.vue';
 import { searchKnowledge, type KnowledgeSearchResult } from '@/api/knowledge';
 import { ui } from '@/ui';
+import { useI18n } from '@/composables/useI18n';
+
+const { isEnglish, locale } = useI18n();
 
 const form = reactive({
   query: '',
@@ -218,12 +221,12 @@ const averageScore = computed(() => {
 });
 const recallStatusLabel = computed(() => {
   if (results.value.length === 0) {
-    return 'No run';
+    return isEnglish.value ? 'No run' : '尚未运行';
   }
   if (lowScoreCount.value > Math.max(1, Math.floor(results.value.length / 3))) {
-    return 'Needs review';
+    return isEnglish.value ? 'Needs review' : '需要检查';
   }
-  return 'Good';
+  return isEnglish.value ? 'Good' : '良好';
 });
 const recallStatusType = computed(() => {
   if (results.value.length === 0) {
@@ -280,7 +283,7 @@ async function handleSearch() {
 }
 
 function fillSampleQuery() {
-  form.query = '实验室每周组会时间是什么时候？';
+  form.query = isEnglish.value ? 'When is the weekly lab meeting?' : '实验室每周组会时间是什么时候？';
   form.topK = 5;
 }
 
@@ -295,12 +298,12 @@ function clearResults() {
 
 function scoreBandLabel(score: number) {
   if (score >= 0.75) {
-    return 'High';
+    return isEnglish.value ? 'High' : '高';
   }
   if (score >= 0.5) {
-    return 'Medium';
+    return isEnglish.value ? 'Medium' : '中';
   }
-  return 'Low';
+  return isEnglish.value ? 'Low' : '低';
 }
 
 function scoreBandType(score: number) {
@@ -318,6 +321,6 @@ function formatScore(score: number) {
 }
 
 function formatDateTime(value: string) {
-  return new Date(value).toLocaleString('zh-CN');
+  return new Date(value).toLocaleString(locale.value);
 }
 </script>

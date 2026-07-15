@@ -47,7 +47,9 @@ public class PlanStepVerifier {
                 return VerificationResult.inconclusive("Verifier returned an empty response.");
             }
             try {
-                return parseVerification(content);
+                VerificationResult decision = parseVerification(content, request);
+                logDecision(request, decision);
+                return decision;
             } catch (Exception ex) {
                 log.warn("Plan step verifier returned invalid JSON stepKey={} attempt=1 finishReason={} error={}",
                         request.step().getStepKey(), response == null ? null : response.finishReason(), abbreviate(ex.getMessage(), 300));
@@ -57,13 +59,15 @@ public class PlanStepVerifier {
                 String repairedContent = repaired == null || repaired.message() == null ? null : repaired.message().content();
                 logVerifierResponse(request, repaired, repairedContent, 2);
                 try {
-                    return parseVerification(repairedContent);
+                    VerificationResult decision = parseVerification(repairedContent, request);
+                    logDecision(request, decision);
+                    return decision;
                 } catch (Exception repairError) {
                     log.warn("Plan step verifier repair returned invalid JSON stepKey={} attempt=2 finishReason={} error={}",
                             request.step().getStepKey(), repaired == null ? null : repaired.finishReason(),
                             abbreviate(repairError.getMessage(), 300));
-                    return VerificationResult.inconclusive("Verifier returned invalid JSON after one bounded repair."
-                            + finishReasonSuffix(response, repaired));
+                    return VerificationResult.inconclusive("Verifier returned invalid JSON or an incomplete structured decision after one bounded repair: "
+                            + abbreviate(repairError.getMessage(), 140) + finishReasonSuffix(response, repaired));
                 }
             }
         } catch (Exception ex) {
@@ -78,21 +82,28 @@ public class PlanStepVerifier {
                 Judge only whether the candidate result satisfies the current step success criteria.
                 Do not require future steps to be completed.
                 Be strict about missing evidence, missing requested artifacts, and vague placeholder answers.
-                Return one compact JSON object only. Keep reason under 120 characters and at most 3 missing items:
-                {"passed":true,"reason":"brief reason","missing":[]}
+                For search, audit, discovery, or lookup criteria, a documented zero-match result satisfies the
+                criterion when the candidate identifies the searched term/scope and cites governed tool evidence.
+                Never require a positive finding when the criterion only requires performing and reporting a search.
+                A zero-match result has no matching file path or line number. Do not require nonexistent locations;
+                require paths and line numbers only for actual matches. Server-observed tool facts take precedence.
+                A bare unsupported claim of "no matches" does not satisfy the criterion.
+                Evaluate every numbered criterion supplied by the server. Return one compact JSON object only.
+                Keep each reason under 100 characters. Use exactly this shape:
+                {"criteria":[{"id":"c1","satisfied":true,"reason":"brief basis"}],"reason":"brief overall reason"}
                 """;
     }
 
     private String buildRepairSystemPrompt() {
         return """
                 Repair a verifier decision into one compact JSON object only.
-                Do not repeat the candidate result. Use exactly these fields:
-                {"passed":true,"reason":"under 120 characters","missing":[]}
+                Evaluate every supplied criterion and do not repeat the candidate result. Use exactly this shape:
+                {"criteria":[{"id":"c1","satisfied":true,"reason":"brief basis"}],"reason":"brief overall reason"}
                 """;
     }
 
     private String buildRepairUserMessage(VerificationRequest request, String invalidOutput) {
-        return "Success criteria:\n" + abbreviate(request.successCriteria(), 500)
+        return "Criteria to evaluate:\n" + formatCriteria(criteria(request.successCriteria()))
                 + "\n\nCandidate summary:\n" + abbreviate(request.candidateResult(), 1400)
                 + "\n\nInvalid verifier output to repair:\n" + abbreviate(invalidOutput, 400);
     }
@@ -112,6 +123,12 @@ public class PlanStepVerifier {
                 content == null ? 0 : content.length());
     }
 
+    private void logDecision(VerificationRequest request, VerificationResult decision) {
+        log.info("Plan step verifier decision stepKey={} passed={} conclusive={} reason={}",
+                request.step().getStepKey(), decision.passed(), decision.conclusive(),
+                abbreviate(decision.reason(), 240));
+    }
+
     private String finishReasonSuffix(ChatResponse first, ChatResponse second) {
         String firstReason = first == null ? null : first.finishReason();
         String secondReason = second == null ? null : second.finishReason();
@@ -128,7 +145,7 @@ public class PlanStepVerifier {
                 .append("- title: ").append(blankToDefault(request.step().getTitle(), "")).append("\n")
                 .append("- type: ").append(blankToDefault(request.step().getType(), "")).append("\n")
                 .append("- description: ").append(request.step().getDescription()).append("\n")
-                .append("- success criteria: ").append(request.successCriteria()).append("\n\n")
+                .append("- success criteria to evaluate:\n").append(formatCriteria(criteria(request.successCriteria()))).append("\n")
                 .append("Completed dependency results:\n");
         boolean hasDependencyResult = false;
         for (AgentPlanStep dependency : completedDependencyResults(request)) {
@@ -145,11 +162,45 @@ public class PlanStepVerifier {
         }
         sb.append("Candidate result to verify:\n")
                 .append(abbreviate(request.candidateResult(), 3000));
+        if (StringUtils.hasText(request.executionFacts())) {
+            sb.append("\n\nServer-observed tool facts (authoritative; not model claims):\n")
+                    .append(abbreviate(request.executionFacts(), 4000));
+        }
         return sb.toString();
     }
 
-    private VerificationResult parseVerification(String raw) throws Exception {
+    private VerificationResult parseVerification(String raw, VerificationRequest request) throws Exception {
         JsonNode root = objectMapper.readTree(stripCodeFence(raw));
+        List<Criterion> expected = criteria(request.successCriteria());
+        JsonNode criterionResults = root.path("criteria");
+        if (criterionResults.isArray()) {
+            List<CriterionDecision> decisions = new ArrayList<>();
+            for (Criterion criterion : expected) {
+                JsonNode matched = null;
+                for (JsonNode candidate : criterionResults) {
+                    if (criterion.id().equals(candidate.path("id").asText())) {
+                        matched = candidate;
+                        break;
+                    }
+                }
+                if (matched == null || !matched.has("satisfied") || !matched.path("satisfied").isBoolean()) {
+                    throw new IllegalArgumentException(
+                            "Verifier omitted a decision for criterion " + criterion.id() + ".");
+                }
+                decisions.add(new CriterionDecision(
+                        criterion.id(),
+                        matched.path("satisfied").asBoolean(),
+                        abbreviate(matched.path("reason").asText("No basis supplied."), 180)
+                ));
+            }
+            boolean passed = decisions.stream().allMatch(CriterionDecision::satisfied);
+            String reason = abbreviate(firstText(root, "reason", "rationale", "explanation"), 240);
+            if (!StringUtils.hasText(reason)) {
+                reason = passed ? "Every success criterion is satisfied."
+                        : "One or more success criteria are not satisfied.";
+            }
+            return new VerificationResult(passed, true, reason, null, decisions);
+        }
         Boolean passed = readBoolean(root, "passed", "success", "satisfied");
         if (passed == null) {
             return VerificationResult.inconclusive("Verifier response did not include a boolean passed field.");
@@ -170,7 +221,36 @@ public class PlanStepVerifier {
             reason = passed ? "Candidate result satisfies the success criteria."
                     : "Candidate result does not satisfy the success criteria.";
         }
-        return new VerificationResult(passed, true, abbreviate(reason, 240), evidence);
+        return new VerificationResult(passed, true, abbreviate(reason, 240), evidence, List.of());
+    }
+
+    private List<Criterion> criteria(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return List.of();
+        }
+        String normalized = raw.replace("\r", "\n");
+        String[] parts = normalized.split("(?:\\n+|;|；)+");
+        List<Criterion> result = new ArrayList<>();
+        for (String part : parts) {
+            String value = part == null ? "" : part.trim()
+                    .replaceFirst("^(?:[-*]|\\d+[.)、])\\s*", "");
+            if (StringUtils.hasText(value)) {
+                result.add(new Criterion("c" + (result.size() + 1), abbreviate(value, 240)));
+            }
+        }
+        if (result.isEmpty()) {
+            result.add(new Criterion("c1", abbreviate(raw.trim(), 240)));
+        }
+        return List.copyOf(result);
+    }
+
+    private String formatCriteria(List<Criterion> criteria) {
+        StringBuilder result = new StringBuilder();
+        for (Criterion criterion : criteria) {
+            result.append("- ").append(criterion.id()).append(": ")
+                    .append(criterion.description()).append("\n");
+        }
+        return result.toString().trim();
     }
 
     private List<AgentPlanStep> completedDependencyResults(VerificationRequest request) {
@@ -285,6 +365,7 @@ public class PlanStepVerifier {
             AgentPlanStep step,
             List<AgentPlanStep> allSteps,
             String candidateResult,
+            String executionFacts,
             String apiKey,
             String apiUrl,
             String traceId
@@ -295,7 +376,7 @@ public class PlanStepVerifier {
                                    List<AgentPlanStep> allSteps,
                                    String candidateResult,
                                    String apiKey) {
-            this(plan, session, step, allSteps, candidateResult, apiKey, null, null);
+            this(plan, session, step, allSteps, candidateResult, null, apiKey, null, null);
         }
 
         public String successCriteria() {
@@ -304,17 +385,32 @@ public class PlanStepVerifier {
 
     }
 
-    public record VerificationResult(boolean passed, boolean conclusive, String reason, String evidence) {
+    private record Criterion(String id, String description) {
+    }
+
+    public record CriterionDecision(String id, boolean satisfied, String reason) {
+    }
+
+    public record VerificationResult(boolean passed, boolean conclusive, String reason, String evidence,
+                                     List<CriterionDecision> criteria) {
+        public VerificationResult(boolean passed, boolean conclusive, String reason, String evidence) {
+            this(passed, conclusive, reason, evidence, List.of());
+        }
+
+        public VerificationResult {
+            criteria = criteria == null ? List.of() : List.copyOf(criteria);
+        }
+
         public static VerificationResult passed(String reason) {
-            return new VerificationResult(true, true, reason, null);
+            return new VerificationResult(true, true, reason, null, List.of());
         }
 
         public static VerificationResult failed(String reason) {
-            return new VerificationResult(false, true, reason, null);
+            return new VerificationResult(false, true, reason, null, List.of());
         }
 
         public static VerificationResult inconclusive(String reason) {
-            return new VerificationResult(true, false, reason, null);
+            return new VerificationResult(true, false, reason, null, List.of());
         }
     }
 }

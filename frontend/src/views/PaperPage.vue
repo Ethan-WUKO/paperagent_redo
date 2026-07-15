@@ -2,36 +2,36 @@
   <AppLayout>
     <div class="paper-page workbench-page scholar-page scholar-page--paper">
       <WorkspaceHero
-        kicker="Academic Writing"
-        title="Paper Polish Workspace"
-        subtitle="Revise manuscripts with retrieval-backed critique, citation support, live task events, and export-ready artifacts."
+        :kicker="t('paper.kicker')"
+        :title="t('paper.title')"
+        :subtitle="t('paper.subtitle')"
         storage-key="yanban.hero.paper"
       >
         <template #actions>
           <NSpace align="center">
-            <NButton secondary @click="startNewPaperTask">New polish</NButton>
-            <NButton secondary :loading="historyLoading" @click="loadHistory">Save draft</NButton>
-            <NButton type="primary" :loading="submitting" @click="handleSubmit">Run Workflow</NButton>
+            <NButton secondary @click="startNewPaperTask">{{ t('paper.newPolish') }}</NButton>
+            <NButton secondary :loading="historyLoading" @click="loadHistory">{{ t('paper.saveDraft') }}</NButton>
+            <NButton type="primary" :loading="submitting" @click="handleSubmit">{{ t('paper.runWorkflow') }}</NButton>
           </NSpace>
         </template>
       </WorkspaceHero>
 
       <div class="paper-hero-panel">
         <NTag :type="currentTask ? statusTagType(currentTask.status) : 'default'" round>
-          {{ currentTask?.status || '未创建任务' }}
+          {{ currentTask ? taskStatusLabel(currentTask.status) : t('paper.noTask') }}
         </NTag>
         <div class="paper-hero-metrics">
           <div>
-            <span>进度</span>
+            <span>{{ t('paper.progress') }}</span>
             <strong>{{ progressPercent }}%</strong>
           </div>
           <div>
-            <span>阶段</span>
+            <span>{{ t('paper.stage') }}</span>
             <strong>{{ currentStageLabel }}</strong>
           </div>
           <div>
-            <span>产物</span>
-            <strong>{{ canDownload ? 'Ready' : 'Pending' }}</strong>
+            <span>{{ t('paper.artifacts') }}</span>
+            <strong>{{ canDownload ? t('paper.ready') : t('paper.pending') }}</strong>
           </div>
         </div>
       </div>
@@ -39,10 +39,10 @@
       <section class="paper-task-board">
         <div class="paper-task-board__head">
           <div>
-            <div class="section-title">运行中的润色任务</div>
-            <p>多个论文润色任务可以同时在后台运行；点选任务后，下方展示该任务的详细进度与确认项。</p>
+            <div class="section-title">{{ t('paper.runningTasks') }}</div>
+            <p>{{ t('paper.runningTasksBody') }}</p>
           </div>
-          <NButton size="small" secondary :loading="historyLoading" @click="refreshTaskBoard">刷新任务</NButton>
+          <NButton size="small" secondary :loading="historyLoading" @click="refreshTaskBoard">{{ t('paper.refreshTasks') }}</NButton>
         </div>
 
         <div v-if="activeTaskCards.length > 0" class="paper-running-tasks">
@@ -57,13 +57,13 @@
           >
             <button type="button" @click="openHistoryTask(task.id)">
               <span>{{ taskCardTitle(task) }}</span>
-              <strong>{{ task.status === 'WAITING_INPUT' ? '待结构确认' : taskStatusLabel(task.status) }}</strong>
+              <strong>{{ task.status === 'WAITING_INPUT' ? t('paper.waitingStructure') : taskStatusLabel(task.status) }}</strong>
             </button>
             <div class="paper-running-task__meta">
               <span>{{ taskStageLabel(task) }}</span>
               <small>{{ formatDateTime(task.updatedAt) }}</small>
             </div>
-            <div class="paper-running-task__flow" aria-label="论文润色任务进度">
+            <div class="paper-running-task__flow" :aria-label="t('paper.workflowAria')">
               <span
                 v-for="step in workflowSteps"
                 :key="step.stage"
@@ -75,7 +75,7 @@
             </div>
           </article>
         </div>
-        <NEmpty v-else description="暂无正在运行或等待确认的论文润色任务。" />
+        <NEmpty v-else :description="t('paper.noRunningTasks')" />
       </section>
 
       <div class="paper-polish-shell">
@@ -84,7 +84,7 @@
             <NGridItem span="24 l:11">
               <NCard class="workbench-card scholar-card paper-polish-card paper-input-card" :bordered="false">
                 <template #header>
-                  <div class="section-title">Input Manuscript</div>
+                  <div class="section-title">{{ t('paper.inputManuscript') }}</div>
                 </template>
                 <input ref="texInputRef" type="file" accept=".tex" class="kb-file-input" @change="handleTexFileChange" />
                 <input ref="bibInputRef" type="file" accept=".bib" class="kb-file-input" @change="handleBibFileChange" />
@@ -92,43 +92,57 @@
                 <div class="paper-polish-dropzone" @click="texInputRef?.click()">
                   <div class="paper-file-chip">TEX</div>
                   <div>
-                    <strong>{{ selectedTexFile?.name || currentTask?.sourceFilename || 'Choose main.tex' }}</strong>
+                    <strong>{{ selectedTexFile?.name || currentTask?.sourceFilename || t('paper.chooseTex') }}</strong>
                     <span>
-                      {{ selectedTexFile ? formatFileSize(selectedTexFile.size) : (currentTask?.sourceFilename ? `Task #${currentTask.id}` : 'Drag and drop your LaTeX entry file, or click to browse') }}
+                      {{ selectedTexFile ? formatFileSize(selectedTexFile.size) : (currentTask?.sourceFilename ? `Task #${currentTask.id}` : t('paper.dropTex')) }}
                     </span>
                   </div>
                   <NTag :type="selectedTexFile || currentTask ? 'success' : 'default'" round>
-                    {{ selectedTexFile || currentTask ? 'Ready' : 'Required' }}
+                    {{ selectedTexFile || currentTask ? t('paper.ready') : t('paper.required') }}
                   </NTag>
                 </div>
 
                 <div class="paper-input-actions">
-                  <NButton v-if="currentTask" secondary @click="startNewPaperTask">Start new task</NButton>
-                  <NButton secondary @click="texInputRef?.click()">Upload New</NButton>
+                  <NButton v-if="currentTask" secondary @click="startNewPaperTask">{{ t('paper.startNew') }}</NButton>
+                  <NButton secondary @click="texInputRef?.click()">{{ t('paper.uploadNew') }}</NButton>
                   <NButton secondary @click="bibInputRef?.click()">
-                    {{ selectedBibFile ? selectedBibFile.name : 'Attach .bib file' }}
+                    {{ selectedBibFile ? selectedBibFile.name : t('paper.attachBib') }}
                   </NButton>
                 </div>
+
+                <section class="paper-sample-panel" :aria-label="t('paper.sampleTitle')">
+                  <div class="paper-sample-panel__actions">
+                    <NButton type="primary" secondary :loading="sampleLoading" @click="loadPaperSample">
+                      {{ sampleLoading ? t('paper.loadingSample') : t('paper.loadSample') }}
+                    </NButton>
+                    <NButton tag="a" secondary href="/samples/scholarai-paper-sample.tex" download="scholarai-paper-sample.tex">
+                      {{ t('paper.downloadTex') }}
+                    </NButton>
+                    <NButton tag="a" secondary href="/samples/scholarai-paper-sample.bib" download="scholarai-paper-sample.bib">
+                      {{ t('paper.downloadBib') }}
+                    </NButton>
+                  </div>
+                </section>
 
                 <div class="paper-config-grid">
                   <NForm :model="form" label-placement="top">
                     <NGrid :cols="24" :x-gap="12" responsive="screen" item-responsive>
-                      <NFormItemGi span="24 m:8" label="Target language">
+                      <NFormItemGi span="24 m:8" :label="t('paper.targetLanguage')">
                         <NSelect v-model:value="form.targetLanguage" :options="languageOptions" />
                       </NFormItemGi>
-                      <NFormItemGi span="24 m:8" label="Score threshold">
+                      <NFormItemGi span="24 m:8" :label="t('paper.scoreThreshold')">
                         <NInputNumber v-model:value="form.scoreThreshold" :min="0" :max="100" style="width: 100%" />
                       </NFormItemGi>
-                      <NFormItemGi span="24 m:8" label="Max section rounds">
+                      <NFormItemGi span="24 m:8" :label="t('paper.maxRounds')">
                         <NInputNumber v-model:value="form.maxRounds" :min="1" :max="20" style="width: 100%" />
                       </NFormItemGi>
-                      <NFormItemGi span="24 m:8" label="Repairs per round">
+                      <NFormItemGi span="24 m:8" :label="t('paper.repairsPerRound')">
                         <NInputNumber v-model:value="form.innerMaxAttempts" :min="1" :max="20" style="width: 100%" />
                       </NFormItemGi>
-                      <NFormItemGi span="24 m:8" label="Min literature">
+                      <NFormItemGi span="24 m:8" :label="t('paper.minLiterature')">
                         <NInputNumber v-model:value="form.literatureMinCount" :min="1" :max="form.literatureCount" style="width: 100%" />
                       </NFormItemGi>
-                      <NFormItemGi span="24 m:8" label="Max literature">
+                      <NFormItemGi span="24 m:8" :label="t('paper.maxLiterature')">
                         <NInputNumber v-model:value="form.literatureCount" :min="form.literatureMinCount" :max="100" style="width: 100%" />
                       </NFormItemGi>
                     </NGrid>
@@ -930,9 +944,11 @@ import {
 import { cancelTask, getTaskStatus, listTaskEvents, type TaskEventResponse, type TaskStatusResponse } from '@/api/task';
 import { ui } from '@/ui';
 import { expireAuthSession, isJwtExpired } from '@/auth/session';
+import { useI18n } from '@/composables/useI18n';
 
 const route = useRoute();
 const router = useRouter();
+const { isEnglish, locale, t } = useI18n();
 const PAPER_TASK_TYPE = 'paper_polish';
 const TERMINAL_TASK_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT']);
 const ACTIVE_TASK_STATUSES = new Set(['PENDING', 'RUNNING', 'PAUSED', 'WAITING_INPUT', 'CANCEL_REQUESTED', 'CANCELLING']);
@@ -942,6 +958,7 @@ const selectedTexFile = ref<File | null>(null);
 const selectedBibFile = ref<File | null>(null);
 const submitting = ref(false);
 const downloading = ref(false);
+const sampleLoading = ref(false);
 const currentTask = ref<PaperTaskResponse | null>(null);
 const events = ref<PaperTimelineEvent[]>([]);
 const clarifications = ref<PaperClarificationResponse[]>([]);
@@ -976,24 +993,24 @@ const form = reactive({
   literatureCount: 20,
 });
 
-const languageOptions = [
-  { label: '中文', value: 'zh' },
+const languageOptions = computed(() => [
+  { label: isEnglish.value ? 'Chinese' : '中文', value: 'zh' },
   { label: 'English', value: 'en' },
-];
+]);
 
-const sectionRoleOptions = [
-  { label: '摘要', value: 'ABSTRACT' },
-  { label: '引言', value: 'INTRO' },
-  { label: '相关工作', value: 'RELATED_WORK' },
-  { label: '方法', value: 'METHOD' },
-  { label: '实验', value: 'EXPERIMENTS' },
-  { label: '结果', value: 'RESULTS' },
-  { label: '讨论', value: 'DISCUSSION' },
-  { label: '结论', value: 'CONCLUSION' },
-  { label: '参考文献', value: 'REFERENCES' },
-  { label: '附录', value: 'APPENDIX' },
-  { label: '未知', value: 'UNKNOWN' },
-];
+const sectionRoleOptions = computed(() => [
+  { label: isEnglish.value ? 'Abstract' : '摘要', value: 'ABSTRACT' },
+  { label: isEnglish.value ? 'Introduction' : '引言', value: 'INTRO' },
+  { label: isEnglish.value ? 'Related Work' : '相关工作', value: 'RELATED_WORK' },
+  { label: isEnglish.value ? 'Method' : '方法', value: 'METHOD' },
+  { label: isEnglish.value ? 'Experiments' : '实验', value: 'EXPERIMENTS' },
+  { label: isEnglish.value ? 'Results' : '结果', value: 'RESULTS' },
+  { label: isEnglish.value ? 'Discussion' : '讨论', value: 'DISCUSSION' },
+  { label: isEnglish.value ? 'Conclusion' : '结论', value: 'CONCLUSION' },
+  { label: isEnglish.value ? 'References' : '参考文献', value: 'REFERENCES' },
+  { label: isEnglish.value ? 'Appendix' : '附录', value: 'APPENDIX' },
+  { label: isEnglish.value ? 'Unknown' : '未知', value: 'UNKNOWN' },
+]);
 
 const currentTaskId = computed(() => currentTask.value?.id ?? null);
 const canPause = computed(() => currentTask.value?.status === 'RUNNING');
@@ -1010,9 +1027,9 @@ const hasDownloadableArtifacts = computed(() => activeArtifacts.value.some((item
 const canDownload = computed(() => (Boolean(currentTask.value?.finalObjectKey) || hasDownloadableArtifacts.value) && !downloading.value);
 const resultFileText = computed(() => {
   const count = activeArtifacts.value.filter((item) => downloadableArtifactTypes.includes(item.type)).length;
-  if (count > 0) return `已生成 ${count} 个产物，可下载 zip`;
+  if (count > 0) return isEnglish.value ? `${count} artifacts generated; zip is ready` : `已生成 ${count} 个产物，可下载 zip`;
   if (currentTask.value?.finalObjectKey) return currentTask.value.finalObjectKey;
-  return '尚未生成';
+  return isEnglish.value ? 'Not generated yet' : '尚未生成';
 });
 const pendingClarifications = computed(() => clarifications.value.filter((item) => item.status === 'PENDING'));
 const pendingBlockingClarifications = computed(() => pendingClarifications.value.filter((item) => clarificationQuestion(item).blocking));
@@ -1100,13 +1117,13 @@ const workflowActivityDetail = computed(() => {
 });
 const sectionProgressText = computed(() => {
   const event = latestProgressEvent.value;
-  if (!event?.currentSection || !event.totalSections) return '暂无章节进度';
+  if (!event?.currentSection || !event.totalSections) return isEnglish.value ? 'No section progress' : '暂无章节进度';
   const title = event.sectionTitle ? ` · ${event.sectionTitle}` : '';
   return `${event.currentSection}/${event.totalSections}${title}`;
 });
 const attemptProgressText = computed(() => {
   const event = latestProgressEvent.value;
-  if (!event?.attempt || !event.maxAttempts) return '暂无尝试信息';
+  if (!event?.attempt || !event.maxAttempts) return isEnglish.value ? 'No attempt data' : '暂无尝试信息';
   return `${event.attempt}/${event.maxAttempts}`;
 });
 const citationSlots = computed(() => {
@@ -1129,11 +1146,11 @@ const activeTaskCards = computed<PaperTaskListItem[]>(() => {
   });
 });
 const sseStatusText = computed(() => {
-  if (sseStatus.value === 'connecting') return '连接中';
-  if (sseStatus.value === 'connected') return '已连接';
-  if (sseStatus.value === 'closed') return '已关闭';
-  if (sseStatus.value === 'error') return '异常断开';
-  return '未连接';
+  if (sseStatus.value === 'connecting') return isEnglish.value ? 'Connecting' : '连接中';
+  if (sseStatus.value === 'connected') return isEnglish.value ? 'Connected' : '已连接';
+  if (sseStatus.value === 'closed') return isEnglish.value ? 'Closed' : '已关闭';
+  if (sseStatus.value === 'error') return isEnglish.value ? 'Disconnected' : '异常断开';
+  return isEnglish.value ? 'Not connected' : '未连接';
 });
 
 onMounted(async () => {
@@ -1213,6 +1230,27 @@ function handleTexFileChange(event: Event) {
 function handleBibFileChange(event: Event) {
   const target = event.target as HTMLInputElement;
   selectedBibFile.value = target.files?.[0] || null;
+}
+
+async function loadPaperSample() {
+  sampleLoading.value = true;
+  try {
+    const [texResponse, bibResponse] = await Promise.all([
+      fetch('/samples/scholarai-paper-sample.tex'),
+      fetch('/samples/scholarai-paper-sample.bib'),
+    ]);
+    if (!texResponse.ok || !bibResponse.ok) {
+      throw new Error('Sample assets are unavailable');
+    }
+    const [texBlob, bibBlob] = await Promise.all([texResponse.blob(), bibResponse.blob()]);
+    selectedTexFile.value = new File([texBlob], 'scholarai-paper-sample.tex', { type: 'application/x-tex' });
+    selectedBibFile.value = new File([bibBlob], 'scholarai-paper-sample.bib', { type: 'application/x-bibtex' });
+    ui.message.success(t('paper.sampleLoaded'));
+  } catch {
+    ui.message.error(t('paper.sampleLoadFailed'));
+  } finally {
+    sampleLoading.value = false;
+  }
 }
 
 async function handleSubmit() {
@@ -1604,11 +1642,22 @@ function statusTagType(status: string) {
 }
 
 function taskCardTitle(task: PaperTaskListItem) {
-  return task.title || task.sourceFilename || `论文任务 #${task.id}`;
+  return task.title || task.sourceFilename || `${isEnglish.value ? 'Paper task' : '论文任务'} #${task.id}`;
 }
 
 function taskStatusLabel(status: string) {
-  const labels: Record<string, string> = {
+  const labels: Record<string, string> = isEnglish.value ? {
+    PENDING: 'Pending',
+    RUNNING: 'Running',
+    PAUSED: 'Paused',
+    WAITING_INPUT: 'Awaiting review',
+    CANCEL_REQUESTED: 'Stopping',
+    CANCELLING: 'Stopping',
+    COMPLETED: 'Completed',
+    FAILED: 'Failed',
+    CANCELLED: 'Cancelled',
+    TIMED_OUT: 'Timed out',
+  } : {
     PENDING: '等待中',
     RUNNING: '运行中',
     PAUSED: '已暂停',
@@ -1624,9 +1673,9 @@ function taskStatusLabel(status: string) {
 }
 
 function taskStageLabel(task: PaperTaskListItem) {
-  if (task.status === 'WAITING_INPUT') return '结构确认等待处理';
-  if (task.status === 'COMPLETED') return '结果已生成';
-  if (task.status === 'FAILED') return '任务执行失败';
+  if (task.status === 'WAITING_INPUT') return isEnglish.value ? 'Structure review required' : '结构确认等待处理';
+  if (task.status === 'COMPLETED') return isEnglish.value ? 'Results generated' : '结果已生成';
+  if (task.status === 'FAILED') return isEnglish.value ? 'Task failed' : '任务执行失败';
   return stageLabel(task.currentStage || task.status);
 }
 
@@ -1887,8 +1936,28 @@ function normalizeStage(stage: string | null) {
 
 function stageLabel(stage: string | null) {
   const normalized = normalizeStage(stage);
-  if (normalized === 'GLOBAL_REVIEW') return '全文一致性审查';
-  const labels: Record<string, string> = {
+  if (normalized === 'GLOBAL_REVIEW') return isEnglish.value ? 'Consistency review' : '全文一致性审查';
+  const labels: Record<string, string> = isEnglish.value ? {
+    UPLOAD: 'Upload',
+    PARSE: 'Parse LaTeX',
+    STRUCTURE_CHECK: 'Structure review',
+    RESEARCH_PROFILE: 'Research profile',
+    RETRIEVE: 'Literature search',
+    GAP_ANALYSIS: 'Gap analysis',
+    POLISH: 'Section polish',
+    ASSEMBLE: 'Assemble package',
+    COMPLETE: 'Complete',
+    CANCEL_REQUESTED: 'Stopping',
+    CANCELLING: 'Stopping',
+    CANCELLED: 'Cancelled',
+    STOPPED: 'Stopped',
+    FAILED: 'Failed',
+    PENDING: 'Pending',
+    RUNNING: 'Running',
+    PAUSED: 'Paused',
+    WAITING_INPUT: 'Awaiting review',
+    TIMED_OUT: 'Timed out',
+  } : {
     UPLOAD: '上传',
     PARSE: '解析 LaTeX',
     STRUCTURE_CHECK: '结构确认',
@@ -2000,7 +2069,7 @@ function clampProgress(value: number) {
 }
 
 function formatDateTime(value: string) {
-  return new Date(value).toLocaleString('zh-CN');
+  return new Date(value).toLocaleString(locale.value);
 }
 
 type PaperTimelineEvent = {

@@ -65,15 +65,33 @@ public class Project {
 
     public Project(Long userId, String name, String rootPath, String canonicalRootPath,
                    String includeRules, String ignoreRules) {
+        this(userId, name, ProjectRootType.LOCAL_SERVER_ROOT, rootPath, canonicalRootPath,
+                includeRules, ignoreRules);
+    }
+
+    private Project(Long userId, String name, ProjectRootType rootType, String rootPath,
+                    String canonicalRootPath, String includeRules, String ignoreRules) {
         this.userId = userId;
         this.name = name;
-        this.rootType = ProjectRootType.LOCAL_SERVER_ROOT;
+        this.rootType = rootType;
         this.rootPath = rootPath;
         this.canonicalRootPath = canonicalRootPath;
         this.accessMode = ProjectAccessMode.READ_ONLY;
         this.includeRules = includeRules;
         this.ignoreRules = ignoreRules;
         this.indexVersion = "UNINDEXED";
+    }
+
+    public static Project managedUpload(Long userId, String name, String canonicalRootPath,
+                                        String includeRules, String ignoreRules) {
+        return new Project(userId, name, ProjectRootType.MANAGED_UPLOAD, ".", canonicalRootPath,
+                includeRules, ignoreRules);
+    }
+
+    public static Project minioUpload(Long userId, String name, String objectPrefix,
+                                      String includeRules, String ignoreRules) {
+        return new Project(userId, name, ProjectRootType.MINIO_OBJECTS, objectPrefix, ".",
+                includeRules, ignoreRules);
     }
 
     public Long getId() { return id; }

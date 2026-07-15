@@ -201,6 +201,11 @@ public class LangChain4jToolCallingStrategy {
 
                 emitProcess(request, "正在调用工具：" + toolRequest.name());
                 ToolExecutionOutcome toolResult = executeTool(toolProviderResult, toolRequest, request.userId(), allowedTools);
+                if (toolResult.scopeRefinementRequired()) {
+                    toolCalls--;
+                    fallbacks.add("Tool scope refinement required; execution budget was not consumed: "
+                            + toolRequest.name());
+                }
                 invocationStates.put(signature, InvocationState.after(previous, toolRequest.id(), toolResult));
                 log.info("LangChain4j tool step={} tool={} args={} success={} error={}",
                         step + 1,
@@ -252,6 +257,10 @@ public class LangChain4jToolCallingStrategy {
                         .maxOutputTokens(request.maxTokens())
                         .build())
                 .build();
+        long successfulCalls = toolTrace.stream().filter(trace -> trace != null && trace.contains("success=true")).count();
+        long failedCalls = toolTrace.stream().filter(trace -> trace != null && trace.contains("success=false")).count();
+        log.info("LangChain4j final synthesis start sessionId={} steps={} successfulTools={} failedTools={} reason={}",
+                request.sessionId(), steps, successfulCalls, failedCalls, reason);
         dev.langchain4j.model.chat.response.ChatResponse response;
         try {
             response = callModel(finalRequest, request);
@@ -261,6 +270,8 @@ public class LangChain4jToolCallingStrategy {
         TokenUsage totalUsage = TokenUsage.sum(usage, response == null ? null : response.tokenUsage());
         AiMessage aiMessage = response == null ? null : response.aiMessage();
         if (aiMessage == null || !StringUtils.hasText(aiMessage.text())) {
+            log.warn("LangChain4j final synthesis empty sessionId={} steps={} reason={}",
+                    request.sessionId(), steps, reason);
             return failure(messages, toolTrace, fallbacks, steps, totalUsage,
                     "LangChain4j returned an empty final response after " + reason);
         }
@@ -268,6 +279,8 @@ public class LangChain4jToolCallingStrategy {
         if (!isStreaming(request)) {
             emitToken(request, aiMessage.text());
         }
+        log.info("LangChain4j final synthesis completed sessionId={} steps={} contentLength={} reason={}",
+                request.sessionId(), steps, aiMessage.text().length(), reason);
         return success(messages, toolTrace, fallbacks, steps, totalUsage, aiMessage.text());
     }
 
@@ -414,17 +427,21 @@ public class LangChain4jToolCallingStrategy {
             JsonNode node = objectMapper.readTree(content);
             if (node.isObject() && node.has("success") && !node.path("success").asBoolean(true)) {
                 String error = node.path("errorMessage").asText(node.path("error").asText("tool_failed"));
-                return outcome(false, content, error);
+            return outcome(false, content, error, node.path("errorCode").asText(""));
             }
         } catch (Exception ignored) {
             // Text and domain-specific JSON without the ToolResult success field remain successful payloads.
         }
-        return outcome(true, content, null);
+        return outcome(true, content, null, null);
     }
 
     private ToolExecutionOutcome outcome(boolean success, String content, String errorMessage) {
+        return outcome(success, content, errorMessage, null);
+    }
+
+    private ToolExecutionOutcome outcome(boolean success, String content, String errorMessage, String errorCode) {
         AsyncObservation async = asyncObservation(content);
-        return new ToolExecutionOutcome(success, content, errorMessage, async.observed(), async.terminal());
+        return new ToolExecutionOutcome(success, content, errorMessage, errorCode, async.observed(), async.terminal());
     }
 
     private AsyncObservation asyncObservation(String content) {
@@ -817,8 +834,12 @@ public class LangChain4jToolCallingStrategy {
         }
     }
 
-    private record ToolExecutionOutcome(boolean success, String content, String errorMessage,
+    private record ToolExecutionOutcome(boolean success, String content, String errorMessage, String errorCode,
                                         boolean asyncStateObserved, boolean asyncTerminal) {
+        private boolean scopeRefinementRequired() {
+            return !success && "VALIDATION_ERROR".equals(errorCode)
+                    && errorMessage != null && errorMessage.contains("requires relativePaths");
+        }
     }
 
     private record AsyncObservation(boolean observed, boolean terminal) {

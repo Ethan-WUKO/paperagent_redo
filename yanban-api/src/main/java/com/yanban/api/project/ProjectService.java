@@ -19,13 +19,18 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class ProjectService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProjectService.class);
     private static final int MAX_SEARCH_LINE_LENGTH = 2_000;
     private static final int TEXT_SAMPLE_BYTES = 8 * 1024;
 
@@ -33,15 +38,26 @@ public class ProjectService {
     private final List<ProjectRootProvider> rootProviders;
     private final ProjectStorageProperties properties;
     private final ObjectMapper objectMapper;
+    private final ProjectObjectStorage objectStorage;
 
     public ProjectService(ProjectRepository projects,
                           List<ProjectRootProvider> rootProviders,
                           ProjectStorageProperties properties,
                           ObjectMapper objectMapper) {
+        this(projects, rootProviders, properties, objectMapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProjectService(ProjectRepository projects,
+                          List<ProjectRootProvider> rootProviders,
+                          ProjectStorageProperties properties,
+                          ObjectMapper objectMapper,
+                          ProjectObjectStorage objectStorage) {
         this.projects = projects;
         this.rootProviders = List.copyOf(rootProviders);
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.objectStorage = objectStorage;
     }
 
     @Transactional(readOnly = true)
@@ -49,21 +65,89 @@ public class ProjectService {
         return projects.findByUserIdOrderByUpdatedAtDesc(userId).stream().map(ProjectSummaryResponse::from).toList();
     }
 
-    /**
-     * Removes only the persisted Project binding. Deliberately do not resolve the root here: users must be able
-     * to remove a binding even after its directory becomes missing or unreadable, and disk content is never deleted.
-     */
+    /** Local bindings stay untouched; server-owned upload snapshots are removed only after the DB commit succeeds. */
     @Transactional
     public void delete(Long userId, Long projectId) {
-        Project project = projects.findByIdAndUserId(projectId, userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found"));
+        Project project = ownedProject(userId, projectId);
+        Path managedSnapshot = resolveManagedSnapshotForCleanup(project);
+        Runnable objectCleanup = project.getRootType() == ProjectRootType.MINIO_OBJECTS
+                ? () -> deleteObjectSnapshot(project) : null;
         projects.delete(project);
+        if (managedSnapshot != null) {
+            Runnable cleanup = () -> deleteManagedSnapshot(managedSnapshot);
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        cleanup.run();
+                    }
+                });
+            } else {
+                cleanup.run();
+            }
+        }
+        if (objectCleanup != null) scheduleAfterCommit(objectCleanup);
+    }
+
+    private Path resolveManagedSnapshotForCleanup(Project project) {
+        if (project.getRootType() != ProjectRootType.MANAGED_UPLOAD) {
+            return null;
+        }
+        try {
+            return rootProviderFor(ProjectRootType.MANAGED_UPLOAD).resolve(project).canonicalPath();
+        } catch (RuntimeException ex) {
+            log.warn("Managed Project snapshot could not be resolved for cleanup projectId={}", project.getId());
+            return null;
+        }
+    }
+
+    private void deleteManagedSnapshot(Path root) {
+        try {
+            if (!Files.exists(root)) return;
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.deleteIfExists(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path dir, IOException error) throws IOException {
+                    if (error != null) throw error;
+                    Files.deleteIfExists(dir);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException ex) {
+            log.warn("Managed Project snapshot cleanup failed");
+        }
+    }
+
+    private void deleteObjectSnapshot(Project project) {
+        try {
+            requireObjectStorage().deletePrefix(project.getRootPath());
+        } catch (RuntimeException ex) {
+            log.warn("MinIO Project snapshot cleanup failed projectId={}", project.getId());
+        }
+    }
+
+    private void scheduleAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() { action.run(); }
+            });
+        } else {
+            action.run();
+        }
     }
 
     @Transactional(readOnly = true)
     public ProjectManifestResponse manifest(Long userId, Long projectId) {
-        ResolvedProject resolved = resolve(userId, projectId);
-        List<ProjectFileEntry> files = listFiles(resolved);
+        Project project = ownedProject(userId, projectId);
+        ProjectPathPolicy policy = ProjectPathPolicy.from(project, objectMapper);
+        List<ProjectFileEntry> files = project.getRootType() == ProjectRootType.MINIO_OBJECTS
+                ? listObjectFiles(project, policy) : listFiles(resolveLocal(project, policy));
         String version = sha256(files.stream()
                 .map(file -> file.path() + "\u0000" + file.sizeBytes() + "\u0000" + file.modifiedAt() + "\u0000" + file.sha256())
                 .reduce("", (left, right) -> left + right + "\n").getBytes(StandardCharsets.UTF_8));
@@ -72,7 +156,12 @@ public class ProjectService {
 
     @Transactional(readOnly = true)
     public ProjectFileResponse readFile(Long userId, Long projectId, String relativePath) {
-        ResolvedProject resolved = resolve(userId, projectId);
+        Project project = ownedProject(userId, projectId);
+        ProjectPathPolicy policy = ProjectPathPolicy.from(project, objectMapper);
+        if (project.getRootType() == ProjectRootType.MINIO_OBJECTS) {
+            return readObjectFile(project, policy, relativePath);
+        }
+        ResolvedProject resolved = resolveLocal(project, policy);
         final Path realPath;
         try {
             realPath = ProjectPathGuard.resolveExistingFile(resolved.root(), relativePath);
@@ -101,8 +190,13 @@ public class ProjectService {
         if (query == null || query.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "query is required");
         }
-        ResolvedProject resolved = resolve(userId, projectId);
+        Project project = ownedProject(userId, projectId);
+        ProjectPathPolicy policy = ProjectPathPolicy.from(project, objectMapper);
         int maxResults = requestedMaxResults == null ? 20 : Math.max(1, Math.min(requestedMaxResults, properties.getMaxSearchResults()));
+        if (project.getRootType() == ProjectRootType.MINIO_OBJECTS) {
+            return searchObjectFiles(project, policy, query, maxResults);
+        }
+        ResolvedProject resolved = resolveLocal(project, policy);
         List<ProjectSearchHit> hits = new ArrayList<>();
         for (ProjectFileEntry entry : listFiles(resolved)) {
             if (hits.size() >= maxResults) {
@@ -129,14 +223,20 @@ public class ProjectService {
         return hits;
     }
 
-    private ResolvedProject resolve(Long userId, Long projectId) {
+    private Project ownedProject(Long userId, Long projectId) {
         Project project = projects.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found"));
         if (project.getAccessMode() != ProjectAccessMode.READ_ONLY) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Project is not read-only");
         }
-        return new ResolvedProject(rootProviderFor(project.getRootType()).resolve(project),
-                ProjectPathPolicy.from(project, objectMapper));
+        return project;
+    }
+
+    private ResolvedProject resolveLocal(Project project, ProjectPathPolicy policy) {
+        if (project.getRootType() == ProjectRootType.MINIO_OBJECTS) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Project object root is not a local path");
+        }
+        return new ResolvedProject(rootProviderFor(project.getRootType()).resolve(project), policy);
     }
 
     private ProjectRootProvider rootProviderFor(ProjectRootType rootType) {
@@ -197,6 +297,80 @@ public class ProjectService {
         }
         files.sort(Comparator.comparing(ProjectFileEntry::path));
         return files;
+    }
+
+    private List<ProjectFileEntry> listObjectFiles(Project project, ProjectPathPolicy policy) {
+        List<ProjectFileEntry> files = new ArrayList<>();
+        TraversalBudget budget = new TraversalBudget();
+        for (ProjectObjectEntry entry : requireObjectStorage().readManifest(project.getRootPath())) {
+            Path relative = ProjectPathGuard.parseRelative(entry.path(), "Project object path");
+            if (relative.getNameCount() > properties.getMaxTraversalDepth()) {
+                throw new ProjectTraversalLimitException("Project traversal depth exceeded");
+            }
+            if (!policy.allows(relative)) continue;
+            budget.recordVisitedFile();
+            if (entry.sizeBytes() > properties.getMaxFileBytes()) continue;
+            budget.recordAdmittedBytes(entry.sizeBytes());
+            files.add(entry.toFileEntry());
+        }
+        files.sort(Comparator.comparing(ProjectFileEntry::path));
+        return List.copyOf(files);
+    }
+
+    private ProjectFileResponse readObjectFile(Project project, ProjectPathPolicy policy, String relativePath) {
+        Path relative = ProjectPathGuard.parseRelative(relativePath, "path");
+        if (!policy.allows(relative)) throw inaccessibleFile();
+        String portablePath = toPortablePath(relative);
+        ProjectObjectEntry entry = requireObjectStorage().readManifest(project.getRootPath()).stream()
+                .filter(item -> portablePath.equals(item.path()))
+                .findFirst().orElseThrow(this::inaccessibleFile);
+        if (entry.sizeBytes() > properties.getMaxFileBytes()) throw inaccessibleFile();
+        byte[] content = requireObjectStorage().readFile(project.getRootPath(), portablePath,
+                properties.getMaxFileBytes());
+        if (content.length != entry.sizeBytes() || !sha256(content).equals(entry.sha256())
+                || !isReadableTextContent(content)) {
+            throw inaccessibleFile();
+        }
+        return new ProjectFileResponse(portablePath, new String(content, StandardCharsets.UTF_8),
+                content.length, entry.modifiedAt(), entry.sha256());
+    }
+
+    private List<ProjectSearchHit> searchObjectFiles(Project project, ProjectPathPolicy policy,
+                                                     String query, int maxResults) {
+        List<ProjectSearchHit> hits = new ArrayList<>();
+        for (ProjectFileEntry entry : listObjectFiles(project, policy)) {
+            if (hits.size() >= maxResults) break;
+            byte[] content = requireObjectStorage().readFile(project.getRootPath(), entry.path(),
+                    properties.getMaxFileBytes());
+            if (content.length != entry.sizeBytes() || !sha256(content).equals(entry.sha256())
+                    || !isReadableTextContent(content)) {
+                continue;
+            }
+            String[] lines = new String(content, StandardCharsets.UTF_8).split("\\R", -1);
+            for (int index = 0; index < lines.length && hits.size() < maxResults; index++) {
+                if (lines[index].contains(query)) {
+                    hits.add(new ProjectSearchHit(entry.path(), index + 1,
+                            abbreviate(lines[index]), entry.sha256()));
+                }
+            }
+        }
+        return hits;
+    }
+
+    private boolean isReadableTextContent(byte[] content) {
+        int sampleSize = Math.min(TEXT_SAMPLE_BYTES, content.length);
+        for (int index = 0; index < sampleSize; index++) {
+            if (content[index] == 0) return false;
+        }
+        return true;
+    }
+
+    private ProjectObjectStorage requireObjectStorage() {
+        if (objectStorage == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Project object storage is not configured");
+        }
+        return objectStorage;
     }
 
     private boolean isReadableTextFile(Path file, long size) throws IOException {

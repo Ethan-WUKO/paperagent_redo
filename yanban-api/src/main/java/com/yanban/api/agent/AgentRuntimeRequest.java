@@ -29,7 +29,8 @@ public record AgentRuntimeRequest(
         Consumer<String> tokenConsumer,
         Consumer<String> processConsumer,
         Long planId,
-        ProjectRuntimeContext projectContext
+        ProjectRuntimeContext projectContext,
+        EvidenceLedger inheritedTrustedEvidence
 ) {
     public AgentRuntimeRequest {
         if (userMessage == null || userMessage.isBlank()) {
@@ -44,6 +45,7 @@ public record AgentRuntimeRequest(
         if (toolPolicy == null) {
             throw new IllegalArgumentException("toolPolicy must be resolved before runtime execution");
         }
+        inheritedTrustedEvidence = inheritedTrustedEvidence == null ? EvidenceLedger.empty() : inheritedTrustedEvidence;
     }
 
     /** Compatibility bridge for existing callers. A null legacy list is fail-closed, never unrestricted. */
@@ -60,7 +62,8 @@ public record AgentRuntimeRequest(
                         maxToolCalls == null ? 0 : maxToolCalls,
                         maxDuplicateToolCalls == null ? 0 : maxDuplicateToolCalls,
                 "legacy_runtime_request"),
-                maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer, null, null);
+                maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer, null, null,
+                EvidenceLedger.empty());
     }
 
     /** Source-compatible bridge for callers that already supplied a resolved policy. */
@@ -73,7 +76,8 @@ public record AgentRuntimeRequest(
             Consumer<String> processConsumer) {
         this(strategy, sessionId, history, userId, userMessage, provider, model, temperature, maxTokens, maxSteps,
                 ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode, toolCallingMode, toolPolicy,
-                maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer, null, null);
+                maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer, null, null,
+                EvidenceLedger.empty());
     }
 
     public List<String> allowedToolNames() {
@@ -88,7 +92,7 @@ public record AgentRuntimeRequest(
         return new AgentRuntimeRequest(selectedStrategy, sessionId, history, userId, userMessage, provider, model,
                 temperature, maxTokens, maxSteps, ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode,
                 toolCallingMode, toolPolicy, maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer,
-                planId, projectContext);
+                planId, projectContext, inheritedTrustedEvidence);
     }
 
     /** Attach server-owned plan identity after a Plan API request has been authorized. */
@@ -96,7 +100,7 @@ public record AgentRuntimeRequest(
         return new AgentRuntimeRequest(strategy, sessionId, history, userId, userMessage, provider, model,
                 temperature, maxTokens, maxSteps, ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode,
                 toolCallingMode, toolPolicy, maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer,
-                planId, projectContext);
+                planId, projectContext, inheritedTrustedEvidence);
     }
 
     /** Only an authenticated Project API adapter may attach this context. */
@@ -107,7 +111,18 @@ public record AgentRuntimeRequest(
         return new AgentRuntimeRequest(strategy, sessionId, history, userId, userMessage, provider, model,
                 temperature, maxTokens, maxSteps, ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode,
                 toolCallingMode, toolPolicy, maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer,
-                planId, context);
+                planId, context, inheritedTrustedEvidence);
+    }
+
+    /** Attach only server-persisted observations inherited from completed Plan dependencies. */
+    public AgentRuntimeRequest withInheritedTrustedEvidence(EvidenceLedger evidence) {
+        if (projectContext == null && evidence != null && !evidence.evidence().isEmpty()) {
+            throw new IllegalArgumentException("inherited Project evidence requires a trusted project context");
+        }
+        return new AgentRuntimeRequest(strategy, sessionId, history, userId, userMessage, provider, model,
+                temperature, maxTokens, maxSteps, ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode,
+                toolCallingMode, toolPolicy, maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer,
+                planId, projectContext, evidence == null ? EvidenceLedger.empty() : evidence);
     }
 
     /**
@@ -123,7 +138,7 @@ public record AgentRuntimeRequest(
         return new AgentRuntimeRequest(strategy, sessionId, augmentedHistory, userId, userMessage, provider, model,
                 temperature, maxTokens, maxSteps, ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode,
                 toolCallingMode, toolPolicy, maxToolCalls, maxDuplicateToolCalls, traceId, tokenConsumer, processConsumer,
-                planId, projectContext);
+                planId, projectContext, inheritedTrustedEvidence);
     }
 
     /** Bounded reflection may only reduce runtime and tool budgets. */
@@ -137,6 +152,6 @@ public record AgentRuntimeRequest(
         return new AgentRuntimeRequest(strategy, sessionId, history, userId, userMessage, provider, model,
                 temperature, maxTokens, reducedMaxSteps, ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode,
                 toolCallingMode, reducedPolicy, reducedMaxToolCalls, reducedPolicy.maxDuplicateToolCalls(), traceId,
-                tokenConsumer, processConsumer, planId, projectContext);
+                tokenConsumer, processConsumer, planId, projectContext, inheritedTrustedEvidence);
     }
 }

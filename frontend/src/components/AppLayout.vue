@@ -21,11 +21,11 @@
 
       <div class="app-sidebar__search">
         <span>S</span>
-        <span>Search workspace</span>
+        <span>{{ t('nav.search') }}</span>
         <kbd>Ctrl+K</kbd>
       </div>
 
-      <nav class="app-sidebar__nav" aria-label="主导航">
+      <nav class="app-sidebar__nav" :aria-label="t('nav.workspace')">
         <button
           v-for="item in navItems"
           :key="item.path"
@@ -41,10 +41,12 @@
 
       <div class="app-sidebar__spacer" />
 
+      <LanguageToggle class="app-sidebar__language" />
+
       <div class="app-sidebar__plan">
         <div>
-          <strong>AI Credits</strong>
-          <span>Research workflow ready</span>
+          <strong>{{ t('nav.credits') }}</strong>
+          <span>{{ t('nav.workflowReady') }}</span>
         </div>
         <div class="app-sidebar__meter"><span /></div>
       </div>
@@ -52,10 +54,10 @@
       <div class="app-sidebar__user">
         <div class="app-sidebar__avatar">{{ userInitial }}</div>
         <div class="app-sidebar__user-info">
-          <strong>{{ authStore.currentUser?.username || '未登录' }}</strong>
-          <span>Researcher</span>
+          <strong>{{ authStore.currentUser?.username || t('nav.signedOut') }}</strong>
+          <span>{{ t('nav.researcher') }}</span>
         </div>
-        <button type="button" class="app-sidebar__logout" @click="logout">Sign out</button>
+        <button type="button" class="app-sidebar__logout" @click="logout">{{ t('nav.signOut') }}</button>
       </div>
     </aside>
 
@@ -74,22 +76,22 @@
           <h1>{{ routeTitle }}</h1>
         </div>
         <NSpace align="center" :size="10" wrap>
-          <NButton secondary round @click="router.push('/chat')">+ New Task</NButton>
-          <NButton secondary round @click="router.push('/paper')">Upload Paper</NButton>
-          <NButton secondary round @click="router.push('/chat')">Search Literature</NButton>
-          <NButton type="primary" round class="agent-mode-button">Agent Mode Live</NButton>
+          <NButton secondary round @click="router.push('/chat')">+ {{ t('top.newTask') }}</NButton>
+          <NButton secondary round @click="router.push('/paper')">{{ t('top.uploadPaper') }}</NButton>
+          <NButton secondary round @click="router.push('/chat')">{{ t('top.searchLiterature') }}</NButton>
+          <NButton type="primary" round class="agent-mode-button">{{ t('top.agentLive') }}</NButton>
           <NButton quaternary round size="small" class="theme-toggle-button" @click="toggleTheme">
-            {{ isDark ? 'Light' : 'Dark' }}
+            {{ isDark ? t('common.light') : t('common.dark') }}
           </NButton>
         </NSpace>
-        <button type="button" class="app-topbar__collapse" title="Hide header" @click="setTopbarCollapsed(true)">-</button>
+        <button type="button" class="app-topbar__collapse" :title="t('top.hide')" @click="setTopbarCollapsed(true)">-</button>
       </header>
 
       <button
         v-if="showTopbar && topbarCollapsed"
         type="button"
         class="app-topbar__restore"
-        title="Show header"
+        :title="t('top.show')"
         @click="setTopbarCollapsed(false)"
       >
         +
@@ -108,33 +110,36 @@ import { NButton, NSpace } from 'naive-ui';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useTheme } from '@/composables/useTheme';
+import { useI18n } from '@/composables/useI18n';
+import LanguageToggle from '@/components/LanguageToggle.vue';
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const { isDark, toggleTheme } = useTheme();
+const { t } = useI18n();
 const TOPBAR_COLLAPSED_KEY = 'yanban.app.topbarCollapsed';
 const topbarCollapsed = ref(readStoredBoolean(TOPBAR_COLLAPSED_KEY, false));
 const showTopbar = computed(() => route.path.startsWith('/chat'));
 
-const navItems = [
-  { label: 'Workspace', path: '/chat' },
-  { label: 'Papers', path: '/paper' },
-  { label: 'Projects', path: '/projects' },
-  { label: 'Knowledge', path: '/knowledge-base' },
-  { label: 'Retrieval', path: '/knowledge-base/search-debug' },
-  { label: 'Settings', path: '/settings' },
-];
+const navItems = computed(() => [
+  { label: t('nav.workspace'), path: '/chat' },
+  { label: t('nav.papers'), path: '/paper' },
+  { label: t('nav.projects'), path: '/projects' },
+  { label: t('nav.knowledge'), path: '/knowledge-base' },
+  { label: t('nav.retrieval'), path: '/knowledge-base/search-debug' },
+  { label: t('nav.settings'), path: '/settings' },
+]);
 
 const userInitial = computed(() => (authStore.currentUser?.username || 'U').slice(0, 1).toUpperCase());
 
 const routeTitle = computed(() => {
-  if (route.path.startsWith('/paper')) return 'Paper Polish Workspace';
-  if (route.path.startsWith('/projects')) return 'Project Workspace';
-  if (route.path.startsWith('/knowledge-base/search-debug')) return 'Knowledge Search Debug';
-  if (route.path.startsWith('/knowledge-base')) return 'Knowledge Base';
-  if (route.path.startsWith('/settings')) return 'Settings';
-  return 'Research Copilot';
+  if (route.path.startsWith('/paper')) return t('route.paper');
+  if (route.path.startsWith('/projects')) return t('route.projects');
+  if (route.path.startsWith('/knowledge-base/search-debug')) return t('route.retrieval');
+  if (route.path.startsWith('/knowledge-base')) return t('route.knowledge');
+  if (route.path.startsWith('/settings')) return t('route.settings');
+  return t('route.chat');
 });
 
 function isActiveNav(path: string) {

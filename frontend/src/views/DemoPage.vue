@@ -4,25 +4,25 @@
       <section class="demo-hero">
         <div class="demo-hero__copy">
           <div class="workbench-kicker">ScholarAI Demo</div>
-          <h1>扫码即用的科研 Agent 演示</h1>
-          <p>面试官可以用游客身份体验私有知识库问答、流式聊天、计划模式和论文工作台。演示环境会定期清理，请不要上传隐私资料。</p>
+          <h1>{{ t('demo.title') }}</h1>
+          <p>{{ t('demo.description') }}</p>
           <div class="demo-actions">
             <NButton type="primary" size="large" :loading="starting" :disabled="config?.enabled === false" @click="handleStartDemo">
-              一键进入游客体验
+              {{ t('demo.start') }}
             </NButton>
-            <NButton size="large" secondary @click="router.push('/login')">已有账号登录</NButton>
+            <NButton size="large" secondary @click="router.push('/login')">{{ t('demo.login') }}</NButton>
           </div>
-          <NAlert v-if="config && !config.enabled" type="warning" title="Demo 入口未开启">
-            当前后端没有开启 DEMO_ENABLED=true。部署到云端后开启该配置即可使用一键游客体验。
+          <NAlert v-if="config && !config.enabled" type="warning" :title="t('demo.disabledTitle')">
+            {{ t('demo.disabledBody') }}
           </NAlert>
-          <NAlert v-else type="info" title="演示提示">
-            {{ config?.notice || '演示环境会定期清理，请不要上传隐私资料。' }}
+          <NAlert v-else type="info" :title="t('demo.noticeTitle')">
+            {{ isEnglish ? t('demo.notice') : (config?.notice || t('demo.notice')) }}
           </NAlert>
         </div>
 
         <NCard class="demo-preview-card" :bordered="false">
           <template #header>
-            <div class="section-title">推荐体验问题</div>
+            <div class="section-title">{{ t('demo.questions') }}</div>
           </template>
           <NSpin :show="loadingConfig">
             <div class="demo-question-list">
@@ -41,20 +41,20 @@
 
       <section class="demo-feature-grid">
         <article>
-          <strong>私有知识库</strong>
-          <span>预置项目说明、RAG 笔记和虚拟组会日程，可直接验证检索效果。</span>
+          <strong>{{ t('demo.featureKnowledge') }}</strong>
+          <span>{{ t('demo.featureKnowledgeBody') }}</span>
         </article>
         <article>
-          <strong>流式聊天</strong>
-          <span>回答逐字返回，适合手机端快速体验，不需要等待整段生成结束。</span>
+          <strong>{{ t('demo.featureStreaming') }}</strong>
+          <span>{{ t('demo.featureStreamingBody') }}</span>
         </article>
         <article>
-          <strong>计划模式</strong>
-          <span>复杂目标可以拆成任务步骤，右侧保留执行轨迹和工具状态。</span>
+          <strong>{{ t('demo.featurePlan') }}</strong>
+          <span>{{ t('demo.featurePlanBody') }}</span>
         </article>
         <article>
-          <strong>移动端适配</strong>
-          <span>扫码后从 Demo 到聊天、知识库、论文、设置页面都可在手机访问。</span>
+          <strong>{{ t('demo.featureMobile') }}</strong>
+          <span>{{ t('demo.featureMobileBody') }}</span>
         </article>
       </section>
 
@@ -72,6 +72,7 @@ import { useRouter } from 'vue-router';
 import { getDemoConfig, type DemoConfigResponse } from '@/api/demo';
 import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
+import { useI18n } from '@/composables/useI18n';
 
 const DEFAULT_QUESTIONS = [
   '根据知识库，概括这个项目能解决什么问题。',
@@ -82,12 +83,21 @@ const DEFAULT_QUESTIONS = [
 
 const router = useRouter();
 const authStore = useAuthStore();
+const { isEnglish, t } = useI18n();
 const config = ref<DemoConfigResponse | null>(null);
 const loadingConfig = ref(false);
 const starting = ref(false);
 const pendingQuestion = ref<string | null>(null);
 
-const exampleQuestions = computed(() => config.value?.exampleQuestions?.length ? config.value.exampleQuestions : DEFAULT_QUESTIONS);
+const DEFAULT_QUESTIONS_EN = [
+  'What problems does this project solve according to the knowledge base?',
+  'What are the next meeting time, location, and deadline?',
+  'Which steps are included in this project\'s RAG workflow?',
+  'Use Plan Mode to turn two weeks of Agent improvements into tasks.',
+];
+const exampleQuestions = computed(() => isEnglish.value
+  ? DEFAULT_QUESTIONS_EN
+  : (config.value?.exampleQuestions?.length ? config.value.exampleQuestions : DEFAULT_QUESTIONS));
 
 onMounted(loadConfig);
 

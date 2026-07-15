@@ -1,0 +1,113 @@
+package com.yanban.api.project;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
+
+class ProjectUploadServiceTest {
+
+    @TempDir
+    Path tempDir;
+
+    private final ProjectRepository projects = org.mockito.Mockito.mock(ProjectRepository.class);
+    private final ProjectStorageProperties properties = new ProjectStorageProperties();
+    private InMemoryObjectStorage objectStorage;
+    private ProjectUploadService service;
+
+    @BeforeEach
+    void setUp() {
+        objectStorage = new InMemoryObjectStorage();
+        service = new ProjectUploadService(projects, objectStorage, properties, new ObjectMapper());
+        when(projects.saveAndFlush(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    @Test
+    void uploadCreatesAnIndependentMinioSnapshotAndAppliesSafetyRules() throws Exception {
+        Path source = Files.writeString(tempDir.resolve("source-notes.txt"), "original source");
+        MockMultipartFile notes = new MockMultipartFile("files", "study/docs/notes.txt", "text/plain",
+                Files.readAllBytes(source));
+        MockMultipartFile secret = new MockMultipartFile("files", "study/.env", "text/plain",
+                "SECRET=hidden".getBytes());
+        MockMultipartFile ignored = new MockMultipartFile("files", "study/target/output.txt", "text/plain",
+                "ignored".getBytes());
+
+        Project project = service.upload(7L, "Study", List.of("**"), List.of("target/**"),
+                List.of(notes, secret, ignored));
+
+        assertThat(project.getRootType()).isEqualTo(ProjectRootType.MINIO_OBJECTS);
+        assertThat(project.getRootPath()).startsWith("projects/7/");
+        assertThat(project.getCanonicalRootPath()).isEqualTo(".");
+        assertThat(objectStorage.readFile(project.getRootPath(), "docs/notes.txt", 1024))
+                .isEqualTo("original source".getBytes());
+        assertThat(objectStorage.readManifest(project.getRootPath()))
+                .extracting(ProjectObjectEntry::path).containsExactly("docs/notes.txt");
+
+        Files.writeString(source, "changed locally");
+        assertThat(objectStorage.readFile(project.getRootPath(), "docs/notes.txt", 1024))
+                .isEqualTo("original source".getBytes());
+    }
+
+    @Test
+    void uploadRejectsTraversalAndCleansUpIncompleteObjects() {
+        MockMultipartFile traversal = new MockMultipartFile("files", "study/../escape.txt", "text/plain",
+                "escape".getBytes());
+
+        assertThatThrownBy(() -> service.upload(7L, "Study", List.of("**"), List.of(),
+                List.of(traversal))).isInstanceOf(InvalidProjectPathException.class);
+
+        assertThat(objectStorage.deletedPrefixes).containsExactly(objectStorage.prefix);
+        assertThat(objectStorage.objects).isEmpty();
+    }
+
+    @Test
+    void uploadEnforcesPerFileAndTotalBudgets() {
+        properties.setMaxFileBytes(4);
+        MockMultipartFile oversized = new MockMultipartFile("files", "study/notes.txt", "text/plain",
+                "12345".getBytes());
+
+        assertThatThrownBy(() -> service.upload(7L, "Study", List.of("**"), List.of(),
+                List.of(oversized))).isInstanceOf(ProjectTraversalLimitException.class);
+    }
+
+    private static final class InMemoryObjectStorage implements ProjectObjectStorage {
+        private final String prefix = "projects/7/11111111-1111-1111-1111-111111111111";
+        private final Map<String, byte[]> objects = new HashMap<>();
+        private final java.util.ArrayList<String> deletedPrefixes = new java.util.ArrayList<>();
+        private List<ProjectObjectEntry> manifest = List.of();
+
+        @Override public String createPrefix(Long userId) { return prefix; }
+
+        @Override
+        public ProjectObjectEntry storeFile(String prefix, String relativePath, MultipartFile file) {
+            try {
+                byte[] bytes = file.getBytes();
+                objects.put(relativePath, bytes);
+                String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+                return new ProjectObjectEntry(relativePath, bytes.length, Instant.parse("2026-07-15T00:00:00Z"), hash);
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        }
+
+        @Override public void writeManifest(String prefix, List<ProjectObjectEntry> files) { manifest = List.copyOf(files); }
+        @Override public List<ProjectObjectEntry> readManifest(String prefix) { return manifest; }
+        @Override public byte[] readFile(String prefix, String relativePath, long maxBytes) { return objects.get(relativePath); }
+        @Override public void deletePrefix(String prefix) { deletedPrefixes.add(prefix); objects.clear(); manifest = List.of(); }
+    }
+}

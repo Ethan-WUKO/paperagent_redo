@@ -10,7 +10,7 @@
         v-if="chatSidebarCollapsed"
         type="button"
         class="chat-rail-toggle chat-rail-toggle--sessions"
-        title="Show conversations"
+        :title="t('chat.showSessions')"
         @click="setChatSidebarCollapsed(false)"
       >
         ☰
@@ -20,21 +20,21 @@
         <NCard size="small" class="chat-panel chat-session-panel">
           <template #header>
             <div class="panel-heading">
-              <span>Recent Conversations</span>
-              <small>{{ sessions.length }} sessions</small>
+              <span>{{ t('chat.recent') }}</span>
+              <small>{{ sessions.length }} {{ t('chat.sessions') }}</small>
             </div>
           </template>
           <template #header-extra>
             <div class="chat-session-actions">
               <NButton type="primary" size="small" circle @click="handleCreateSession">+</NButton>
-              <NButton secondary size="small" class="chat-panel-collapse" title="Hide conversations" @click="setChatSidebarCollapsed(true)">Hide</NButton>
+              <NButton secondary size="small" class="chat-panel-collapse" :title="t('chat.hideSessions')" @click="setChatSidebarCollapsed(true)">{{ t('common.hide') }}</NButton>
             </div>
           </template>
 
 
           <div class="chat-session-list-scroll">
           <NSpace vertical :size="8">
-            <NEmpty v-if="sessions.length === 0" description="还没有会话" size="small" />
+            <NEmpty v-if="sessions.length === 0" :description="t('chat.emptySessions')" size="small" />
             <div
               v-for="session in sessions"
               :key="session.id"
@@ -72,24 +72,32 @@
           </template>
           <template #header-extra>
             <div class="chat-toolbar">
-              <NCheckbox v-model:checked="ragDisabled">禁用知识库</NCheckbox>
-              <NCheckbox v-model:checked="planMode">计划模式</NCheckbox>
+              <NButton
+                v-if="isDemoExperience"
+                secondary
+                round
+                class="demo-question-toggle"
+                :aria-expanded="demoQuestionPanelOpen"
+                @click="setDemoQuestionPanelOpen(!demoQuestionPanelOpen)"
+              >{{ t('chat.exampleQuestions') }}</NButton>
+              <NCheckbox v-model:checked="ragDisabled">{{ t('chat.disableKnowledge') }}</NCheckbox>
+              <NCheckbox v-model:checked="planMode">{{ t('chat.planMode') }}</NCheckbox>
               <NSelect
                 v-model:value="selectedSkillId"
                 style="width: 190px"
                 clearable
                 :options="skillOptions"
-                placeholder="Skill（可选）"
+                :placeholder="t('chat.skillPlaceholder')"
               />
-              <NCheckbox v-model:checked="showProcessMessages">过程</NCheckbox>
-              <NButton secondary round @click="() => reloadCurrentMessages()" :disabled="!selectedSessionId">刷新</NButton>
+              <NCheckbox v-model:checked="showProcessMessages">{{ t('chat.process') }}</NCheckbox>
+              <NButton secondary round @click="() => reloadCurrentMessages()" :disabled="!selectedSessionId">{{ t('common.refresh') }}</NButton>
             </div>
           </template>
 
-          <div v-if="showDemoQuestions" class="demo-question-strip">
+          <div v-if="showDemoQuestions" class="demo-question-strip" role="region" :aria-label="t('chat.exampleQuestions')">
             <div class="demo-question-strip__head">
-              <strong>Demo 示例问题</strong>
-              <span>点击后会填入输入框，你可以直接发送或继续修改。</span>
+              <strong>{{ t('chat.exampleQuestions') }}</strong>
+              <span>{{ t('chat.exampleHelp') }}</span>
             </div>
             <div class="demo-question-strip__grid">
               <button v-for="question in demoQuestions" :key="question" type="button" @click="useDemoQuestion(question)">
@@ -100,8 +108,8 @@
 
           <div class="chat-thread-shell">
             <div ref="messagesContainerRef" class="chat-messages" @scroll="handleMessagesScroll">
-              <div v-if="messagesLoading" class="chat-loading">加载会话中...</div>
-              <NEmpty v-else-if="filteredMessages.length === 0" description="发一条消息开始对话" class="chat-empty" />
+              <div v-if="messagesLoading" class="chat-loading">{{ t('chat.loading') }}</div>
+              <NEmpty v-else-if="filteredMessages.length === 0" :description="t('chat.empty')" class="chat-empty" />
               <div
                 v-for="message in filteredMessages"
                 :key="message.localId"
@@ -254,7 +262,7 @@
               v-model:value="draft"
               type="textarea"
               :autosize="{ minRows: 2, maxRows: 6 }"
-              placeholder="Ask a research question or describe a task..."
+              :placeholder="t('chat.inputPlaceholder')"
               @keydown.enter.exact.prevent="handleSend"
             />
             <input
@@ -277,15 +285,15 @@
               </div>
             </div>
             <div class="chat-composer__footer">
-              <span class="chat-hint">Enter 发送 · Shift+Enter 换行</span>
+              <span class="chat-hint">{{ t('chat.inputHint') }}</span>
               <div class="chat-composer__send-actions">
                 <button
                   type="button"
                   class="chat-upload-button"
                   :disabled="sending || chatUploading"
-                  aria-label="上传资料"
+                  :aria-label="t('chat.upload')"
                   @click="chatFileInputRef?.click()"
-                >上传资料</button>
+                >{{ t('chat.upload') }}</button>
                 <NButton
                   type="primary"
                   round
@@ -293,7 +301,7 @@
                   :class="{ 'chat-send-button--busy': sending }"
                   :disabled="chatUploading || sending"
                   @click="handleSend"
-                >发送</NButton>
+                >{{ t('chat.send') }}</NButton>
               </div>
             </div>
           </div>
@@ -302,18 +310,18 @@
 
     </div>
 
-    <NModal v-model:show="renameModalVisible" preset="card" title="重命名会话" style="width: 420px" :bordered="false">
+    <NModal v-model:show="renameModalVisible" preset="card" :title="t('chat.renameTitle')" style="width: min(420px, 92vw)" :bordered="false">
       <NSpace vertical :size="14">
         <NInput
           v-model:value="renameDraft"
           maxlength="40"
           show-count
-          placeholder="输入新的会话名称"
+          :placeholder="t('chat.renamePlaceholder')"
           @keydown.enter.prevent="confirmRenameSession"
         />
         <NSpace justify="end">
-          <NButton secondary @click="renameModalVisible = false">取消</NButton>
-          <NButton type="primary" :loading="renaming" @click="confirmRenameSession">保存</NButton>
+          <NButton secondary @click="renameModalVisible = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" :loading="renaming" @click="confirmRenameSession">{{ t('common.save') }}</NButton>
         </NSpace>
       </NSpace>
     </NModal>
@@ -355,6 +363,7 @@ import {
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { getSettings, type UserSettingsResponse } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
+import { useI18n } from '@/composables/useI18n';
 import { ui } from '@/ui';
 
 type MessageRole = 'user' | 'assistant' | 'system' | 'tool' | 'process';
@@ -416,11 +425,19 @@ interface MessageSegment {
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
-const DEFAULT_DEMO_QUESTIONS = [
+const { isEnglish, t } = useI18n();
+const uiText = (chinese: string, english: string) => (isEnglish.value ? english : chinese);
+const DEFAULT_DEMO_QUESTIONS_ZH = [
   '根据知识库，概括这个项目能解决什么问题？',
   '演示文档里的组会时间、地点和下次 DDL 是什么？',
   '这个项目的 RAG 流程包含哪些步骤？',
   '用计划模式帮我把两周内完善 Agent 能力拆成任务。',
+];
+const DEFAULT_DEMO_QUESTIONS_EN = [
+  'Based on the knowledge base, what problems does this project solve?',
+  'What are the next meeting time, location, and deadline in the demo documents?',
+  'Which steps are included in this project\'s RAG workflow?',
+  'Use Plan Mode to break down two weeks of Agent improvements into tasks.',
 ];
 const sessions = ref<AgentSessionResponse[]>([]);
 const selectedSessionId = ref<number | null>(null);
@@ -432,7 +449,11 @@ const sending = ref(false);
 const selectedSkillId = ref<string | null>(null);
 const availableSkills = ref<SkillListItemResponse[]>([]);
 const settings = ref<UserSettingsResponse | null>(null);
-const demoQuestions = ref(DEFAULT_DEMO_QUESTIONS);
+const configuredDemoQuestions = ref(DEFAULT_DEMO_QUESTIONS_ZH);
+const demoQuestions = computed(() => isEnglish.value ? DEFAULT_DEMO_QUESTIONS_EN : configuredDemoQuestions.value);
+const demoQuestionPanelOpen = ref(true);
+const demoQuestionPanelState = ref<Record<number, boolean>>({});
+const pendingDemoQuestion = ref<string | null>(null);
 const selectedModelKey = ref('');
 const ragDisabled = ref(false);
 const planMode = ref(false);
@@ -484,14 +505,14 @@ let minimapHoverClearTimer: number | null = null;
 let minimapActiveLockUntil = 0;
 let messagesRequestSeq = 0;
 
-const sessionMenuOptions = [
-  { label: '重命名', key: 'rename' },
-  { label: '删除', key: 'delete' },
-];
+const sessionMenuOptions = computed(() => [
+  { label: t('chat.rename'), key: 'rename' },
+  { label: t('chat.delete'), key: 'delete' },
+]);
 
 const skillOptions = computed(() => availableSkills.value
   .filter((skill) => skill.enabled)
-  .map((skill) => ({ label: skill.name + (skill.source === 'builtin' ? '（内置）' : ''), value: skill.id })));
+  .map((skill) => ({ label: skill.name + (skill.source === 'builtin' ? uiText('（内置）', ' (built-in)') : ''), value: skill.id })));
 
 const modelOptions = computed(() => {
   const options: { label: string; value: string }[] = [];
@@ -522,7 +543,7 @@ const modelOptions = computed(() => {
 
 const activeSessionTitle = computed(() => {
   const active = sessions.value.find((item) => item.id === selectedSessionId.value);
-  return active?.title || '研究对话';
+  return active?.title || t('chat.defaultTitle');
 });
 
 const filteredMessages = computed(() => {
@@ -559,7 +580,7 @@ const minimapPreviewStyle = computed(() => {
 });
 
 const isDemoExperience = computed(() => route.query.demo === '1' || Boolean(authStore.currentUser?.demo));
-const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && filteredMessages.value.length === 0);
+const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && demoQuestionPanelOpen.value);
 
 onMounted(async () => {
   applyMobileChatDefaults();
@@ -618,10 +639,10 @@ async function loadDemoConfigIfNeeded() {
   try {
     const { data } = await getDemoConfig();
     if (data.exampleQuestions?.length) {
-      demoQuestions.value = data.exampleQuestions;
+      configuredDemoQuestions.value = data.exampleQuestions;
     }
   } catch {
-    demoQuestions.value = DEFAULT_DEMO_QUESTIONS;
+    configuredDemoQuestions.value = DEFAULT_DEMO_QUESTIONS_ZH;
   }
 }
 
@@ -634,8 +655,19 @@ function applyQuestionFromRoute() {
 
 function useDemoQuestion(question: string) {
   draft.value = question;
-  if (question.includes('璁″垝妯″紡') || question.includes('鎷嗘垚浠诲姟')) {
+  pendingDemoQuestion.value = question;
+  if (question.includes('计划模式') || question.includes('拆成任务') || question.includes('Plan Mode')) {
     planMode.value = true;
+  }
+}
+
+function setDemoQuestionPanelOpen(open: boolean) {
+  demoQuestionPanelOpen.value = open;
+  if (selectedSessionId.value) {
+    demoQuestionPanelState.value = {
+      ...demoQuestionPanelState.value,
+      [selectedSessionId.value]: open,
+    };
   }
 }
 
@@ -699,6 +731,9 @@ async function selectSession(sessionId: number) {
     selectedModelKey.value = toModelKey(session.modelProvider, session.model);
   }
   await reloadCurrentMessages(sessionId);
+  const storedPanelState = demoQuestionPanelState.value[sessionId];
+  demoQuestionPanelOpen.value = storedPanelState ?? !messages.value.some((message) => message.role === 'user');
+  pendingDemoQuestion.value = null;
   await restoreScrollPosition(sessionId);
   syncMinimapViewport();
 }
@@ -792,12 +827,13 @@ async function handleCreateSession() {
   try {
     const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
     const { data } = await createSession({
-      title: '新会话',
+      title: t('chat.newSession'),
       ragDisabled: false,
       modelProvider: selectedModel.provider,
       model: selectedModel.model,
     });
     sessions.value = [data, ...sessions.value];
+    demoQuestionPanelState.value = { ...demoQuestionPanelState.value, [data.id]: true };
     await selectSession(data.id);
     ui.message.success('已创建新会话');
   } catch (error: any) {
@@ -909,7 +945,7 @@ async function handleSend() {
     if (!sessionId) {
       const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
       const { data } = await createSession({
-        title: '新会话',
+        title: t('chat.newSession'),
         ragDisabled: ragDisabled.value,
         modelProvider: selectedModel.provider,
         model: selectedModel.model,
@@ -923,6 +959,7 @@ async function handleSend() {
     activeSendSessionId = sessionId;
 
     const rawContent = draft.value.trim();
+    const sentFromDemoQuestion = pendingDemoQuestion.value != null;
     const attachmentsForSend = [...chatAttachments.value];
     const content = buildContentWithChatAttachments(rawContent, attachmentsForSend);
     const displayContent = buildDisplayContentWithChatAttachments(rawContent, attachmentsForSend);
@@ -933,6 +970,10 @@ async function handleSend() {
       role: 'user',
       content: displayContent,
     });
+    if (sentFromDemoQuestion) {
+      setDemoQuestionPanelOpen(false);
+      pendingDemoQuestion.value = null;
+    }
 
     const willUsePlanExecution = planMode.value && !isPlanArtifactRequest(content);
     if (!willUsePlanExecution) {
@@ -1628,7 +1669,7 @@ function buildMinimapPreview(message: ChatMessageView | null) {
   }
   return {
     user: clampMinimapText(message.content),
-    assistant: clampMinimapText(findAssistantReplyForUser(message.localId)),
+    assistant: '',
   };
 }
 
@@ -1922,6 +1963,19 @@ function buildChatWebSocketUrl(token: string) {
 }
 
 function buildPlanAssistantContent(plan: AgentPlanResponse) {
+  if (isTerminalPlanStatus(plan.status)) {
+    const finalStepResult = lastPlanStepResult(plan);
+    if (finalStepResult) {
+      return finalStepResult;
+    }
+    if (plan.errorMessage) {
+      return plan.errorMessage;
+    }
+    if (plan.summary) {
+      return plan.summary;
+    }
+  }
+
   const lines = [
     '计划执行状态：' + plan.status,
     plan.summary ? ('摘要：' + plan.summary) : '',
@@ -1933,6 +1987,14 @@ function buildPlanAssistantContent(plan: AgentPlanResponse) {
     lines.push('', '错误：' + plan.errorMessage);
   }
   return lines.join('\n');
+}
+
+function lastPlanStepResult(plan: AgentPlanResponse) {
+  const finalStep = [...plan.steps]
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .reverse()
+    .find((step) => step.result?.trim());
+  return finalStep?.result?.trim() || '';
 }
 
 function artifactIconLabel(artifact: ChatArtifactCard) {
@@ -2023,8 +2085,22 @@ function buildViewMessages(serverMessages: AgentMessageResponse[]) {
   if (serverMessages.some((message) => normalizeRole(message.role) === 'process')) {
     const result: ChatMessageView[] = [];
     let latestUserCreatedAt: string | null = null;
+    let pendingProcess: ChatMessageView | null = null;
+    let pendingProcessIds: string[] = [];
     let pendingToolNames: string[] = [];
     let pendingArtifacts: ChatArtifactCard[] = [];
+    const flushProcess = () => {
+      if (!pendingProcess) {
+        return;
+      }
+      if (pendingProcessIds.length) {
+        pendingProcess.localId = 'process-server-' + pendingProcessIds.join('-');
+      }
+      result.push(pendingProcess);
+      pendingProcess = null;
+      pendingProcessIds = [];
+    };
+
     for (const serverMessage of serverMessages) {
       const viewMessage = toViewMessage(serverMessage);
       if (isAssistantToolCallMessage(viewMessage)) {
@@ -2040,17 +2116,31 @@ function buildViewMessages(serverMessages: AgentMessageResponse[]) {
         continue;
       }
       if (viewMessage.role === 'user') {
+        flushProcess();
         latestUserCreatedAt = viewMessage.createdAt || null;
+        result.push(viewMessage);
+        continue;
       }
-      if (viewMessage.role === 'process' && viewMessage.processElapsedMs == null) {
-        viewMessage.processElapsedMs = elapsedBetween(latestUserCreatedAt, viewMessage.createdAt);
+      if (viewMessage.role === 'process') {
+        const nextContent = viewMessage.content.trim();
+        if (!pendingProcess) {
+          pendingProcess = { ...viewMessage, content: nextContent };
+        } else {
+          pendingProcess.content = [pendingProcess.content, nextContent].filter(Boolean).join('\n\n');
+          pendingProcess.createdAt = viewMessage.createdAt || pendingProcess.createdAt;
+        }
+        pendingProcessIds.push(String(serverMessage.id));
+        pendingProcess.processElapsedMs = elapsedBetween(latestUserCreatedAt, pendingProcess.createdAt);
+        continue;
       }
+      flushProcess();
       if (viewMessage.role === 'assistant' && pendingArtifacts.length > 0) {
         viewMessage.artifacts = pendingArtifacts;
         pendingArtifacts = [];
       }
       result.push(viewMessage);
     }
+    flushProcess();
     return result;
   }
 
@@ -2123,7 +2213,7 @@ function summarizeToolRequestProcess(message: ChatMessageView) {
   const calls = parseToolCalls(message.toolCallsJson);
   if (calls.length === 0) {
     return {
-      lines: ['正在选择合适的工具。'],
+      lines: [uiText('正在选择合适的工具。', 'Choosing the right tool.')],
       toolNames: [],
     };
   }
@@ -2140,65 +2230,75 @@ function formatAssistantToolCallProcess(message: ChatMessageView) {
 
 function formatToolResultProcess(message: ChatMessageView, toolName?: string | null, payload = parseJsonObject(message.content)) {
   if (payload?.success === false) {
-    return '工具调用未完成，已尝试继续处理。';
+    return uiText('工具调用未完成，已尝试继续处理。', 'Tool execution did not complete; processing continued.');
   }
   return toolResultLabel(toolName, payload);
 }
 
 function toolRequestLabel(toolName: string) {
   if (toolName === 'write_document') {
-    return '正在生成可下载文档。';
+    return uiText('正在生成可下载文档。', 'Generating a downloadable document.');
   }
   switch (toolName) {
     case 'search_knowledge':
-      return '正在检索知识库。';
+      return uiText('正在检索知识库。', 'Searching the Knowledge Base.');
     case 'search_web':
-      return '正在联网搜索资料。';
+      return uiText('正在联网搜索资料。', 'Searching the web.');
     case 'recommend_literature':
-      return '正在检索并整理相关文献。';
+      return uiText('正在检索并整理相关文献。', 'Searching and organizing relevant literature.');
     case 'literature_search_start':
-      return '正在创建文献检索任务。';
+      return uiText('正在创建文献检索任务。', 'Creating a literature-search task.');
     case 'literature_search_status':
-      return '正在查看文献检索进度。';
+      return uiText('正在查看文献检索进度。', 'Checking literature-search progress.');
     case 'literature_search_result':
-      return '正在读取文献检索结果。';
+      return uiText('正在读取文献检索结果。', 'Reading literature-search results.');
     case 'literature_search_cancel':
     case 'paper_task_cancel':
-      return '正在取消后台任务。';
+      return uiText('正在取消后台任务。', 'Cancelling the background task.');
     case 'paper_polish_status':
-      return '正在查看论文润色进度。';
+      return uiText('正在查看论文润色进度。', 'Checking paper-polish progress.');
     case 'paper_polish_result':
-      return '正在读取论文润色结果。';
+      return uiText('正在读取论文润色结果。', 'Reading paper-polish results.');
     default:
-      return '正在调用辅助工具。';
+      return uiText('正在调用辅助工具。', 'Calling a supporting tool.');
   }
 }
 
 function toolResultLabel(toolName?: string | null, payload?: Record<string, any> | null) {
   if (toolName === 'write_document') {
-    return payload?.artifactId ? '文档已生成，可以预览、下载或存入知识库。' : '文档生成工具已完成。';
+    return payload?.artifactId
+      ? uiText('文档已生成，可以预览、下载或存入知识库。', 'Document generated. You can preview, download, or save it to the Knowledge Base.')
+      : uiText('文档生成工具已完成。', 'The document generation tool has finished.');
   }
   const count = extractResultCount(payload);
   switch (toolName) {
     case 'search_knowledge':
-      return count > 0 ? '知识库检索完成，找到 ' + count + ' 个相关片段。' : '知识库检索完成，未找到明显相关片段。';
+      return count > 0
+        ? uiText(`知识库检索完成，找到 ${count} 个相关片段。`, `Knowledge search complete; ${count} relevant chunks found.`)
+        : uiText('知识库检索完成，未找到明显相关片段。', 'Knowledge search complete; no clearly relevant chunks found.');
     case 'search_web':
-      return count > 0 ? '联网搜索完成，获取 ' + count + ' 条候选结果。' : '联网搜索完成，未获取到可靠结果。';
+      return count > 0
+        ? uiText(`联网搜索完成，获取 ${count} 条候选结果。`, `Web search complete; ${count} candidate results found.`)
+        : uiText('联网搜索完成，未获取到可靠结果。', 'Web search complete; no reliable results found.');
     case 'recommend_literature':
     case 'literature_search_result':
-      return count > 0 ? '文献检索完成，找到 ' + count + ' 条候选文献。' : '文献检索完成，暂未找到候选文献。';
+      return count > 0
+        ? uiText(`文献检索完成，找到 ${count} 条候选文献。`, `Literature search complete; ${count} candidate papers found.`)
+        : uiText('文献检索完成，暂未找到候选文献。', 'Literature search complete; no candidate papers found.');
     case 'literature_search_start':
-      return '文献检索任务已创建。';
+      return uiText('文献检索任务已创建。', 'Literature-search task created.');
     case 'literature_search_status':
     case 'paper_polish_status':
-      return formatTaskStatus(payload) || '后台任务状态已更新。';
+      return formatTaskStatus(payload) || uiText('后台任务状态已更新。', 'Background-task status updated.');
     case 'literature_search_cancel':
     case 'paper_task_cancel':
-      return '后台任务已取消。';
+      return uiText('后台任务已取消。', 'Background task cancelled.');
     case 'paper_polish_result':
-      return '论文润色结果已读取。';
+      return uiText('论文润色结果已读取。', 'Paper-polish results loaded.');
     default:
-      return count > 0 ? '工具调用完成，获取 ' + count + ' 条结果。' : '工具调用完成。';
+      return count > 0
+        ? uiText(`工具调用完成，获取 ${count} 条结果。`, `Tool completed with ${count} results.`)
+        : uiText('工具调用完成。', 'Tool completed.');
   }
 }
 
@@ -2271,15 +2371,15 @@ function formatTaskStatus(payload?: Record<string, any> | null) {
     return '';
   }
   if (['completed', 'success', 'done', 'finished'].includes(rawStatus)) {
-    return '后台任务已完成。';
+    return uiText('后台任务已完成。', 'Background task completed.');
   }
   if (['failed', 'error'].includes(rawStatus)) {
-    return '后台任务执行失败。';
+    return uiText('后台任务执行失败。', 'Background task failed.');
   }
   if (['cancelled', 'canceled'].includes(rawStatus)) {
-    return '后台任务已取消。';
+    return uiText('后台任务已取消。', 'Background task cancelled.');
   }
-  return '后台任务仍在处理中。';
+  return uiText('后台任务仍在处理中。', 'Background task is still processing.');
 }
 
 function isAssistantToolCallMessage(message: ChatMessageView) {
@@ -2344,11 +2444,11 @@ function getMessageSegments(content: string): MessageSegment[] {
 
 function processSummaryLabel(message: ChatMessageView) {
   if (!message.processDone) {
-    return '处理中';
+    return uiText('处理中', 'Processing');
   }
   return message.processElapsedMs != null
-    ? '已处理 ' + formatProcessElapsed(message.processElapsedMs)
-    : '已处理';
+    ? uiText('已处理 ', 'Processed ') + formatProcessElapsed(message.processElapsedMs)
+    : uiText('已处理', 'Processed');
 }
 
 function formatProcessElapsed(value: number) {
@@ -2414,23 +2514,26 @@ function formatProviderName(provider: string) {
 function formatSessionUpdatedAt(value: string) {
   const updatedAt = new Date(value);
   if (Number.isNaN(updatedAt.getTime())) {
-    return '未知';
+    return uiText('未知', 'Unknown');
   }
   const diffMs = Date.now() - updatedAt.getTime();
   const minute = 60 * 1000;
   const hour = 60 * minute;
   const day = 24 * hour;
   if (diffMs < minute) {
-    return '刚刚';
+    return uiText('刚刚', 'Just now');
   }
   if (diffMs < hour) {
-    return String(Math.floor(diffMs / minute)) + ' 分钟前';
+    const count = Math.floor(diffMs / minute);
+    return isEnglish.value ? `${count} minute${count === 1 ? '' : 's'} ago` : `${count} 分钟前`;
   }
   if (diffMs < day) {
-    return String(Math.floor(diffMs / hour)) + ' 小时前';
+    const count = Math.floor(diffMs / hour);
+    return isEnglish.value ? `${count} hour${count === 1 ? '' : 's'} ago` : `${count} 小时前`;
   }
   if (diffMs < 7 * day) {
-    return String(Math.floor(diffMs / day)) + ' 天前';
+    const count = Math.floor(diffMs / day);
+    return isEnglish.value ? `${count} day${count === 1 ? '' : 's'} ago` : `${count} 天前`;
   }
   return updatedAt.toLocaleDateString();
 }

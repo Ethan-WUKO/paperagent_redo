@@ -85,13 +85,16 @@
 
               <div v-else class="kb-document-table">
                 <div class="kb-document-table__head">
-                  <span>Filename</span>
-                  <span>Type</span>
-                  <span>Size</span>
-                  <span>Status</span>
-                  <span>Visibility</span>
-                  <span>Updated</span>
-                  <span>Actions</span>
+                  <span class="kb-document-head kb-document-head--name">
+                    <span class="kb-document-head__badge-spacer" aria-hidden="true" />
+                    <span>Filename</span>
+                  </span>
+                  <span class="kb-document-head kb-document-head--type">Type</span>
+                  <span class="kb-document-head kb-document-head--size">Size</span>
+                  <span class="kb-document-head kb-document-head--status">Status</span>
+                  <span class="kb-document-head kb-document-head--visibility">Visibility</span>
+                  <span class="kb-document-head kb-document-head--updated">Updated</span>
+                  <span class="kb-document-head kb-document-head--actions">Actions</span>
                 </div>
                 <article
                   v-for="item in documents"
@@ -219,10 +222,12 @@ import {
   type KbDocumentPreviewResponse,
 } from '@/api/knowledge';
 import { ui } from '@/ui';
+import { useI18n } from '@/composables/useI18n';
 
 const CHUNK_SIZE = 1024 * 1024;
 
 const router = useRouter();
+const { isEnglish, locale } = useI18n();
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
@@ -296,7 +301,9 @@ async function handleUpload() {
       uploadProgress.value = Math.round(((index + 1) / totalChunks) * 90);
     }
 
-    uploadStatusText.value = 'Merging chunks and submitting the document for background parsing.';
+    uploadStatusText.value = isEnglish.value
+      ? 'Merging chunks and submitting the document for background parsing.'
+      : '正在合并分块并提交文档进行后台解析。';
     await mergeKbUpload({
       uploadId,
       filename: file.name,
@@ -306,7 +313,7 @@ async function handleUpload() {
     });
 
     uploadProgress.value = 100;
-    uploadStatusText.value = 'Upload complete. Waiting for parsing.';
+    uploadStatusText.value = isEnglish.value ? 'Upload complete. Waiting for parsing.' : '上传完成，正在等待解析。';
     ui.message.success('Upload complete. The document is processing.');
     clearSelectedFile();
     await loadDocuments();
@@ -404,7 +411,9 @@ async function uploadChunkWithRetry(payload: {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      uploadStatusText.value = `Uploading chunk ${payload.chunkNumber + 1}/${payload.totalChunks}, attempt ${attempt}.`;
+      uploadStatusText.value = isEnglish.value
+        ? `Uploading chunk ${payload.chunkNumber + 1}/${payload.totalChunks}, attempt ${attempt}.`
+        : `正在上传分块 ${payload.chunkNumber + 1}/${payload.totalChunks}，第 ${attempt} 次尝试。`;
       await uploadChunk(payload);
       return;
     } catch (error) {
@@ -460,7 +469,7 @@ function formatDateTime(value: string | null) {
   if (!value) {
     return '-';
   }
-  return new Date(value).toLocaleString('zh-CN');
+  return new Date(value).toLocaleString(locale.value);
 }
 
 function formatFileSize(value: number | null) {

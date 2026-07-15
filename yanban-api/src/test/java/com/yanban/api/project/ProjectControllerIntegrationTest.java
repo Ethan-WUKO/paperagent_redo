@@ -1,9 +1,11 @@
 package com.yanban.api.project;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -24,6 +26,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.mock.web.MockMultipartFile;
 import com.yanban.api.security.JwtUser;
 import com.yanban.api.agent.ProjectAgentRuntimeService;
 import com.yanban.api.agent.SendMessageResponse;
@@ -188,12 +191,13 @@ class ProjectControllerIntegrationTest {
     }
 
     @Test
+    @org.junit.jupiter.api.Disabled("Legacy absolute-path creation endpoint was removed")
     void createUsesAuthenticatedOwnerAndNeverAcceptsCallerSelectedOwnership() throws Exception {
         ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
         ProjectProvisioningService provisioning = mock(ProjectProvisioningService.class);
         when(provisioning.provision(org.mockito.ArgumentMatchers.any())).thenReturn(
                 new Project(7L, "Created", "study", projectRoot.toRealPath().toString(), "[\"**\"]", "[]"));
-        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service, null, provisioning))
+        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service))
                 .setControllerAdvice(new ProjectExceptionHandler()).setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
 
         mockMvc.perform(post("/api/v1/projects").contentType("application/json").content("""
@@ -206,6 +210,44 @@ class ProjectControllerIntegrationTest {
         org.mockito.Mockito.verify(provisioning).provision(request.capture());
         org.assertj.core.api.Assertions.assertThat(request.getValue().userId()).isEqualTo(7L);
         org.assertj.core.api.Assertions.assertThat(request.getValue().projectFolder()).isEqualTo("C:\\科研项目\\FDA-MIMO");
+    }
+
+    @Test
+    void legacyAbsoluteFolderJsonCreationIsNoLongerExposed() throws Exception {
+        mockMvc.perform(post("/api/v1/projects").contentType("application/json").content("""
+                {"name":"Created","projectFolder":"C:\\\\Research\\\\Study","includeRules":["**"],"ignoreRules":[]}
+                """))
+                .andExpect(status().isUnsupportedMediaType());
+    }
+
+    @Test
+    void browserFolderUploadBindsAuthenticatedOwnerAndMultipartRelativeFiles() throws Exception {
+        ProjectService service = new ProjectService(projects, List.of(new LocalServerProjectRootProvider(properties)), properties, new ObjectMapper());
+        ProjectUploadService uploadService = mock(ProjectUploadService.class);
+        when(uploadService.upload(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq("Uploaded"),
+                org.mockito.ArgumentMatchers.eq(List.of("**")), org.mockito.ArgumentMatchers.eq(List.of("target/**")),
+                org.mockito.ArgumentMatchers.anyList())).thenReturn(
+                Project.managedUpload(7L, "Uploaded", projectRoot.toRealPath().toString(), "[\"**\"]", "[\"target/**\"]"));
+        mockMvc = MockMvcBuilders.standaloneSetup(new ProjectController(service, null, uploadService))
+                .setControllerAdvice(new ProjectExceptionHandler()).setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
+
+        MockMultipartFile file = new MockMultipartFile("files", "study/notes.txt", "text/plain", "safe".getBytes());
+        mockMvc.perform(multipart("/api/v1/projects")
+                        .file(file)
+                        .param("name", "Uploaded")
+                        .param("includeRules", "**")
+                        .param("ignoreRules", "target/**"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Uploaded"))
+                .andExpect(jsonPath("$.accessMode").value("READ_ONLY"));
+
+        org.mockito.ArgumentCaptor<List<org.springframework.web.multipart.MultipartFile>> files =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(uploadService).upload(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("Uploaded"), org.mockito.ArgumentMatchers.eq(List.of("**")),
+                org.mockito.ArgumentMatchers.eq(List.of("target/**")), files.capture());
+        assertThat(files.getValue()).hasSize(1);
+        assertThat(files.getValue().get(0).getOriginalFilename()).isEqualTo("study/notes.txt");
     }
 
     @Test

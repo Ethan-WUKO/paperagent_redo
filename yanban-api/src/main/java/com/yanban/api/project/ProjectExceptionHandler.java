@@ -7,9 +7,17 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 @RestControllerAdvice(assignableTypes = ProjectController.class)
 class ProjectExceptionHandler {
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ProjectErrorResponse> uploadTooLarge(MaxUploadSizeExceededException ignored) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ProjectErrorResponse(
+                "PROJECT_UPLOAD_TOO_LARGE",
+                "The selected Project folder is too large. Remove generated or binary files and try again."));
+    }
 
     @ExceptionHandler(InvalidProjectPathException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)

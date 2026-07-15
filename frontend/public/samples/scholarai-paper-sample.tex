@@ -1,0 +1,36 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\title{Retrieval-Grounded Assistance for Reproducible Literature Reviews}
+\author{ScholarAI Example Author}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Large language models can accelerate literature reviews, but fluent output alone does not guarantee that a claim is supported by a source. This short sample describes a retrieval-grounded workflow that keeps evidence, drafting, and human review connected. It is intentionally compact so that users can run the complete ScholarAI paper workflow and inspect every input and output.
+\end{abstract}
+
+\section{Introduction}
+Systematic reviews require transparent search and screening procedures. The PRISMA 2020 statement provides updated reporting guidance for this process \cite{page2021prisma}. Recent retrieval-augmented generation systems offer another useful building block: they condition generated text on retrieved documents instead of relying only on model parameters \cite{lewis2020retrieval}. However, a practical research assistant must also expose where evidence came from and where human confirmation is still required.
+
+\section{Method}
+Our example workflow has three stages. First, a retriever returns a candidate set $D_q$ for a research question $q$. Second, each candidate receives a relevance score $s(d,q)$. Finally, the drafting model receives only the top-ranked evidence:
+\begin{equation}
+  D_q^{(k)} = \operatorname{TopK}_{d \in D_q} s(d,q).
+\end{equation}
+Every generated recommendation stores its supporting document identifiers. Recommendations without traceable evidence are marked for manual review rather than silently merged into the manuscript.
+
+\section{Evaluation Plan}
+The workflow can be evaluated on retrieval recall, citation correctness, and reviewer effort. A useful experiment compares an ungrounded baseline with the retrieval-grounded workflow while keeping the language model fixed. Reviewers then label whether each factual statement is supported, contradicted, or not addressed by its cited source.
+
+\section{Conclusion}
+Retrieval grounding does not remove the need for expert judgment, but it makes the boundary between evidence and generation easier to inspect. This sample is a starting point: users should replace its text and references with material appropriate to their own research question.
+
+\bibliographystyle{plain}
+\bibliography{scholarai-paper-sample}
+\end{document}

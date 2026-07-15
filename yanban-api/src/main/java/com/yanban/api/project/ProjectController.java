@@ -11,6 +11,7 @@ import com.yanban.api.agent.AgentSessionResponse;
 import com.yanban.api.agent.CreateSessionRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1/projects")
@@ -26,23 +28,23 @@ public class ProjectController {
 
     private final ProjectService projectService;
     private final ProjectAgentRuntimeService projectAgentRuntimeService;
-    private final ProjectProvisioningService projectProvisioningService;
+    private final ProjectUploadService projectUploadService;
 
     /** Compatibility constructor for focused existing controller tests. */
     public ProjectController(ProjectService projectService) {
-        this(projectService, null, null);
+        this(projectService, null, (ProjectUploadService) null);
     }
 
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService) {
-        this(projectService, projectAgentRuntimeService, null);
+        this(projectService, projectAgentRuntimeService, (ProjectUploadService) null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
-                             ProjectProvisioningService projectProvisioningService) {
+                             ProjectUploadService projectUploadService) {
         this.projectService = projectService;
         this.projectAgentRuntimeService = projectAgentRuntimeService;
-        this.projectProvisioningService = projectProvisioningService;
+        this.projectUploadService = projectUploadService;
     }
 
     @GetMapping
@@ -50,17 +52,19 @@ public class ProjectController {
         return projectService.list(userId);
     }
 
-    /** Ownership is always taken from the authenticated principal; Projects are read-only by construction. */
-    @org.springframework.web.bind.annotation.PostMapping
+    /** Browser folder import: files are copied into server-owned storage and never mutate the source folder. */
+    @org.springframework.web.bind.annotation.PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
-    public ProjectSummaryResponse create(@AuthenticationPrincipal(expression = "id") Long userId,
-                                         @Valid @org.springframework.web.bind.annotation.RequestBody CreateProjectRequest request) {
-        if (projectProvisioningService == null) {
-            throw new IllegalStateException("Project provisioning is not configured");
+    public ProjectSummaryResponse upload(@AuthenticationPrincipal(expression = "id") Long userId,
+                                         @RequestParam String name,
+                                         @RequestParam List<String> includeRules,
+                                         @RequestParam(required = false) List<String> ignoreRules,
+                                         @org.springframework.web.bind.annotation.RequestPart("files") List<MultipartFile> files) {
+        if (projectUploadService == null) {
+            throw new IllegalStateException("Project upload is not configured");
         }
-        Project project = projectProvisioningService.provision(new ProjectProvisioningRequest(userId, request.name(),
-                request.projectFolder(), request.includeRules(), request.ignoreRules()));
-        return ProjectSummaryResponse.from(project);
+        return ProjectSummaryResponse.from(projectUploadService.upload(userId, name, includeRules,
+                ignoreRules == null ? List.of() : ignoreRules, files));
     }
 
     /** Removes only the authenticated user's Project binding; it never deletes files from the bound folder. */

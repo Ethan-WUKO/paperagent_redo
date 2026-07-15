@@ -6,21 +6,21 @@
           <img src="/logo.png" alt="Yanban Agent logo" />
         </div>
         <div class="workbench-kicker">Yanban Agent</div>
-        <h1>欢迎回来</h1>
-        <p>登录后继续使用对话、知识库、论文处理与 Skills 工作台。也可以直接进入游客 Demo 体验。</p>
+        <h1>{{ t('auth.welcome') }}</h1>
+        <p>{{ t('auth.loginDescription') }}</p>
       </div>
       <NCard class="auth-card" :bordered="false">
         <NForm :model="form" @submit.prevent="handleSubmit">
-          <NFormItem label="用户名">
-            <NInput v-model:value="form.username" size="large" placeholder="请输入用户名" />
+          <NFormItem :label="t('auth.username')">
+            <NInput v-model:value="form.username" size="large" :placeholder="t('auth.usernamePlaceholder')" />
           </NFormItem>
-          <NFormItem label="密码">
-            <NInput v-model:value="form.password" size="large" type="password" show-password-on="click" placeholder="请输入密码" />
+          <NFormItem :label="t('auth.password')">
+            <NInput v-model:value="form.password" size="large" type="password" show-password-on="click" :placeholder="t('auth.passwordPlaceholder')" />
           </NFormItem>
           <NSpace vertical size="large">
-            <NButton type="primary" size="large" block :loading="submitting" @click="handleSubmit">登录</NButton>
-            <NButton block secondary :loading="demoSubmitting" @click="handleDemoLogin">游客体验</NButton>
-            <NButton block quaternary @click="router.push('/register')">没有账号？去注册</NButton>
+            <NButton type="primary" size="large" block :loading="submitting" @click="handleSubmit">{{ t('auth.login') }}</NButton>
+            <NButton block secondary :loading="demoSubmitting" @click="handleDemoLogin">{{ t('auth.demo') }}</NButton>
+            <NButton block quaternary @click="router.push('/register')">{{ t('auth.goRegister') }}</NButton>
           </NSpace>
         </NForm>
       </NCard>
@@ -34,10 +34,12 @@ import { reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
+import { useI18n } from '@/composables/useI18n';
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
+const { t } = useI18n();
 const submitting = ref(false);
 const demoSubmitting = ref(false);
 const form = reactive({ username: '', password: '' });

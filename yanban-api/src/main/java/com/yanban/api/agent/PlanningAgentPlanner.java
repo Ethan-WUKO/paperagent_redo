@@ -218,6 +218,9 @@ public class PlanningAgentPlanner {
                 9. If search may fail or return degraded results, plan a fallback using model knowledge with a clear limitation note.
                 10. Keep JSON compact: summary <= 120 characters, title <= 80, description <= 240, and successCriteria <= 160.
                     Do not repeat the goal or tool documentation inside step fields.
+                11. Search and audit success criteria must require reporting the governed result, including an explicit
+                    zero-match outcome; never require the data to contain a positive match that may not exist. Require
+                    file paths and line numbers for actual matches only, never for a zero-match outcome.
 
                 Tools exposed to this plan:
                 """)

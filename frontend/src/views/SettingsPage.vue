@@ -293,6 +293,7 @@ import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { getSettings, updateSettings, refreshProviderModels, createModel, updateModel, deleteModel, testModel, type UserModelResponse, type UserSettingsResponse } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
+import { useI18n } from '@/composables/useI18n';
 
 const DEFAULT_DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'];
 const DEFAULT_GLM_MODELS = [
@@ -323,6 +324,7 @@ const providerOptions = computed(() => [
 
 const saving = ref(false);
 const authStore = useAuthStore();
+const { isEnglish, locale } = useI18n();
 const deepseekConfigured = ref(false);
 const glmConfigured = ref(false);
 const githubConfigured = ref(false);
@@ -354,7 +356,9 @@ const refreshingProvider = ref<string | null>(null);
 
 const disabledSkillsSet = computed(() => new Set(disabledSkills.value));
 const isDemoUser = computed(() => Boolean(authStore.currentUser?.demo));
-const updatedAtText = computed(() => updatedAt.value ? new Date(updatedAt.value).toLocaleString('zh-CN') : 'Never');
+const updatedAtText = computed(() => updatedAt.value
+  ? new Date(updatedAt.value).toLocaleString(locale.value)
+  : (isEnglish.value ? 'Never' : '从未'));
 const deepseekModelOptions = computed(() => form.deepseekModels.map((m) => ({ label: m, value: m })));
 const glmModelOptions = computed(() => form.glmModels.map((m) => ({ label: m, value: m })));
 const builtinModels = computed(() => customModels.value.filter((m) => m.builtin));

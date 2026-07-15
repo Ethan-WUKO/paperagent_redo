@@ -142,6 +142,50 @@ class ProjectServiceTest {
     }
 
     @Test
+    void deletingUploadedProjectRemovesOnlyItsManagedSnapshot() throws IOException {
+        Path storageRoot = Files.createDirectories(tempDir.resolve("managed-projects"));
+        Path snapshot = Files.createDirectories(storageRoot.resolve("snapshot-1"));
+        Files.writeString(snapshot.resolve("notes.txt"), "server copy");
+        properties.setManagedStorageRoot(storageRoot.toString());
+        Project project = Project.managedUpload(7L, "Uploaded", snapshot.toRealPath().toString(), "[\"**\"]", "[]");
+        when(projects.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(project));
+        ProjectService service = new ProjectService(projects,
+                List.of(new ManagedUploadProjectRootProvider(properties)), properties, objectMapper);
+
+        service.delete(7L, 42L);
+
+        verify(projects).delete(project);
+        assertThat(snapshot).doesNotExist();
+        assertThat(storageRoot).isDirectory();
+    }
+
+    @Test
+    void minioProjectManifestReadSearchAndDeleteUseObjectsWithoutLocalSnapshot() throws Exception {
+        byte[] content = "alpha\nneedle result\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String hash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(content));
+        String prefix = "projects/7/11111111-1111-1111-1111-111111111111";
+        Project project = Project.minioUpload(7L, "MinIO Study", prefix, "[\"**\"]", "[]");
+        ProjectObjectEntry entry = new ProjectObjectEntry("docs/notes.md", content.length,
+                java.time.Instant.parse("2026-07-15T00:00:00Z"), hash);
+        ProjectObjectStorage objectStorage = org.mockito.Mockito.mock(ProjectObjectStorage.class);
+        when(projects.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(project));
+        when(objectStorage.readManifest(prefix)).thenReturn(List.of(entry));
+        when(objectStorage.readFile(prefix, "docs/notes.md", properties.getMaxFileBytes())).thenReturn(content);
+        ProjectService service = new ProjectService(projects, List.of(), properties, objectMapper, objectStorage);
+
+        assertThat(service.manifest(7L, 42L).files()).containsExactly(entry.toFileEntry());
+        assertThat(service.readFile(7L, 42L, "docs/notes.md").content()).contains("needle result");
+        assertThat(service.search(7L, 42L, "needle", 10))
+                .containsExactly(new ProjectSearchHit("docs/notes.md", 2, "needle result", hash));
+
+        service.delete(7L, 42L);
+        verify(projects).delete(project);
+        verify(objectStorage).deletePrefix(prefix);
+        assertThat(Path.of(project.getCanonicalRootPath())).isEqualTo(Path.of("."));
+    }
+
+    @Test
     void deletingMissingOrNonOwnedBindingReturnsNotFoundWithoutDeletingAnything() {
         when(projects.findByIdAndUserId(42L, 7L)).thenReturn(Optional.empty());
         ProjectService service = new ProjectService(projects, List.of(), properties, objectMapper);
