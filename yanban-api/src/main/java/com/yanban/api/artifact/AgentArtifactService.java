@@ -22,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class AgentArtifactService {
 
+    public static final String CANDIDATE_CHANGESET_SOURCE_TYPE = "CANDIDATE_CHANGESET";
     private static final int DEFAULT_LIMIT = 50;
     private static final int MAX_LIMIT = 200;
     private static final int MAX_CONTENT_CHARS = 500_000;
@@ -58,15 +59,34 @@ public class AgentArtifactService {
 
     @Transactional
     public ArtifactResponse createArtifact(Long userId, CreateArtifactRequest request) {
-        String content = requireContent(request.content());
+        String sourceType = normalizeSourceType(request.sourceType());
+        if (CANDIDATE_CHANGESET_SOURCE_TYPE.equals(sourceType)) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "sourceType is reserved for server-validated Candidate artifacts");
+        }
+        return createArtifact(userId, request.sessionId(), request.title(), request.artifactType(),
+                request.content(), sourceType, request.sourceRefs());
+    }
+
+    /** Internal persistence boundary for Candidates that already passed trusted server validation. */
+    @Transactional
+    public ArtifactResponse createCandidateArtifact(Long userId, Long sessionId, String title, String content) {
+        return createArtifact(userId, sessionId, title, AgentArtifact.TYPE_TEXT, content,
+                CANDIDATE_CHANGESET_SOURCE_TYPE, List.of());
+    }
+
+    private ArtifactResponse createArtifact(Long userId, Long sessionId, String title, String artifactType,
+                                            String contentValue, String sourceType,
+                                            List<ArtifactSourceRef> sourceRefs) {
+        String content = requireContent(contentValue);
         AgentArtifact artifact = new AgentArtifact(
                 userId,
-                request.sessionId(),
-                safeTitle(request.title()),
-                normalizeType(request.artifactType()),
+                sessionId,
+                safeTitle(title),
+                normalizeType(artifactType),
                 content,
-                normalizeSourceType(request.sourceType()),
-                writeSourceRefs(request.sourceRefs())
+                sourceType,
+                writeSourceRefs(sourceRefs)
         );
         return toResponse(artifacts.saveAndFlush(artifact));
     }

@@ -2,6 +2,7 @@ package com.yanban.api.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.sandbox.CandidateArtifactResponse;
 import com.yanban.core.model.ChatMessage;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -9,10 +10,13 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Fail-closed completion verifier shared by DIRECT, REACT and Plan step runtime calls. */
 @Component
 public class CompletionVerifier {
+    private static final Logger log = LoggerFactory.getLogger(CompletionVerifier.class);
     private final ObjectMapper objectMapper;
     private final ProjectEvidenceValidator projectEvidenceValidator;
     private final CandidateChangeArtifactService candidateArtifacts;
@@ -86,9 +90,9 @@ public class CompletionVerifier {
     }
 
     private AgentRuntimeResult apply(AgentRuntimeResult result, AgentRuntimeRequest request, CompletionVerification verification) {
-        CandidateChangeSet candidate = candidateFor(request, result, verification);
+        CandidateArtifactResponse candidate = candidateFor(request, result, verification);
         return switch (verification.status()) {
-            case VERIFIED -> result.withCompletionVerification(verification).withCandidateChangeSet(candidate)
+            case VERIFIED -> result.withCompletionVerification(verification).withCandidateArtifact(candidate)
                     .withCoordination(result.selectedStrategy(), AgentStopReason.COMPLETED, "VERIFIED", result.degraded(), result.degradedFrom());
             case PARTIAL -> controlledBudgetPartial(request, result)
                     ? controlledPartial(result, verification, candidate,
@@ -123,32 +127,35 @@ public class CompletionVerifier {
 
     private AgentRuntimeResult controlledPartial(AgentRuntimeResult result,
                                                  CompletionVerification verification,
-                                                 CandidateChangeSet candidate,
+                                                 CandidateArtifactResponse candidate,
                                                  AgentStopReason stopReason) {
-        return result.asControlledPartial().withCompletionVerification(verification).withCandidateChangeSet(candidate)
+        return result.asControlledPartial().withCompletionVerification(verification).withCandidateArtifact(candidate)
                 .withCoordination(result.selectedStrategy(), stopReason, "PARTIAL",
                         true, result.degradedFrom() == null ? result.selectedStrategy() : result.degradedFrom());
     }
 
     private AgentRuntimeResult failure(AgentRuntimeResult result, CompletionVerification verification,
-                                       AgentStopReason stopReason, String outcome, CandidateChangeSet candidate) {
+                                       AgentStopReason stopReason, String outcome, CandidateArtifactResponse candidate) {
         String error = verification.reasons().isEmpty() ? outcome : String.join("; ", verification.reasons());
-        return result.asVerifiedFailure(error).withCompletionVerification(verification).withCandidateChangeSet(candidate)
+        return result.asVerifiedFailure(error).withCompletionVerification(verification).withCandidateArtifact(candidate)
                 .withCoordination(result.selectedStrategy(), stopReason, outcome, result.degraded(), result.degradedFrom());
     }
 
-    private CandidateChangeSet candidateFor(AgentRuntimeRequest request, AgentRuntimeResult result,
-                                            CompletionVerification verification) {
-        if (request.projectContext() == null || verification.status() != CompletionStatus.VERIFIED || !requestsModification(request.userMessage())) return null;
-        return result.evidenceLedger().evidence().stream()
-                .filter(ref -> ref.sourceType() == EvidenceSourceType.PROJECT && !"manifest".equals(ref.file())
-                        && ref.versionStatus() == EvidenceVersionStatus.VERIFIED
-                        && ProjectEvidenceValidator.isTrusted(ref))
-                .findFirst()
-                .map(ref -> candidateArtifacts.store(request.userId(), request.sessionId(), new CandidateChangeSet(request.projectContext().projectId(), ref.projectVersion(), ref.file(), ref.fileHash(),
-                        "Candidate Project change; review before applying.", result.assistantContent(), List.of(ref.id()),
-                        CandidateChangeStatus.CANDIDATE, CandidateChangeSet.NOT_APPLIED)))
-                .orElse(null);
+    private CandidateArtifactResponse candidateFor(AgentRuntimeRequest request, AgentRuntimeResult result,
+                                                    CompletionVerification verification) {
+        if (request.projectContext() == null || verification.status() != CompletionStatus.VERIFIED
+                || result.candidateIntent() == null) {
+            return null;
+        }
+        try {
+            return candidateArtifacts.store(request.userId(), request.sessionId(), request.projectContext(),
+                    result.candidateIntent(), result.trustedEvidenceLedger());
+        } catch (RuntimeException ex) {
+            // Candidate failure is fail-closed and must not rewrite the verified answer or Task outcome.
+            log.warn("Structured Candidate intent was rejected projectId={} exceptionType={}",
+                    request.projectContext().projectId(), ex.getClass().getSimpleName());
+            return null;
+        }
     }
 
     private EvidenceLedger observedEvidence(AgentRuntimeRequest request, AgentRuntimeResult result) {
@@ -245,12 +252,6 @@ public class CompletionVerifier {
         String normalized = task.trim().toLowerCase(java.util.Locale.ROOT);
         return normalized.matches("(?:请|麻烦|帮我|告诉我|说明一下|介绍一下)?\\s*(?:你|当前|现在|本项目助手|这个助手|project)?\\s*(?:现在)?\\s*(?:有哪些|有什么|哪些|列出|介绍|说明|查看)\\s*(?:可用的?)?\\s*(?:工具|能力|功能)\\s*[？?。.!！]*")
                 || normalized.matches("(?:please\\s+)?(?:list|show|describe|what\\s+are)\\s+(?:your\\s+|the\\s+)?(?:available\\s+)?(?:tools|capabilities)\\s*[?.!]*");
-    }
-
-    private boolean requestsModification(String task) {
-        if (!StringUtils.hasText(task)) return false;
-        String normalized = task.toLowerCase(java.util.Locale.ROOT);
-        return normalized.matches("(?s).*(patch|modify|change|fix|revise|suggest|修改|修复|建议|补丁).*" );
     }
 
     private List<String> ids(EvidenceLedger ledger) {

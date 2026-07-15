@@ -3,10 +3,15 @@ package com.yanban.api.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.api.agent.sandbox.CandidateArtifactResponse;
+import com.yanban.api.agent.sandbox.CandidateIntent;
 import com.yanban.api.project.ProjectFileEntry;
 import com.yanban.api.project.ProjectManifestResponse;
 import com.yanban.api.project.ProjectService;
 import com.yanban.core.model.ChatMessage;
+import com.yanban.core.research.FileHash;
+import com.yanban.core.research.ProjectRelativePath;
+import com.yanban.core.research.ProjectVersionRef;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
@@ -29,7 +35,6 @@ class CompletionVerifierTest {
     CompletionVerifierTest() {
         when(projects.manifest(anyLong(), anyLong())).thenReturn(new ProjectManifestResponse(42L, PROJECT_VERSION, List.of(
                 new ProjectFileEntry("src/Main.java", 1, Instant.EPOCH, FILE_HASH))));
-        when(candidates.store(anyLong(), anyLong(), any())).thenAnswer(call -> call.getArgument(2));
     }
 
     @Test
@@ -47,12 +52,14 @@ class CompletionVerifierTest {
     }
 
     @Test
-    void currentAuthorizedProjectEvidenceVerifiesAndEmitsNotAppliedCandidate() {
+    void naturalLanguageModificationAnswerDoesNotBecomeCandidate() {
         AgentRuntimeResult result = verifier.verify(projectRequest(AgentStrategy.SINGLE_STEP_REACT), success("建议修复空指针", List.of(tool(42, "src/Main.java", "h1"))));
 
         assertThat(result.success()).isTrue();
         assertThat(result.outcome()).isEqualTo("VERIFIED");
         assertThat(result.candidateChangeSet()).isNull();
+        assertThat(result.candidateArtifact()).isNull();
+        verify(candidates, never()).store(anyLong(), anyLong(), any(), any(), any());
     }
 
     @Test
@@ -407,16 +414,31 @@ class CompletionVerifierTest {
     }
 
     @Test
-    void explicitModificationIntentPersistsCandidateWhileReadOnlyIntentDoesNot() {
+    void explicitStructuredIntentPersistsCandidateWithoutChangingVerifiedOutcome() {
         AgentRuntimeRequest modify = new AgentRuntimeRequest(AgentStrategy.SINGLE_STEP_REACT, 1L, List.of(), 7L, "suggest patch",
                 "test", "model", null, null, 2, true, null, null, null, null, AgentRuntimeMode.LANGCHAIN4J,
                 AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING, new ResolvedToolPolicy(List.of("project_read_file"), 2, 1, "project"),
                 null, null, "trace", null, null).withProjectContext(new ProjectRuntimeContext(7L, 42L));
+        String evidenceId = "trusted-tool:42:src/Main.java:" + FILE_HASH + ":call-1";
+        CandidateIntent intent = new CandidateIntent(42L, new ProjectVersionRef(PROJECT_VERSION), List.of(
+                new CandidateIntent.FileIntent(CandidateIntent.Type.MODIFY,
+                        new ProjectRelativePath("src/Main.java"), new FileHash(FILE_HASH),
+                        "full replacement", List.of(evidenceId))));
+        CandidateArtifactResponse artifact = mock(CandidateArtifactResponse.class);
+        when(candidates.store(anyLong(), anyLong(), any(ProjectRuntimeContext.class),
+                any(CandidateIntent.class), any(EvidenceLedger.class))).thenReturn(artifact);
 
-        AgentRuntimeResult result = verifier.verify(modify, success("patch", List.of(tool(42, "src/Main.java", "h1"))));
+        AgentRuntimeResult result = verifier.verify(modify,
+                success("ordinary answer remains", List.of(tool(42, "src/Main.java", "h1")))
+                        .withCandidateIntent(intent));
 
-        assertThat(result.candidateChangeSet()).isNotNull();
-        verify(candidates).store(anyLong(), anyLong(), any());
+        assertThat(result.assistantContent()).isEqualTo("ordinary answer remains");
+        assertThat(result.outcome()).isEqualTo("VERIFIED");
+        assertThat(result.candidateChangeSet()).isNull();
+        assertThat(result.candidateArtifact()).isSameAs(artifact);
+        assertThat(result.candidateIntent()).isNull();
+        verify(candidates).store(anyLong(), anyLong(), any(ProjectRuntimeContext.class),
+                any(CandidateIntent.class), any(EvidenceLedger.class));
     }
 
     @Test

@@ -7,9 +7,11 @@ import java.util.List;
 import org.springframework.util.StringUtils;
 
 /**
- * Auditable proposed Project modification. This is deliberately a response-only value:
- * it contains no filesystem handle and there is no apply operation in the runtime.
+ * Legacy single-file response projection retained for source and historical JSON compatibility.
+ * New Candidates use the versioned multi-file sandbox artifact response and never derive this
+ * value from assistant text.
  */
+@Deprecated(forRemoval = false)
 public record CandidateChangeSet(
         Long projectId,
         String projectVersion,

@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,7 +15,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -59,6 +63,115 @@ class ProjectServiceTest {
         assertThat(file.content()).contains("needle result");
         assertThat(service.search(7L, 42L, "needle", 10))
                 .containsExactly(new ProjectSearchHit("notes.md", 2, "needle result", file.sha256()));
+    }
+
+    @Test
+    void localSandboxMaterializationUsesOneManifestAndExposesNoRootPath() throws Exception {
+        Path serverRoot = Files.createDirectories(tempDir.resolve("server-root"));
+        Path projectRoot = Files.createDirectories(serverRoot.resolve("study"));
+        Files.writeString(projectRoot.resolve("notes.md"), "selected\n");
+        Files.writeString(projectRoot.resolve("other.md"), "not materialized\n");
+        properties.setLocalServerRoot(serverRoot.toString());
+        ProjectService service = serviceFor(projectRoot, "[\"**\"]", "[]");
+
+        ProjectService.SandboxWorkspaceMaterialization materialized =
+                service.materializeSandbox(7L, 42L, Set.of("notes.md"));
+
+        assertThat(materialized.snapshot().files()).extracting(file -> file.relativePath().value())
+                .containsExactly("notes.md", "other.md");
+        assertThat(materialized.textFiles()).containsExactly(Map.entry("notes.md", "selected\n"));
+        String serialized = objectMapper.writeValueAsString(materialized);
+        assertThat(serialized).doesNotContain(projectRoot.toString(), serverRoot.toString(), "canonicalPath");
+    }
+
+    @Test
+    void managedUploadSandboxMaterializationRemainsReadOnlyAndRootFree() throws Exception {
+        Path storageRoot = Files.createDirectories(tempDir.resolve("managed-projects"));
+        Path snapshot = Files.createDirectories(storageRoot.resolve("snapshot-1"));
+        Path file = Files.writeString(snapshot.resolve("paper.tex"), "immutable server copy\n");
+        properties.setManagedStorageRoot(storageRoot.toString());
+        Project project = Project.managedUpload(7L, "Uploaded", snapshot.toRealPath().toString(),
+                "[\"**\"]", "[]");
+        when(projects.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(project));
+        ProjectService service = new ProjectService(projects,
+                List.of(new ManagedUploadProjectRootProvider(properties)), properties, objectMapper);
+
+        ProjectService.SandboxWorkspaceMaterialization materialized =
+                service.materializeSandbox(7L, 42L, Set.of("paper.tex"));
+
+        assertThat(materialized.textFiles()).containsEntry("paper.tex", "immutable server copy\n");
+        assertThat(file).hasContent("immutable server copy\n");
+        assertThat(objectMapper.writeValueAsString(materialized)).doesNotContain(snapshot.toString(), storageRoot.toString());
+    }
+
+    @Test
+    void minioSandboxMaterializationRechecksManifestAndReadsOnlyRequestedObject() throws Exception {
+        byte[] selected = "selected object\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] other = "other object\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String selectedHash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(selected));
+        String otherHash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(other));
+        String prefix = "projects/7/11111111-1111-1111-1111-111111111111";
+        Project project = Project.minioUpload(7L, "MinIO Study", prefix, "[\"**\"]", "[]");
+        ProjectObjectEntry selectedEntry = new ProjectObjectEntry("docs/selected.md", selected.length,
+                java.time.Instant.EPOCH, selectedHash);
+        ProjectObjectEntry otherEntry = new ProjectObjectEntry("docs/other.md", other.length,
+                java.time.Instant.EPOCH, otherHash);
+        ProjectObjectStorage objectStorage = org.mockito.Mockito.mock(ProjectObjectStorage.class);
+        when(projects.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(project));
+        when(objectStorage.readManifest(prefix)).thenReturn(List.of(selectedEntry, otherEntry));
+        when(objectStorage.readFile(prefix, "docs/selected.md", properties.getMaxFileBytes()))
+                .thenReturn(selected);
+        ProjectService service = new ProjectService(projects, List.of(), properties, objectMapper, objectStorage);
+
+        ProjectService.SandboxWorkspaceMaterialization materialized =
+                service.materializeSandbox(7L, 42L, Set.of("docs/selected.md"));
+
+        assertThat(materialized.snapshot().files()).hasSize(2);
+        assertThat(materialized.textFiles()).containsExactly(
+                Map.entry("docs/selected.md", "selected object\n"));
+        verify(objectStorage, times(2)).readManifest(prefix);
+        verify(objectStorage).readFile(prefix, "docs/selected.md", properties.getMaxFileBytes());
+        verify(objectStorage, never()).readFile(prefix, "docs/other.md", properties.getMaxFileBytes());
+        assertThat(objectMapper.writeValueAsString(materialized)).doesNotContain(prefix);
+    }
+
+    @Test
+    void minioSandboxMaterializationRejectsUnrequestedFileChangingBetweenManifests() throws Exception {
+        byte[] selected = "selected object\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] other = "other object\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String selectedHash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(selected));
+        String otherHash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(other));
+        String changedHash = "f".repeat(64);
+        String prefix = "projects/7/11111111-1111-1111-1111-111111111111";
+        Project project = Project.minioUpload(7L, "MinIO Study", prefix, "[\"**\"]", "[]");
+        ProjectObjectEntry selectedEntry = new ProjectObjectEntry("docs/selected.md", selected.length,
+                java.time.Instant.EPOCH, selectedHash);
+        ProjectObjectEntry otherEntry = new ProjectObjectEntry("docs/other.md", other.length,
+                java.time.Instant.EPOCH, otherHash);
+        ProjectObjectEntry changedOtherEntry = new ProjectObjectEntry("docs/other.md", other.length,
+                java.time.Instant.EPOCH.plusSeconds(1), changedHash);
+        ProjectObjectStorage objectStorage = org.mockito.Mockito.mock(ProjectObjectStorage.class);
+        when(projects.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(project));
+        when(objectStorage.readManifest(prefix))
+                .thenReturn(List.of(selectedEntry, otherEntry), List.of(selectedEntry, changedOtherEntry));
+        when(objectStorage.readFile(prefix, "docs/selected.md", properties.getMaxFileBytes()))
+                .thenReturn(selected);
+        ProjectService service = new ProjectService(projects, List.of(), properties, objectMapper, objectStorage);
+
+        assertThatThrownBy(() -> service.materializeSandbox(7L, 42L, Set.of("docs/selected.md")))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(error -> {
+                    ResponseStatusException response = (ResponseStatusException) error;
+                    assertThat(response.getStatusCode().value()).isEqualTo(409);
+                    assertThat(response.getReason()).doesNotContain(prefix);
+                });
+        verify(objectStorage, times(2)).readManifest(prefix);
+        verify(objectStorage).readFile(prefix, "docs/selected.md", properties.getMaxFileBytes());
+        verify(objectStorage, never()).readFile(prefix, "docs/other.md", properties.getMaxFileBytes());
     }
 
     @Test

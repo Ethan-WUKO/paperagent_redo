@@ -2,7 +2,7 @@ package com.yanban.api.artifact;
 
 import com.yanban.api.security.JwtUser;
 import com.yanban.api.agent.CandidateChangeArtifactService;
-import com.yanban.api.agent.CandidateChangeSet;
+import com.yanban.api.agent.sandbox.CandidateArtifactResponse;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.core.io.Resource;
@@ -55,8 +55,8 @@ public class AgentArtifactController {
 
     /** Re-displays a proposal after checking its Project base version; no apply operation exists. */
     @GetMapping("/{artifactId}/candidate")
-    public CandidateChangeSet getCandidate(@AuthenticationPrincipal JwtUser currentUser,
-                                           @PathVariable Long artifactId) {
+    public CandidateArtifactResponse getCandidate(@AuthenticationPrincipal JwtUser currentUser,
+                                                  @PathVariable Long artifactId) {
         return candidateArtifacts.getCurrent(currentUser.id(), artifactId);
     }
 
