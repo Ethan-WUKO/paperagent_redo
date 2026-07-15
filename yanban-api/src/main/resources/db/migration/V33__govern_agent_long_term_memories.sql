@@ -15,4 +15,3 @@ CREATE INDEX idx_ltm_user_governed ON agent_long_term_memories
 
 CREATE INDEX idx_ltm_project_version_governed ON agent_long_term_memories
     (user_id, project_id, project_version, scope, status, confirmation_status, invalidated_at, expires_at, updated_at);
-
