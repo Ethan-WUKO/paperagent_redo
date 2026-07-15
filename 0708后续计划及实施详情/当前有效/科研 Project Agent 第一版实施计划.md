@@ -3,16 +3,16 @@
 > 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
 > 最近同步：2026-07-15
-> 已审查工程基线：`da8eaf6`（Project Markdown 与输出格式修复）
+> 已审查工程基线：`ff6f6e5`（Worker 4 统一 Task Run 与生命周期投影）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
-> 当前工程基线：`56e6b5c`（Project 文件夹上传、托管存储、Project UI/会话、Plan/Verifier 修复与双语 UI）
+> 当前工程基线：`ff6f6e5`（统一 run identity、status/phase/outcome、canonical answer 与失败语义）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`READ_ONLY_PROJECT_AND_PLAN_ENGINEERING_ACCEPTED / FIRST_VERSION_IN_PROGRESS`
+> 当前发布状态：`READ_ONLY_PROJECT_PLAN_AND_RUN_LIFECYCLE_ENGINEERING_ACCEPTED / FIRST_VERSION_IN_PROGRESS`
 > 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
-> 当前进度：Worker 1 至 Worker 3 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。2026-07-15 独立回归：Plan 定向 39/39，Plan + ReAct + Completion 联合 88/88，frontend build 通过。该结论不表示持久化生命周期、ProjectVersion、长期记忆主链、沙箱或安全应用已经完成。
+> 当前进度：Worker 1 至 Worker 4 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome 映射、canonical answer、PARTIAL/取消/失败语义，并让生产路径实际消费统一投影。独立复审结果：Worker 4 定向 158/158、根聚合 8/8 模块通过（`yanban-api` 541 项零失败、8 项既有条件跳过）。MVP 发布门主体 203 项 Java 测试与 6 项前端测试通过，但脚本仍因基线遗留的绝对路径创建用例被禁用而返回 NO_GO；该测试治理项不是 Worker 4 回归，发布前必须单独收口。该结论不表示持久化 checkpoint/重启恢复、Task Workspace、ProjectVersion、长期记忆主链、沙箱或安全应用已经完成。
 
 ## 1. 目标与边界
 
@@ -277,7 +277,7 @@ Plan：
 
 状态：`ACCEPTED_FOR_FIRST_VERSION_FOUNDATION`
 
-- 保留自动发布门已通过结论。
+- 保留自动测试主体通过的证据；在遗留禁用用例收口前，不宣称完整发布门 GO。
 - 用户已完成 Project 文件浏览、科研工具、ReAct 和 Plan 关键场景验收；后续阶段继续保留真实科研回归。
 - 建立缺陷清单与回归用例。
 - 修复 P0/P1 后形成新的稳定基线 commit。
@@ -297,7 +297,11 @@ Plan：
 
 ### 阶段 2A：统一 Task Run 与持久化生命周期
 
+状态：`ACCEPTED_L0_L1_RUN_LIFECYCLE_FOUNDATION`
+
 统一普通 Chat、Project Chat、ReAct 和 Plan 的单次运行抽象、权威状态、phase、outcome、事件和 canonical answer，建立取消、暂停、恢复、checkpoint 和重启恢复边界。
+
+当前只完成统一语义与最小生产投影；持久化 checkpoint、lease、跨进程恢复和重启恢复仍属于后续实施范围，不得因状态模型已经统一而视为完成。
 
 ### 阶段 2B：Task Workspace 与短期工作记忆
 
@@ -372,26 +376,29 @@ Worker 开发
 
 ## 15. 当前串行执行队列
 
-### 已完成：Worker 1 至 Worker 3
+### 已完成：Worker 1 至 Worker 4
 
 - Worker 1：`ACCEPTED_ENGINEERING_GATE`，MVP 本地验收矩阵和离线发布门隔离完成。
 - Worker 2：`ACCEPTED / CONTRACT_ONLY`，科研工具和结构化索引契约完成，基线 `8e274ab`。
 - Worker 3：`ACCEPTED_READ_ONLY_IMPLEMENTATION`，五个受治理科研工具完成，基线 `1fc1e0f`。
 - 2026-07-15 收口基线：`56e6b5c`。
+- Worker 4：`ACCEPTED_L0_L1_RUN_LIFECYCLE_FOUNDATION`，统一 Task Run 与生命周期投影完成，基线 `ff6f6e5`。
 
 ### Worker 4：统一 Task Run 与生命周期契约/最小骨架
 
-状态：`NEXT`
+状态：`ACCEPTED`
 
 - 普通 Chat、Project Chat、ReAct、Plan 的统一 run 语义。
 - 唯一权威 status/phase/outcome 映射。
 - 统一 run trace、事件、canonical answer 和错误分类。
 - 暂停、取消、恢复、重试和 checkpoint 边界。
 - 只允许契约和最小骨架；如需 migration，先停下并单独评审。
+- 已验证：定向 158/158；根聚合 8/8 模块通过，`yanban-api` 541 项零失败、8 项既有条件跳过。
+- 已知发布门治理项：遗留绝对路径创建测试为 `@Disabled`，导致零跳过发布门保持 NO_GO；不得归因于 Worker 4，也不得在本 Worker 范围外顺手修改。
 
 ### Worker 5：Task Workspace 与短期工作记忆
 
-状态：`QUEUED`
+状态：`NEXT`
 
 - 当前目标、成功条件、计划、步骤和剩余工作。
 - 受信 Evidence、工具观察、失败结果和 Candidate 引用。
