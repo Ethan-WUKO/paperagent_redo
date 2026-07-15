@@ -15,11 +15,20 @@ public class AgentRuntimeCoordinator {
 
     private final AgentRuntimeService runtimeService;
     private final AgentStrategySelector strategySelector;
+    private final AgentTaskWorkspaceService workspaceService;
 
     public AgentRuntimeCoordinator(AgentRuntimeService runtimeService,
                                    AgentStrategySelector strategySelector) {
+        this(runtimeService, strategySelector, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentRuntimeCoordinator(AgentRuntimeService runtimeService,
+                                   AgentStrategySelector strategySelector,
+                                   AgentTaskWorkspaceService workspaceService) {
         this.runtimeService = runtimeService;
         this.strategySelector = strategySelector;
+        this.workspaceService = workspaceService;
     }
 
     public AgentCoordinationResult coordinate(AgentCoordinationRequest request) {
@@ -120,7 +129,9 @@ public class AgentRuntimeCoordinator {
                 request.userId(),
                 request.sessionId(),
                 projectId);
-        return new AgentCoordinationResult(decision, result, AgentRunProjection.fromRuntime(result, identity));
+        AgentRunProjection projection = AgentRunProjection.fromRuntime(result, identity);
+        return new AgentCoordinationResult(decision, result, projection,
+                workspaceService == null ? null : workspaceService.capture(request, result, projection));
     }
 
     private AgentStopReason stopReason(AgentRuntimeResult result) {

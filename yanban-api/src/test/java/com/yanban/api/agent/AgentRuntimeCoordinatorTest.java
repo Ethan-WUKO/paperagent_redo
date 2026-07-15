@@ -7,10 +7,66 @@ import static org.mockito.Mockito.when;
 
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.agent.AgentTaskOutcome;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class AgentRuntimeCoordinatorTest {
+
+    @Test
+    void productionWorkspaceAssemblyCoversChatReactProjectAndPersistedPlanWithoutPolicyExpansion() {
+        AgentRuntimeService runtime = mock(AgentRuntimeService.class);
+        when(runtime.run(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+            AgentRuntimeRequest executed = invocation.getArgument(0);
+            AgentRuntimeResult result = new AgentRuntimeResult(true, "answer-" + executed.strategy(), List.of(), 2,
+                    null, List.of("observed"), List.of(), null, null, null);
+            return executed.planId() == null ? result : result.withPlanId(executed.planId());
+        });
+        AgentRuntimeCoordinator coordinator = coordinator(runtime);
+        AgentRuntimeRequest directRequest = request("hello", List.of("read"), "chat");
+        AgentRuntimeRequest reactRequest = request("look it up", List.of("read"), "react");
+        AgentRuntimeRequest projectRequest = request("inspect project", List.of("read"), "project")
+                .withProjectContext(new ProjectRuntimeContext(1L, 42L));
+        AgentRuntimeRequest planRequest = request("persisted plan", List.of("read"), "plan");
+
+        List<AgentCoordinationResult> results = List.of(
+                coordinator.coordinate(AgentCoordinationRequest.chat(directRequest)),
+                coordinator.coordinate(AgentCoordinationRequest.chat(reactRequest)),
+                coordinator.coordinate(AgentCoordinationRequest.projectRead(projectRequest)),
+                coordinator.coordinate(AgentCoordinationRequest.trustedPlanApi(planRequest, 91L)));
+
+        assertThat(results).allSatisfy(this::assertCanonicalWorkspace);
+        assertThat(results.get(2).taskWorkspace().identity().projectId()).isEqualTo(42L);
+        assertThat(results.get(3).taskWorkspace().identity().sourceId()).isEqualTo("91");
+        assertThat(results.get(3).taskWorkspace().planReferences()).containsExactly(
+                "Canonical run reference: AGENT_PLAN:91", "Selected strategy: PLAN_EXECUTE");
+        assertThat(results.get(3).taskWorkspace().observedStepSummaries()).containsExactly("Runtime steps observed: 2");
+        org.mockito.ArgumentCaptor<AgentRuntimeRequest> captured = org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
+        verify(runtime, org.mockito.Mockito.times(4)).run(captured.capture());
+        assertThat(captured.getAllValues()).allSatisfy(r -> assertThat(r.allowedToolNames()).containsExactly("read"));
+    }
+
+    @Test
+    void productionWorkspaceAssemblyCoversRejectedPartialAndWaitingStates() {
+        AgentRuntimeService runtime = mock(AgentRuntimeService.class);
+        when(runtime.run(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new AgentRuntimeResult(true, "useful partial", List.of(), 1, null, List.of(), List.of(), null, null, null)
+                        .withRuntimeStopSignal(AgentRuntimeStopSignal.TOOL_CALL_BUDGET_EXHAUSTED))
+                .thenReturn(new AgentRuntimeResult(false, null, List.of(), 1, null, List.of(), List.of(), null, null, null)
+                        .withCoordination(AgentStrategy.DIRECT, AgentStopReason.WAITING_FOR_USER, "WAITING", false, null));
+        AgentRuntimeCoordinator coordinator = coordinator(runtime);
+
+        AgentCoordinationResult rejected = coordinator.coordinate(AgentCoordinationRequest.projectRead(request("project", List.of("read"), "reject")));
+        AgentCoordinationResult partial = coordinator.coordinate(AgentCoordinationRequest.chat(request("research", List.of("read"), "partial")));
+        AgentCoordinationResult waiting = coordinator.coordinate(AgentCoordinationRequest.chat(request("clarify", List.of("read"), "waiting")));
+
+        assertCanonicalWorkspace(rejected);
+        assertCanonicalWorkspace(partial);
+        assertCanonicalWorkspace(waiting);
+        assertThat(rejected.taskWorkspace().state().outcome()).isEqualTo(AgentTaskOutcome.FAILED);
+        assertThat(partial.taskWorkspace().state().outcome()).isEqualTo(AgentTaskOutcome.PARTIAL);
+        assertThat(waiting.taskWorkspace().state().status().name()).isEqualTo("WAITING_INPUT");
+    }
 
     @Test
     void coordinatesDirectReactAndExplicitLegacyPlanDeterministically() {
@@ -223,5 +279,20 @@ class AgentRuntimeCoordinatorTest {
                 false, null, null, null, null, AgentRuntimeMode.LANGCHAIN4J,
                 AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING, new ResolvedToolPolicy(tools, 2, 1, "test"),
                 null, null, traceId, null, null);
+    }
+
+    private AgentRuntimeCoordinator coordinator(AgentRuntimeService runtime) {
+        return new AgentRuntimeCoordinator(runtime, new AgentStrategySelector(),
+                new AgentTaskWorkspaceService(new ObjectMapper()));
+    }
+
+    private void assertCanonicalWorkspace(AgentCoordinationResult result) {
+        assertThat(result.taskWorkspace()).isNotNull();
+        assertThat(result.taskWorkspace().identity()).isEqualTo(result.runProjection().identity());
+        assertThat(result.taskWorkspace().state()).isEqualTo(result.runProjection().state());
+        assertThat(result.taskWorkspace().canonicalAnswer()).isEqualTo(result.runProjection().canonicalAnswer());
+        assertThat(result.taskWorkspace().persistenceLevel()).isEqualTo("L0_REQUEST_BOUND");
+        assertThat(result.taskWorkspace().checkpointAvailable()).isFalse();
+        assertThat(result.taskWorkspace().restartResumable()).isFalse();
     }
 }
