@@ -53,6 +53,25 @@ public class LongTermMemoryController {
         return memoryService.correctMemory(currentUser.id(), memoryId, request);
     }
 
+    @PostMapping("/{memoryId}/confirm")
+    public LongTermMemoryResponse confirm(@AuthenticationPrincipal JwtUser currentUser,
+                                          @PathVariable Long memoryId) {
+        return memoryService.confirmMemory(currentUser.id(), memoryId);
+    }
+
+    @PostMapping("/{memoryId}/reject")
+    public LongTermMemoryResponse reject(@AuthenticationPrincipal JwtUser currentUser,
+                                         @PathVariable Long memoryId) {
+        return memoryService.rejectMemory(currentUser.id(), memoryId);
+    }
+
+    @PutMapping("/{memoryId}/expiry")
+    public LongTermMemoryResponse updateExpiry(@AuthenticationPrincipal JwtUser currentUser,
+                                               @PathVariable Long memoryId,
+                                               @RequestBody UpdateLongTermMemoryExpiryRequest request) {
+        return memoryService.updateExpiry(currentUser.id(), memoryId, request);
+    }
+
     @DeleteMapping("/{memoryId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal JwtUser currentUser,

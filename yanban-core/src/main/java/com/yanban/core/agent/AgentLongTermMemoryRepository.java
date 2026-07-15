@@ -1,15 +1,21 @@
 package com.yanban.core.agent;
 
+import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface AgentLongTermMemoryRepository extends JpaRepository<AgentLongTermMemory, Long> {
     Optional<AgentLongTermMemory> findByIdAndUserId(Long id, Long userId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select memory from AgentLongTermMemory memory where memory.id = :id and memory.userId = :userId")
+    Optional<AgentLongTermMemory> findOwnedForUpdate(@Param("id") Long id, @Param("userId") Long userId);
 
     List<AgentLongTermMemory> findByUserIdAndStatusOrderByUpdatedAtDesc(Long userId, String status, Pageable page);
 

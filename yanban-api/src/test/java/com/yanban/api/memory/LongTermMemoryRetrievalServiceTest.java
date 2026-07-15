@@ -290,6 +290,22 @@ class LongTermMemoryRetrievalServiceTest {
     }
 
     @Test
+    void acceptsServerGeneratedUserSettingsProvenance() {
+        AgentLongTermMemory settingsMemory = memory("PREFERENCE",
+                "GraphRAG answers should include explicit caveats.", "[\"GraphRAG\"]", "0.90");
+        ReflectionTestUtils.setField(settingsMemory, "provenanceType",
+                AgentLongTermMemory.PROVENANCE_USER_SETTINGS_ACTION);
+        ReflectionTestUtils.setField(settingsMemory, "provenanceRef", "memory-settings:7:confirm");
+        when(memories.findGovernedUserCandidates(eq(USER_ID), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(settingsMemory));
+
+        AgentLongTermMemoryContext context = service.retrieve(USER_ID, "GraphRAG");
+
+        assertThat(context.hitCount()).isEqualTo(1);
+        assertThat(context.content()).contains("explicit caveats");
+    }
+
+    @Test
     void scansPastAFullUnsafePageWithoutStarvingALaterGovernedMemory() {
         List<AgentLongTermMemory> unsafePage = IntStream.range(0, 40)
                 .mapToObj(index -> {

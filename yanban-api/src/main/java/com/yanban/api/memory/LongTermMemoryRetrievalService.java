@@ -232,7 +232,8 @@ public class LongTermMemoryRetrievalService {
 
     private boolean hasCompleteSafeProvenance(AgentLongTermMemory memory) {
         return AgentLongTermMemory.CONFIRMED_SOURCE_USER_ACTION.equals(memory.getConfirmedSource())
-                && AgentLongTermMemory.PROVENANCE_USER_MESSAGE.equals(memory.getProvenanceType())
+                && (AgentLongTermMemory.PROVENANCE_USER_MESSAGE.equals(memory.getProvenanceType())
+                    || AgentLongTermMemory.PROVENANCE_USER_SETTINGS_ACTION.equals(memory.getProvenanceType()))
                 && StringUtils.hasText(memory.getProvenanceRef())
                 && !containsSensitiveOrLocalData(memory.getConfirmedSource())
                 && !containsSensitiveOrLocalData(memory.getProvenanceType())

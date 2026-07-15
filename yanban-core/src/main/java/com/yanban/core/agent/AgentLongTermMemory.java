@@ -27,6 +27,7 @@ public class AgentLongTermMemory {
     public static final String CONFIRMATION_REJECTED = "REJECTED";
     public static final String CONFIRMED_SOURCE_USER_ACTION = "USER_ACTION";
     public static final String PROVENANCE_USER_MESSAGE = "USER_MESSAGE";
+    public static final String PROVENANCE_USER_SETTINGS_ACTION = "USER_SETTINGS_ACTION";
     public static final String SOURCE_USER_CONFIRMED = "USER_CONFIRMED";
     public static final String SOURCE_USER_CORRECTED = "USER_CORRECTED";
     public static final String TYPE_FACT = "FACT";
@@ -145,7 +146,34 @@ public class AgentLongTermMemory {
 
     public void markSuperseded(Long supersededByMemoryId) {
         this.status = STATUS_SUPERSEDED;
-        this.supersededByMemoryId = supersededByMemoryId;
+        this.supersededByMemoryId = requireNonNull(supersededByMemoryId, "supersededByMemoryId");
+    }
+
+    public void bindProjectVersion(String projectVersion) {
+        this.projectVersion = requireText(projectVersion, "projectVersion");
+    }
+
+    public void confirm(Instant confirmedAt,
+                        String confirmedSource,
+                        String provenanceType,
+                        String provenanceRef) {
+        this.confirmationStatus = CONFIRMATION_CONFIRMED;
+        this.confirmedAt = requireNonNull(confirmedAt, "confirmedAt");
+        this.confirmedSource = requireText(confirmedSource, "confirmedSource");
+        this.provenanceType = requireText(provenanceType, "provenanceType");
+        this.provenanceRef = requireText(provenanceRef, "provenanceRef");
+    }
+
+    public void reject() {
+        this.confirmationStatus = CONFIRMATION_REJECTED;
+        this.confirmedAt = null;
+        this.confirmedSource = null;
+        this.provenanceType = null;
+        this.provenanceRef = null;
+    }
+
+    public void setExpiresAt(Instant expiresAt) {
+        this.expiresAt = expiresAt;
     }
 
     public Long getId() { return id; }
@@ -174,7 +202,7 @@ public class AgentLongTermMemory {
     public Instant getUpdatedAt() { return updatedAt; }
     public Instant getDeletedAt() { return deletedAt; }
 
-    private Long requireNonNull(Long value, String name) {
+    private <T> T requireNonNull(T value, String name) {
         if (value == null) {
             throw new IllegalArgumentException(name + " must not be null");
         }
