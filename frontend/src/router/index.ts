@@ -5,6 +5,7 @@ import RegisterPage from '@/views/RegisterPage.vue';
 import DemoPage from '@/views/DemoPage.vue';
 import ChatPage from '@/views/ChatPage.vue';
 import SettingsPage from '@/views/SettingsPage.vue';
+import MemorySettingsPage from '@/views/MemorySettingsPage.vue';
 import KnowledgeBasePage from '@/views/KnowledgeBasePage.vue';
 import KnowledgeSearchDebugPage from '@/views/KnowledgeSearchDebugPage.vue';
 import PaperPage from '@/views/PaperPage.vue';
@@ -24,6 +25,7 @@ const router = createRouter({
     { path: '/knowledge-base', name: 'knowledge-base', component: KnowledgeBasePage, meta: { requiresAuth: true } },
     { path: '/knowledge-base/search-debug', name: 'knowledge-base-search-debug', component: KnowledgeSearchDebugPage, meta: { requiresAuth: true } },
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
+    { path: '/settings/memory', name: 'memory-settings', component: MemorySettingsPage, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/chat' },
   ],
 });

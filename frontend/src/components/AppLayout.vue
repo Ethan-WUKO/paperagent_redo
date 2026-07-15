@@ -128,6 +128,7 @@ const navItems = computed(() => [
   { label: t('nav.projects'), path: '/projects' },
   { label: t('nav.knowledge'), path: '/knowledge-base' },
   { label: t('nav.retrieval'), path: '/knowledge-base/search-debug' },
+  { label: t('nav.memory'), path: '/settings/memory' },
   { label: t('nav.settings'), path: '/settings' },
 ]);
 
@@ -143,7 +144,7 @@ const routeTitle = computed(() => {
 });
 
 function isActiveNav(path: string) {
-  if (path === '/knowledge-base') {
+  if (path === '/knowledge-base' || path === '/settings') {
     return route.path === path;
   }
   return route.path === path || route.path.startsWith(`${path}/`);
