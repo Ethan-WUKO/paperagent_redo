@@ -3,13 +3,13 @@
 > 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
 > 最近同步：2026-07-16
-> 已审查工程基线：`4a85b09`（Worker 10 受治理自动策略选择与跨材料科研编排）
+> 已审查工程基线：`1d488f0`（Worker 11 受治理跨材料校验与有界 Reflection）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
-> 当前工程基线：`4a85b09`（受治理自动策略选择与跨材料科研编排）
+> 当前工程基线：`1d488f0`（受治理跨材料校验与有界 Reflection）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`ENGINEERING_ACCEPTED / AWAITING_WORKER_10_LOCAL_UI_ACCEPTANCE`
+> 当前发布状态：`ENGINEERING_ACCEPTED / AWAITING_WORKER_11_LOCAL_UI_ACCEPTANCE`
 > 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
 > 当前进度：Worker 1 至 Worker 7 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome、canonical answer 与 PARTIAL/取消/失败语义。Worker 5 基线 `1c40159` 在该投影上增加 L0 Task Workspace，保存目标、成功条件、计划引用、观测步骤摘要、剩余工作和有界短期记忆；任意 JSON 快照中的记忆只能降级为明确标记的非权威审计摘要，不能伪造 Evidence、Candidate、Artifact、失败结果或工具观察。`823a820` 在不扩权的前提下完成 Worker 5 后本地回归闭环。Worker 6 基线 `956ce42` 以服务端 manifest 的 portable relative path、文件大小和 SHA-256 内容哈希确定性派生 ProjectVersion，并将 Project Evidence、Plan 持久化 Evidence、Candidate 与 Artifact 绑定到同一版本；旧 Evidence 缺少完整版本、范围或 parser provenance 时保持 fail-closed，不能伪造 VERIFIED。Worker 7A 至 7D 完成长短期记忆治理、受信只读接入、用户确认/拒绝/纠正/删除和双语治理界面。Worker 8A 基线 `d4970cd` 冻结受信 ProjectVersion 沙箱快照、不可变 UTF-8 全文替换 Candidate、base/result hash、EvidenceRefs、审查 diff、预算和 `NOT_APPLIED` 验证契约。Worker 8B 基线 `83c6b56` 将该契约接入服务端受信工作副本：只读取 Candidate 与 Evidence 涉及的文本文件，读取前后对完整 manifest 二次校验，任意未请求文件并发变化也返回 409；Candidate 只能由显式结构化 intent 和当前受信 Evidence ledger 生成，公共 artifact API 不能伪造保留类型，持久化后每次读取都重新物化、证明和验证，始终保持 `NOT_APPLIED`。Worker 8C 基线 `8ff3339` 新增受治理的 `project_propose_candidate` 生产入口，并通过当前轮真实工具结果和服务端 artifact 再认证投影 Candidate；Project 页从真实 API 展示多文件变更、ProjectVersion、指纹、验证状态、review diff 与 Evidence provenance，始终保持 `NOT_APPLIED`。主对话独立验证 Worker 8C 定向后端 66/66、完整 reactor 889 项零失败且 9 项既有条件跳过、前端 3/3、生产构建及 `git diff --check` 通过。Worker 8 不包含真实 Project 写入、命令、外部网络、migration 或自动应用；真实模型生成、多文件展示、409 STALE 和 422 INVALID 仍由用户进行本地 UI 验收。MVP 发布门脚本仍有基线遗留的绝对路径创建用例禁用治理项，发布前必须单独收口。该结论不表示用户本地科研验收完成，也不表示持久化 checkpoint/重启恢复、多版本历史与导出或安全应用已经完成。
@@ -17,6 +17,8 @@
 > 进度更正（2026-07-16）：Worker 9 已在 `f2ee67d` 完成受治理 Candidate 应用、不可变 Project revision 历史、回滚和 ZIP 导出；上段末尾关于“多版本历史与导出或安全应用尚未完成”的描述已被本次工程实现取代。持久化 checkpoint/重启恢复、命令执行沙箱、外部网络和 Pro 权限仍未开放。该结论不表示用户本地科研验收完成。
 
 > Worker 10 工程进度（2026-07-16）：`4a85b09` 已完成受治理的 `AUTO` 策略选择与论文/LaTeX、代码、实验配置和 BibTeX 跨材料编排基础。Project 普通请求默认保持 ReAct；只有服务器受信信号同时表明跨材料、多阶段/验证需要，且现有工具覆盖与调用预算满足时才选择 Plan。显式策略、受信 Plan 能力和精确 `/plan reflect` 路由保持原语义。主对话已完成独立静态审查、132 项 Worker 10 定向测试和 648 项完整 reactor 测试，均为零失败、零错误；仍需用户使用真实后端、真实模型和前端完成 Worker 10 本地 UI 验收。本结论不表示用户本地科研验收完成。
+
+> Worker 11 工程进度（2026-07-16）：`1d488f0` 已在 Worker 10 的 AUTO Direct/ReAct/Plan 路由上增加受治理的跨材料完成校验、结构化一致/不一致结果和最多一次有界 Reflection。校验只接受当前受信材料、工具结果、版本化 Evidence 与已完成 Plan 步骤；失败后只有同一工具/材料范围内的后续受信成功，或受信 `plan_repaired` 替换步骤完成，才能恢复旧失败。当前唯一可确定性 VERIFIED 的跨材料规则是用户明确要求的文件内容哈希/字节一致性；论文、代码和实验之间的一般语义一致性仍必须保持 `UNRESOLVED/PARTIAL`，不能由模型推断冒充 VERIFIED。主对话已完成独立静态审查、200 项定向测试和 685 项完整 reactor 测试，均为零失败、零错误，8 项条件跳过；`git diff --check` 通过。仍需用户使用真实后端、真实模型和前端完成 Worker 11 本地 UI 验收。本结论不表示用户本地科研验收完成。
 
 ## 1. 目标与边界
 
@@ -353,10 +355,10 @@ requiredTests
 stopConditions
 ```
 
-当前基线：
+current baseline:
 
 ```text
-f2ee67d
+1d488f0
 ```
 
 任何前序 Worker 的变更必须先完成主对话复审并提交，才能成为下一 Worker 的基线。
@@ -487,6 +489,21 @@ Worker 开发
 - Worker 7 本地验收遗留的“Plan 长期记忆接入”和“会话候选自动沉淀”继续后置，Worker 10 未顺手实现，也不得据此宣称长期记忆闭环完整通过。
 - 主对话独立验证：Worker 10 与 Worker 4-9 关键回归定向测试 132/132；`mvn -o -pl yanban-api -am test` 完整 reactor 648 项零失败、零错误、8 项条件跳过；`git diff --check` 通过。工程基线提交为 `4a85b09`。
 - 本地验收仍需覆盖：普通 Project 自动选择 ReAct、明确跨材料多阶段任务自动选择并完成 Plan、显式策略不被 AUTO 覆盖、Plan PARTIAL/失败可解释、长回答及同步 AUTO Plan 的等待体验。同步执行可能增加单次 Chat 等待时间，未经过真实 UI 验收前不得标记 `LOCAL_UI_ACCEPTED`。
+
+### Worker 11：受治理跨材料校验与有界 Reflection
+
+状态：`ENGINEERING_ACCEPTED / AWAITING_LOCAL_UI_ACCEPTANCE`
+
+- 在 Worker 10 的受治理 AUTO Direct/ReAct/Plan 路由之后增加确定性的完成校验，核对服务器识别的材料覆盖、实际工具结果、当前 ProjectVersion 的 Evidence provenance，以及 Plan 步骤和依赖是否真实完成；校验结果进入统一 run/canonical answer，不创建第二套生命周期。
+- 跨材料结果使用结构化 `VERIFIED_CONSISTENT`、`VERIFIED_INCONSISTENT`、`UNRESOLVED` 和对应 reason code，不能把空结果、失败工具调用、旧 Evidence、跨 Project Evidence、未完成 Plan 步骤或模型文字判断提升为 VERIFIED。
+- 当前唯一支持确定性 VERIFIED 的领域规则是用户明确要求的文件内容哈希/字节一致性。该规则只比较服务器当前 Evidence 中的文件哈希，能证明文件字节相同或不同，但不能证明论文、代码、实验配置在科研语义上等价或一致。
+- 一般论文/代码/实验/BibTeX 的语义一致性尚无受信领域解析器和规则引擎，必须返回 `UNRESOLVED/PARTIAL` 并保留已获得结果；不能为了给出完整答案而伪造 VERIFIED。后续扩展必须为具体科研关系增加确定性规则、受信 provenance 和独立测试。
+- 工具结果带执行 attempt。旧失败只有在同一工具和材料范围出现后续受信成功时才可恢复；Plan 旧失败只有经受信 `plan_repaired` 替换映射且替换步骤完成时才可恢复。无关成功、仅有模型说明或未完成替换不能掩盖失败。
+- 失败或证据不足时最多触发一次权限不变、工具不变、预算不增加的有界 Reflection；Reflection 不自动创建或复制 Plan，不修改 `allowedTools`，不增加写入、命令、网络、模型、MCP、多 Agent 或 Pro 权限。再次不足时保持 PARTIAL/INSUFFICIENT，不循环重试。
+- Worker 4 至 Worker 10 的 run identity、status/phase/outcome、canonical answer、ProjectVersion、Evidence、长期记忆、Candidate `NOT_APPLIED`、revision 与策略选择契约保持不变；未新增 Controller、migration 或前端。
+- Worker 7 本地验收遗留的“Plan 长期记忆接入”和“会话候选自动沉淀”继续后置，Worker 11 未顺手实现，也不得据此宣称长期记忆闭环完整通过。
+- 主对话独立验证：Worker 11 与 Worker 4-10 关键回归定向测试 200/200；`mvn -o -pl yanban-api -am test` 完整 reactor 685 项零失败、零错误、8 项条件跳过；`git diff --check` 通过。工程基线提交为 `1d488f0`。
+- 本地验收仍需覆盖：普通跨材料语义请求不得伪造 VERIFIED；明确文件哈希/字节一致性请求应展示结构化一致或不一致；首次失败后受信成功只能触发一次恢复；持续失败不得发生第二次 Reflection；PARTIAL、Evidence provenance、长回答和错误状态需在真实 UI 中可解释。本结论不表示用户本地科研验收完成。
 
 ## 16. 审查与停止条件
 
