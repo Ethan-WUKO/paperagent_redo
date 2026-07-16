@@ -3,18 +3,20 @@
 > 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
 > 最近同步：2026-07-16
-> 已审查工程基线：`02022b7`（Worker 7-9 本地验收缺陷修复与 Candidate 生产闭环）
+> 已审查工程基线：`4a85b09`（Worker 10 受治理自动策略选择与跨材料科研编排）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
-> 当前工程基线：`02022b7`（受治理 Candidate 应用、不可变 revision 历史及本地验收修复）
+> 当前工程基线：`4a85b09`（受治理自动策略选择与跨材料科研编排）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`LOCAL_UI_ACCEPTED`
+> 当前发布状态：`ENGINEERING_ACCEPTED / AWAITING_WORKER_10_LOCAL_UI_ACCEPTANCE`
 > 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
 > 当前进度：Worker 1 至 Worker 7 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome、canonical answer 与 PARTIAL/取消/失败语义。Worker 5 基线 `1c40159` 在该投影上增加 L0 Task Workspace，保存目标、成功条件、计划引用、观测步骤摘要、剩余工作和有界短期记忆；任意 JSON 快照中的记忆只能降级为明确标记的非权威审计摘要，不能伪造 Evidence、Candidate、Artifact、失败结果或工具观察。`823a820` 在不扩权的前提下完成 Worker 5 后本地回归闭环。Worker 6 基线 `956ce42` 以服务端 manifest 的 portable relative path、文件大小和 SHA-256 内容哈希确定性派生 ProjectVersion，并将 Project Evidence、Plan 持久化 Evidence、Candidate 与 Artifact 绑定到同一版本；旧 Evidence 缺少完整版本、范围或 parser provenance 时保持 fail-closed，不能伪造 VERIFIED。Worker 7A 至 7D 完成长短期记忆治理、受信只读接入、用户确认/拒绝/纠正/删除和双语治理界面。Worker 8A 基线 `d4970cd` 冻结受信 ProjectVersion 沙箱快照、不可变 UTF-8 全文替换 Candidate、base/result hash、EvidenceRefs、审查 diff、预算和 `NOT_APPLIED` 验证契约。Worker 8B 基线 `83c6b56` 将该契约接入服务端受信工作副本：只读取 Candidate 与 Evidence 涉及的文本文件，读取前后对完整 manifest 二次校验，任意未请求文件并发变化也返回 409；Candidate 只能由显式结构化 intent 和当前受信 Evidence ledger 生成，公共 artifact API 不能伪造保留类型，持久化后每次读取都重新物化、证明和验证，始终保持 `NOT_APPLIED`。Worker 8C 基线 `8ff3339` 新增受治理的 `project_propose_candidate` 生产入口，并通过当前轮真实工具结果和服务端 artifact 再认证投影 Candidate；Project 页从真实 API 展示多文件变更、ProjectVersion、指纹、验证状态、review diff 与 Evidence provenance，始终保持 `NOT_APPLIED`。主对话独立验证 Worker 8C 定向后端 66/66、完整 reactor 889 项零失败且 9 项既有条件跳过、前端 3/3、生产构建及 `git diff --check` 通过。Worker 8 不包含真实 Project 写入、命令、外部网络、migration 或自动应用；真实模型生成、多文件展示、409 STALE 和 422 INVALID 仍由用户进行本地 UI 验收。MVP 发布门脚本仍有基线遗留的绝对路径创建用例禁用治理项，发布前必须单独收口。该结论不表示用户本地科研验收完成，也不表示持久化 checkpoint/重启恢复、多版本历史与导出或安全应用已经完成。
 
 > 进度更正（2026-07-16）：Worker 9 已在 `f2ee67d` 完成受治理 Candidate 应用、不可变 Project revision 历史、回滚和 ZIP 导出；上段末尾关于“多版本历史与导出或安全应用尚未完成”的描述已被本次工程实现取代。持久化 checkpoint/重启恢复、命令执行沙箱、外部网络和 Pro 权限仍未开放。该结论不表示用户本地科研验收完成。
+
+> Worker 10 工程进度（2026-07-16）：`4a85b09` 已完成受治理的 `AUTO` 策略选择与论文/LaTeX、代码、实验配置和 BibTeX 跨材料编排基础。Project 普通请求默认保持 ReAct；只有服务器受信信号同时表明跨材料、多阶段/验证需要，且现有工具覆盖与调用预算满足时才选择 Plan。显式策略、受信 Plan 能力和精确 `/plan reflect` 路由保持原语义。主对话已完成独立静态审查、132 项 Worker 10 定向测试和 648 项完整 reactor 测试，均为零失败、零错误；仍需用户使用真实后端、真实模型和前端完成 Worker 10 本地 UI 验收。本结论不表示用户本地科研验收完成。
 
 ## 1. 目标与边界
 
@@ -472,6 +474,19 @@ Worker 开发
 - 2026-07-16 本地真实验收通过：用户逐文件应用后仅选中文件进入原子生成的新 ProjectVersion，revision 1/2 均保留且可双向回滚；回滚按设计只切换 Current 指针，不额外制造 revision。旧 `If-Match` 返回 409，同一幂等键安全重放并复用同一 operation/result revision，并发应用恰有一个 200、另一个 409，非法 Candidate 返回 422，STALE Candidate 返回 409。
 - 真实 MySQL 8 已确认 V34 成功及 `project_revisions`、`project_revision_operations` 的 revision、operation、幂等唯一约束和关联数据；真实 MinIO revision 前缀中的 manifest 与 3 个文件对象逐项 SHA-256 一致。真实 API 导出的 ZIP 含同一 3 个文件，其大小与 SHA-256 再次全部匹配 manifest。前端 Candidate/revision API 5/5 与生产构建通过。
 - 按用户要求，Worker 9 完成后停止，不自动启动 Worker 10。
+
+### Worker 10：统一策略选择与跨材料科研编排基础
+
+状态：`ENGINEERING_ACCEPTED / AWAITING_LOCAL_UI_ACCEPTANCE`
+
+- 新增服务器受治理的 `AUTO` 策略选择。Chat 只在 Direct/ReAct 中决策；Project 在 Direct/ReAct/Plan 中决策，普通 Project 请求默认 ReAct，避免因缺少材料关键词而退化为无工具 Direct。
+- 只有受信请求上下文同时识别跨材料范围、多个执行阶段或独立验证需求，并确认现有只读科研工具覆盖与预算足够时，才自动选择 Plan。材料范围只复用现有论文/LaTeX、代码、实验配置和 BibTeX 工具，不新增 executor、命令、网络、模型、MCP、多 Agent 或 Pro 权限。
+- 策略选择输出结构化审计信息，包括 `SERVER_AUTO`、`EXPLICIT_OVERRIDE`、`EXPLICIT_FALLBACK`、`TRUSTED_CAPABILITY` 来源、确定性 signals、reason codes 和材料需求；不保存模型思维链，也不接受客户端伪造受信 identity 或 capability。
+- 显式服务器允许的策略优先；受信 Plan capability 继续进入 Plan；精确 `/plan reflect` 仍是唯一 Reflection 路由。所有自动 Plan 工具策略与原始 runtime policy 求交，不能扩大 `allowedTools`、写权限或网络权限。
+- AUTO Plan 复用既有持久化 Plan 生命周期并同步执行，canonical answer 来自真实步骤结果；内部执行不重复沉淀会话摘要，外层 Chat 仍是唯一规范用户/助手消息。只有 `PLAN_CREATED` 被视为未执行的 PARTIAL，失败与部分完成不会伪装成功，既有 planId 执行不会重复创建 Plan。
+- Worker 7 本地验收遗留的“Plan 长期记忆接入”和“会话候选自动沉淀”继续后置，Worker 10 未顺手实现，也不得据此宣称长期记忆闭环完整通过。
+- 主对话独立验证：Worker 10 与 Worker 4-9 关键回归定向测试 132/132；`mvn -o -pl yanban-api -am test` 完整 reactor 648 项零失败、零错误、8 项条件跳过；`git diff --check` 通过。工程基线提交为 `4a85b09`。
+- 本地验收仍需覆盖：普通 Project 自动选择 ReAct、明确跨材料多阶段任务自动选择并完成 Plan、显式策略不被 AUTO 覆盖、Plan PARTIAL/失败可解释、长回答及同步 AUTO Plan 的等待体验。同步执行可能增加单次 Chat 等待时间，未经过真实 UI 验收前不得标记 `LOCAL_UI_ACCEPTED`。
 
 ## 16. 审查与停止条件
 
