@@ -1,0 +1,18 @@
+package com.yanban.api.agent;
+
+/** Stable reason codes for logs, serialization and deterministic tests. */
+public enum AgentStrategyReasonCode {
+    EXPLICIT_STRATEGY_SELECTED,
+    EXPLICIT_STRATEGY_NOT_ALLOWED,
+    TRUSTED_PLAN_CAPABILITY,
+    LEGACY_REFLECTION_CAPABILITY,
+    AUTO_SIMPLE_DIRECT,
+    AUTO_TOOL_TASK_REACT,
+    AUTO_CROSS_MATERIAL_PLAN,
+    NO_ALLOWED_TOOLS,
+    TOOL_BUDGET_INSUFFICIENT,
+    PLAN_BUDGET_INSUFFICIENT,
+    MATERIAL_COVERAGE_INCOMPLETE,
+    DEGRADED_TO_REACT,
+    DEGRADED_TO_DIRECT
+}

@@ -648,6 +648,43 @@ class PlanAgentServiceTest {
 
     @Test
     @MockitoSettings(strictness = Strictness.LENIENT)
+    void adapterPlanPolicyCannotExpandBeyondRuntimePolicyCeiling() {
+        when(toolPolicyEngine.decideProject(any(), any())).thenReturn(new AgentToolPolicyEngine.Decision(
+                List.of("project_latex_outline", "project_code_symbols"), 12, 1, "project_policy"));
+        when(planner.createPlan(any(), any(), any(), any(), any(), any(), any(),
+                any(AgentOrchestrationRequirements.class)))
+                .thenReturn(new PlanningAgentPlanner.PlanSpec("summary", List.of(
+                        new PlanningAgentPlanner.StepSpec("step_1", "Inspect", "Inspect code", "ANALYSIS",
+                                List.of(), List.of("project_latex_outline", "project_code_symbols"), "done")), "{}"));
+        when(steps.save(any(AgentPlanStep.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        AgentOrchestrationRequirements requirements = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE, AgentStrategySignal.MATERIAL_CODE),
+                List.of(AgentStrategyReasonCode.EXPLICIT_STRATEGY_SELECTED),
+                List.of(new ResearchMaterialRequirement(ResearchMaterialKind.CODE,
+                        List.of("project_code_symbols", "project_read_file"),
+                        List.of("project_code_symbols"), true)));
+        AgentRuntimeRequest runtimeRequest = new AgentRuntimeRequest(
+                AgentStrategy.PLAN_EXECUTE, SESSION_ID, List.of(), USER_ID, "Inspect project code",
+                "test", "model", null, null, 4, true, null, "key", "url", null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_code_symbols"), 2, 1, "runtime_ceiling"),
+                2, 1, "trace-ceiling", null, null)
+                .withProjectContext(new ProjectRuntimeContext(USER_ID, 42L))
+                .withOrchestrationRequirements(requirements);
+
+        AgentPlanResponse response = service.createPlanWithinAdapter(runtimeRequest);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> plannerTools = ArgumentCaptor.forClass(List.class);
+        verify(planner).createPlan(any(), any(), any(), any(), any(), any(), plannerTools.capture(),
+                org.mockito.ArgumentMatchers.eq(requirements));
+        assertThat(plannerTools.getValue()).containsExactly("project_code_symbols");
+        assertThat(response.steps()).singleElement().satisfies(step ->
+                assertThat(step.allowedTools()).containsExactly("project_code_symbols"));
+    }
+
+    @Test
+    @MockitoSettings(strictness = Strictness.LENIENT)
     void plannerFailureIsReturnedToPlanApiWithoutPersistingAPlan() {
         when(planner.createPlan(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(PlanningAgentPlanner.PlanSpec.failure(PlannerFailureCode.INVALID_PLAN, "malformed JSON"));

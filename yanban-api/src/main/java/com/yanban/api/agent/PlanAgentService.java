@@ -214,7 +214,8 @@ public class PlanAgentService {
     /** Called only by {@link PlanRuntimeAdapter} after trusted Coordinator selection. */
     AgentPlanResponse createPlanWithinAdapter(AgentRuntimeRequest request) {
         return createPlanInternal(request.userId(), request.sessionId(), new CreateAgentPlanRequest(
-                request.userMessage(), request.ragDisabled(), request.skillId(), false), request.projectContext());
+                request.userMessage(), request.ragDisabled(), request.skillId(), false), request.projectContext(),
+                request.orchestrationRequirements(), request.toolPolicy());
     }
 
     private AgentPlanResponse createPlanInternal(Long userId, Long sessionId, CreateAgentPlanRequest request) {
@@ -223,6 +224,19 @@ public class PlanAgentService {
 
     private AgentPlanResponse createPlanInternal(Long userId, Long sessionId, CreateAgentPlanRequest request,
                                                   ProjectRuntimeContext projectContext) {
+        return createPlanInternal(userId, sessionId, request, projectContext, AgentOrchestrationRequirements.empty());
+    }
+
+    private AgentPlanResponse createPlanInternal(Long userId, Long sessionId, CreateAgentPlanRequest request,
+                                                 ProjectRuntimeContext projectContext,
+                                                 AgentOrchestrationRequirements orchestrationRequirements) {
+        return createPlanInternal(userId, sessionId, request, projectContext, orchestrationRequirements, null);
+    }
+
+    private AgentPlanResponse createPlanInternal(Long userId, Long sessionId, CreateAgentPlanRequest request,
+                                                 ProjectRuntimeContext projectContext,
+                                                 AgentOrchestrationRequirements orchestrationRequirements,
+                                                 ResolvedToolPolicy runtimePolicyCeiling) {
         if (projectContext != null) projectContext = revalidateProject(userId, projectContext.projectId());
         AgentSession session = agentService.getOwnedSession(userId, sessionId);
         boolean ragDisabled = request.ragDisabled() != null
@@ -232,17 +246,19 @@ public class PlanAgentService {
         ResolvedToolPolicy planToolPolicy = projectContext == null
                 ? resolvePlanToolPolicy(request.content(), ragDisabled, skill)
                 : toolPolicyEngine.decideProject(skill == null ? null : skill.allowedTools(), null).resolved();
+        planToolPolicy = constrainToRuntimePolicy(planToolPolicy, runtimePolicyCeiling);
         UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                 userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
-        PlanningAgentPlanner.PlanSpec spec = planner.createPlan(
-                request.content(),
-                endpoint.providerKey(),
-                endpoint.modelName(),
-                endpoint.apiKey(),
-                endpoint.apiUrl(),
-                skill == null ? null : skill.prompt(),
-                planToolPolicy.allowedTools()
-        );
+        PlanningAgentPlanner.PlanSpec spec;
+        if (orchestrationRequirements == null || orchestrationRequirements.materialRequirements().isEmpty()) {
+            spec = planner.createPlan(request.content(), endpoint.providerKey(), endpoint.modelName(),
+                    endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
+                    planToolPolicy.allowedTools());
+        } else {
+            spec = planner.createPlan(request.content(), endpoint.providerKey(), endpoint.modelName(),
+                    endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
+                    planToolPolicy.allowedTools(), orchestrationRequirements);
+        }
         if (spec == null || spec.failureCode() != null) {
             PlannerFailureCode code = spec == null ? PlannerFailureCode.INVALID_PLAN : spec.failureCode();
             String message = spec == null ? "Planner returned no result." : spec.failureMessage();
@@ -287,6 +303,18 @@ public class PlanAgentService {
         ));
 
         return toResponse(plan, savedSteps);
+    }
+
+    private ResolvedToolPolicy constrainToRuntimePolicy(ResolvedToolPolicy resolved,
+                                                        ResolvedToolPolicy runtimePolicyCeiling) {
+        if (runtimePolicyCeiling == null) return resolved;
+        Set<String> ceiling = Set.copyOf(runtimePolicyCeiling.allowedTools());
+        List<String> allowed = resolved.allowedTools().stream().filter(ceiling::contains).toList();
+        int maxToolCalls = Math.min(resolved.maxToolCalls(), runtimePolicyCeiling.maxToolCalls());
+        int maxDuplicateToolCalls = Math.min(resolved.maxDuplicateToolCalls(),
+                runtimePolicyCeiling.maxDuplicateToolCalls());
+        return new ResolvedToolPolicy(allowed, maxToolCalls, maxDuplicateToolCalls,
+                resolved.reason() + "+runtime_policy_ceiling");
     }
 
     @Transactional(readOnly = true)

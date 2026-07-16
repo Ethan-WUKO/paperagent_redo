@@ -8,10 +8,91 @@ import static org.mockito.Mockito.when;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.agent.AgentTaskOutcome;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.core.research.ResearchToolContracts;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class AgentRuntimeCoordinatorTest {
+
+    @Test
+    void projectAutoPlanCarriesAuditRequirementsWithoutExpandingRuntimeAuthority() {
+        AgentRuntimeService runtime = mock(AgentRuntimeService.class);
+        when(runtime.run(org.mockito.ArgumentMatchers.any())).thenReturn(new AgentRuntimeResult(
+                true, "created", List.of(ChatMessage.assistant("created")), 1, null,
+                List.of(), List.of(), null, null, null));
+        AgentRuntimeCoordinator coordinator = coordinator(runtime);
+        List<String> allowed = List.of(
+                ResearchToolContracts.PROJECT_LATEX_OUTLINE,
+                ResearchToolContracts.PROJECT_CODE_SYMBOLS,
+                ResearchToolContracts.PROJECT_EXPERIMENT_SUMMARY);
+        AgentRuntimeRequest original = new AgentRuntimeRequest(AgentStrategy.AUTO, 3L, List.of(), 7L,
+                "Compare the LaTeX paper with code, then verify experiment results.",
+                "test", "model", null, null, 6, true, null, "secret", "local-model", null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(allowed, 6, 1, "project_skill_intersection"),
+                6, 1, "auto-plan-trace", null, null)
+                .withProjectContext(new ProjectRuntimeContext(7L, 42L));
+
+        AgentCoordinationResult result = coordinator.coordinate(AgentCoordinationRequest.projectRead(original));
+
+        assertThat(result.decision().selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(result.decision().strategySelection().orchestration().materialRequirements())
+                .hasSize(3).allMatch(ResearchMaterialRequirement::covered);
+        assertThat(result.decision().strategySelection().orchestration().selectionOrigin())
+                .isEqualTo(AgentStrategySelectionOrigin.SERVER_AUTO);
+        assertThat(result.taskWorkspace().identity().userId()).isEqualTo(7L);
+        assertThat(result.taskWorkspace().identity().projectId()).isEqualTo(42L);
+        org.mockito.ArgumentCaptor<AgentRuntimeRequest> captured =
+                org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
+        verify(runtime).run(captured.capture());
+        AgentRuntimeRequest executed = captured.getValue();
+        assertThat(executed.strategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(executed.allowedToolNames()).containsExactlyElementsOf(allowed);
+        assertThat(executed.toolPolicy()).isEqualTo(original.toolPolicy());
+        assertThat(executed.userId()).isEqualTo(original.userId());
+        assertThat(executed.projectContext()).isEqualTo(original.projectContext());
+        assertThat(executed.apiKey()).isEqualTo(original.apiKey());
+        assertThat(executed.apiUrl()).isEqualTo(original.apiUrl());
+        assertThat(executed.orchestrationRequirements())
+                .isEqualTo(result.decision().strategySelection().orchestration());
+    }
+
+    @Test
+    void projectAutoPlanCreatesExecutesAndProjectsTheActualTerminalAnswer() {
+        PlanAgentService plans = mock(PlanAgentService.class);
+        AgentPlanResponse created = new AgentPlanResponse(19L, 3L, "goal", "summary", "REVIEWING",
+                false, null, null, null, null, null, null, List.of());
+        AgentPlanStepResponse completedStep = new AgentPlanStepResponse(1L, "s1", 1, "Synthesis",
+                "compare", "ANALYSIS", List.of(), List.of(), "done", "COMPLETED", 1,
+                "Verified paper/code/experiment synthesis", null, null, null);
+        AgentPlanResponse completed = new AgentPlanResponse(19L, 3L, "goal", "summary", "COMPLETED",
+                false, null, null, null, null, null, null, List.of(completedStep));
+        when(plans.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any())).thenReturn(created);
+        when(plans.executePlanResultWithinAdapter(7L, 19L, "auto-terminal", false))
+                .thenReturn(new PlanAgentService.PlanExecutionResult(completed, AgentRuntimeStopSignal.NONE));
+        AgentRuntimeCoordinator coordinator = coordinator(new AgentRuntimeService(
+                List.of(new PlanRuntimeAdapter(plans))));
+        List<String> tools = List.of(ResearchToolContracts.PROJECT_LATEX_OUTLINE,
+                ResearchToolContracts.PROJECT_CODE_SYMBOLS,
+                ResearchToolContracts.PROJECT_EXPERIMENT_SUMMARY);
+        AgentRuntimeRequest request = new AgentRuntimeRequest(AgentStrategy.AUTO, 3L, List.of(), 7L,
+                "Compare the LaTeX paper with code, then verify experiment results.",
+                "test", "model", null, null, 6, true, null, null, null, null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(tools, 6, 1, "project"), 6, 1,
+                "auto-terminal", null, null).withProjectContext(new ProjectRuntimeContext(7L, 42L));
+
+        AgentCoordinationResult result = coordinator.coordinate(AgentCoordinationRequest.projectRead(request));
+
+        assertThat(result.runtimeResult().planId()).isEqualTo(19L);
+        assertThat(result.runtimeResult().outcome()).isEqualTo("SUCCESS");
+        assertThat(result.runProjection().state().outcome()).isEqualTo(AgentTaskOutcome.SUCCEEDED);
+        assertThat(result.runProjection().canonicalAnswer())
+                .contains("status COMPLETED", "Verified paper/code/experiment synthesis");
+        assertThat(result.runProjection().identity().source()).isEqualTo("AGENT_PLAN");
+        verify(plans).createPlanWithinAdapter(org.mockito.ArgumentMatchers.any());
+        verify(plans).executePlanResultWithinAdapter(7L, 19L, "auto-terminal", false);
+    }
 
     @Test
     void productionWorkspaceAssemblyCoversChatReactProjectAndPersistedPlanWithoutPolicyExpansion() {

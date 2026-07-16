@@ -83,6 +83,44 @@ class PlanningAgentPlannerTest {
     }
 
     @Test
+    void createPlanReceivesBoundedCrossMaterialRequirementsInSystemPromptOnly() {
+        when(modelProvider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("""
+                {"summary":"Audit materials","steps":[{
+                  "id":"audit","title":"Audit paper and code",
+                  "description":"Inspect governed paper and code observations.","type":"ANALYSIS",
+                  "dependencies":[],"allowedTools":["project_latex_outline","project_code_symbols"],
+                  "successCriteria":"Paper and code observations are cited."}]}
+                """), "stop", null));
+        AgentOrchestrationRequirements requirements = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE, AgentStrategySignal.CROSS_MATERIAL_TASK,
+                        AgentStrategySignal.VERIFICATION_REQUIRED),
+                List.of(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN),
+                List.of(
+                        new ResearchMaterialRequirement(ResearchMaterialKind.PAPER_LATEX,
+                                List.of("project_latex_outline", "project_read_file"),
+                                List.of("project_latex_outline"), true),
+                        new ResearchMaterialRequirement(ResearchMaterialKind.CODE,
+                                List.of("project_code_symbols", "project_read_file"),
+                                List.of("project_code_symbols"), true)));
+
+        PlanningAgentPlanner.PlanSpec plan = planner.createPlan(
+                "Audit the implementation claims.", "test", "model", "key", "url", null,
+                List.of("project_latex_outline", "project_code_symbols"), requirements);
+
+        assertThat(plan.executable()).isTrue();
+        ArgumentCaptor<ChatRequest> requestCaptor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(modelProvider).chat(requestCaptor.capture());
+        ChatRequest request = requestCaptor.getValue();
+        assertThat(request.messages().get(0).content())
+                .contains("Server-attested bounded research orchestration requirements")
+                .contains("Cover PAPER_LATEX using only one or more of: project_latex_outline")
+                .contains("Include a verification step")
+                .contains("do not add tools, permissions, identity, network, command, or write authority");
+        assertThat(request.messages().get(1).content())
+                .isEqualTo("Create an executable plan for this user task:\nAudit the implementation claims.");
+    }
+
+    @Test
     void createPlanReturnsExplicitFailureWhenModelCallFails() {
         when(modelProvider.chat(any())).thenThrow(new RuntimeException("Timeout on blocking read"));
 

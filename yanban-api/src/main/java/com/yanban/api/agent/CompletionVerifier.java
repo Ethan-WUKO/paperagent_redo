@@ -60,7 +60,8 @@ public class CompletionVerifier {
             reasons.add("runtime budget stop: " + result.runtimeStopSignal());
             return new CompletionVerification(CompletionStatus.PARTIAL, reasons, ids(ledger), false, reflectionAttempts);
         }
-        if (request.strategy() == AgentStrategy.PLAN_EXECUTE && request.planId() == null && result.planId() != null) {
+        if (request.strategy() == AgentStrategy.PLAN_EXECUTE && request.planId() == null
+                && result.planId() != null && "PLAN_CREATED".equals(result.outcome())) {
             return new CompletionVerification(CompletionStatus.PARTIAL, List.of("plan was created but has not been executed"),
                     ids(ledger), false, reflectionAttempts);
         }

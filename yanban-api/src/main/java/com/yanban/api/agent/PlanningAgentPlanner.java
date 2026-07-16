@@ -46,9 +46,21 @@ public class PlanningAgentPlanner {
                                String apiUrl,
                                String skillPrompt,
                                List<String> skillAllowedTools) {
+        return createPlan(goal, provider, model, apiKey, apiUrl, skillPrompt, skillAllowedTools,
+                AgentOrchestrationRequirements.empty());
+    }
+
+    public PlanSpec createPlan(String goal,
+                               String provider,
+                               String model,
+                               String apiKey,
+                               String apiUrl,
+                               String skillPrompt,
+                               List<String> skillAllowedTools,
+                               AgentOrchestrationRequirements orchestrationRequirements) {
         PlannerAttempt first = requestPlan(
                 goal, provider, model, apiKey, apiUrl,
-                buildPlannerSystemPrompt(skillPrompt, skillAllowedTools),
+                buildPlannerSystemPrompt(skillPrompt, skillAllowedTools, orchestrationRequirements),
                 "Create an executable plan for this user task:\n" + goal,
                 PLANNER_MAX_TOKENS, DEFAULT_MAX_PLAN_STEPS, skillAllowedTools, "Planner");
         if (first.spec().executable() || !first.retryable()) {
@@ -57,7 +69,8 @@ public class PlanningAgentPlanner {
 
         PlannerAttempt second = requestPlan(
                 goal, provider, model, apiKey, apiUrl,
-                buildCompactRepairPrompt(skillPrompt, skillAllowedTools, first.spec().failureCode()),
+                buildCompactRepairPrompt(skillPrompt, skillAllowedTools, first.spec().failureCode(),
+                        orchestrationRequirements),
                 "Create a fresh, complete replacement plan for this user task:\n" + goal,
                 PLANNER_RETRY_MAX_TOKENS, COMPACT_RETRY_MAX_STEPS, skillAllowedTools, "Planner retry");
         if (second.spec().executable()) {
@@ -180,7 +193,9 @@ public class PlanningAgentPlanner {
         );
     }
 
-    private String buildPlannerSystemPrompt(String skillPrompt, List<String> skillAllowedTools) {
+    private String buildPlannerSystemPrompt(String skillPrompt,
+                                            List<String> skillAllowedTools,
+                                            AgentOrchestrationRequirements orchestrationRequirements) {
         StringBuilder sb = new StringBuilder();
         sb.append("""
                 You are the planner for Yanban Agent.
@@ -236,12 +251,18 @@ public class PlanningAgentPlanner {
                     .append(skillPrompt.trim())
                     .append("\n");
         }
+        String orchestrationInstruction = orchestrationRequirements == null
+                ? null : orchestrationRequirements.plannerInstruction();
+        if (StringUtils.hasText(orchestrationInstruction)) {
+            sb.append("\n").append(orchestrationInstruction).append("\n");
+        }
         return sb.toString();
     }
 
     private String buildCompactRepairPrompt(String skillPrompt,
                                             List<String> skillAllowedTools,
-                                            PlannerFailureCode firstFailureCode) {
+                                            PlannerFailureCode firstFailureCode,
+                                            AgentOrchestrationRequirements orchestrationRequirements) {
         StringBuilder prompt = new StringBuilder("""
                 You are repairing a failed plan generation. Return exactly one compact JSON object and nothing else.
                 Do not quote or repair the previous fragment; generate a fresh replacement from the user goal.
@@ -256,6 +277,11 @@ public class PlanningAgentPlanner {
                 .append("\nThe first attempt failed with code ").append(firstFailureCode).append(".\n");
         if (StringUtils.hasText(skillPrompt)) {
             prompt.append("Keep these active skill constraints:\n").append(skillPrompt.trim()).append("\n");
+        }
+        String orchestrationInstruction = orchestrationRequirements == null
+                ? null : orchestrationRequirements.plannerInstruction();
+        if (StringUtils.hasText(orchestrationInstruction)) {
+            prompt.append(orchestrationInstruction).append("\n");
         }
         return prompt.toString();
     }

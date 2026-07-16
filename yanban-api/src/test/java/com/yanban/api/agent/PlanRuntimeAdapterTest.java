@@ -2,6 +2,8 @@ package com.yanban.api.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -42,10 +44,13 @@ class PlanRuntimeAdapterTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.outcome()).isEqualTo("FAILURE");
+        assertThat(result.planId()).isEqualTo(19L);
+        verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", true);
+        verify(service, never()).createPlanWithinAdapter(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
-    void creationUsesTheSamePlanAdapterAndReturnsThePersistedPlanIdentity() {
+    void trustedCreateWithAutoLikeTextDoesNotExecute() {
         PlanAgentService service = mock(PlanAgentService.class);
         when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(plan("REVIEWING", null, List.of()));
@@ -54,6 +59,84 @@ class PlanRuntimeAdapterTest {
 
         assertThat(result.success()).isTrue();
         assertThat(result.planId()).isEqualTo(19L);
+        assertThat(result.outcome()).isEqualTo("PLAN_CREATED");
+        verify(service, never()).executePlanResultWithinAdapter(
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
+    void existingPlanIdKeepsConversationSummaryPersistenceEvenWithServerAutoAudit() {
+        PlanAgentService service = mock(PlanAgentService.class);
+        when(service.executePlanResultWithinAdapter(7L, 19L, "trace", true))
+                .thenReturn(new PlanAgentService.PlanExecutionResult(
+                        plan("COMPLETED", null, List.of(step("COMPLETED", "Existing plan result", null))),
+                        AgentRuntimeStopSignal.NONE));
+
+        AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(autoProjectRequest().withPlanId(19L));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.planId()).isEqualTo(19L);
+        verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", true);
+        verify(service, never()).executePlanResultWithinAdapter(7L, 19L, "trace", false);
+        verify(service, never()).createPlanWithinAdapter(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void serverAutoProjectPlanIsCreatedAndExecutedWithRealStepResults() {
+        PlanAgentService service = mock(PlanAgentService.class);
+        when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(plan("REVIEWING", null, List.of()));
+        when(service.executePlanResultWithinAdapter(7L, 19L, "trace", false))
+                .thenReturn(new PlanAgentService.PlanExecutionResult(plan("COMPLETED", null,
+                        List.of(step("COMPLETED", "Cross-material analysis result", null))),
+                        AgentRuntimeStopSignal.NONE));
+
+        AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(autoProjectRequest());
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.planId()).isEqualTo(19L);
+        assertThat(result.assistantContent()).contains("status COMPLETED", "Cross-material analysis result");
+        verify(service).createPlanWithinAdapter(org.mockito.ArgumentMatchers.any());
+        verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", false);
+        verify(service, never()).executePlanResultWithinAdapter(7L, 19L, "trace", true);
+    }
+
+    @Test
+    void serverAutoProjectPlanReportsControlledPartialWithoutClaimingSuccess() {
+        PlanAgentService service = mock(PlanAgentService.class);
+        when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(plan("REVIEWING", null, List.of()));
+        when(service.executePlanResultWithinAdapter(7L, 19L, "trace", false))
+                .thenReturn(new PlanAgentService.PlanExecutionResult(plan("COMPLETED", null,
+                        List.of(step("DEGRADED", "Partial governed result", "coverage limited"))),
+                        AgentRuntimeStopSignal.NONE));
+
+        AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(autoProjectRequest());
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.outcome()).isEqualTo("PARTIAL");
+        assertThat(result.stopReason()).isEqualTo(AgentStopReason.PLAN_PARTIAL);
+        assertThat(result.degraded()).isTrue();
+        assertThat(result.planId()).isEqualTo(19L);
+        assertThat(result.assistantContent()).contains("Partial governed result");
+    }
+
+    @Test
+    void serverAutoProjectPlanExecutionFailureRetainsCreatedPlanIdentity() {
+        PlanAgentService service = mock(PlanAgentService.class);
+        when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(plan("REVIEWING", null, List.of()));
+        when(service.executePlanResultWithinAdapter(7L, 19L, "trace", false))
+                .thenThrow(new IllegalStateException("execution unavailable"));
+
+        AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(autoProjectRequest());
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.outcome()).isEqualTo("FAILURE");
+        assertThat(result.planId()).isEqualTo(19L);
+        assertThat(result.errorMessage()).contains("execution unavailable");
     }
 
     @Test
@@ -88,9 +171,13 @@ class PlanRuntimeAdapterTest {
     }
 
     private static AgentRuntimeRequest requestWithoutPlanId() {
-        return new AgentRuntimeRequest(AgentStrategy.PLAN_EXECUTE, 11L, List.of(), 7L, "new plan", "test", "model",
+        AgentOrchestrationRequirements trustedCreate = new AgentOrchestrationRequirements(List.of(),
+                List.of(AgentStrategyReasonCode.TRUSTED_PLAN_CAPABILITY), List.of(),
+                AgentStrategySelectionOrigin.TRUSTED_CAPABILITY);
+        return new AgentRuntimeRequest(AgentStrategy.PLAN_EXECUTE, 11L, List.of(), 7L, "cross material", "test", "model",
                 null, null, 1, false, null, null, null, null, AgentRuntimeMode.LANGCHAIN4J,
-                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING, List.of(), 0, 0, "trace", null, null);
+                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING, List.of(), 0, 0, "trace", null, null)
+                .withOrchestrationRequirements(trustedCreate);
     }
 
     private static AgentRuntimeRequest projectRequest() {
@@ -101,13 +188,31 @@ class PlanRuntimeAdapterTest {
                 .withPlanId(19L).withProjectContext(new ProjectRuntimeContext(7L, 42L));
     }
 
+    private static AgentRuntimeRequest autoProjectRequest() {
+        AgentOrchestrationRequirements audit = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE, AgentStrategySignal.CROSS_MATERIAL_TASK),
+                List.of(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN), List.of(),
+                AgentStrategySelectionOrigin.SERVER_AUTO);
+        return new AgentRuntimeRequest(AgentStrategy.PLAN_EXECUTE, 11L, List.of(), 7L, "cross material", "test", "model",
+                null, null, 4, true, null, null, null, null, AgentRuntimeMode.LANGCHAIN4J,
+                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_read_file"), 4, 1, "project"), 4, 1,
+                "trace", null, null)
+                .withProjectContext(new ProjectRuntimeContext(7L, 42L))
+                .withOrchestrationRequirements(audit);
+    }
+
     private static AgentPlanResponse plan(String status, String error, List<AgentPlanStepResponse> steps) {
         return new AgentPlanResponse(19L, 11L, "goal", "persuasive summary", status, false, null, error,
                 null, null, null, null, steps);
     }
 
     private static AgentPlanStepResponse step(String status) {
+        return step(status, null, null);
+    }
+
+    private static AgentPlanStepResponse step(String status, String result, String error) {
         return new AgentPlanStepResponse(1L, "step_1", 1, "title", "description", "ANALYSIS", List.of(), List.of(),
-                "done", status, 1, null, null, null, null);
+                "done", status, 1, result, error, null, null);
     }
 }

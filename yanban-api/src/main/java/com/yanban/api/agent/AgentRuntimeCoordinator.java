@@ -3,6 +3,8 @@ package com.yanban.api.agent;
 import com.yanban.core.agent.AgentRunIdentity;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -12,6 +14,8 @@ import org.springframework.util.StringUtils;
  */
 @Service
 public class AgentRuntimeCoordinator {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentRuntimeCoordinator.class);
 
     private final AgentRuntimeService runtimeService;
     private final AgentStrategySelector strategySelector;
@@ -90,24 +94,35 @@ public class AgentRuntimeCoordinator {
                     decision, AgentStopReason.POLICY_REJECTED, "Runtime request is missing a resolved endpoint, budget, or tool policy."));
         }
 
-        AgentStrategy selected = strategySelector.select(request);
+        AgentStrategySelection selection = strategySelector.decide(request);
+        AgentStrategy selected = selection.selectedStrategy();
+        boolean explicitPlanSelection = selection.explicitOverride()
+                && (selected == AgentStrategy.PLAN_EXECUTE
+                || selected == AgentStrategy.PLAN_EXECUTE_WITH_REFLECTION);
         AgentCoordinationDecision decision = new AgentCoordinationDecision(
-                selected, explicitPlanRequest, false, null,
-                switch (request.capability()) {
-                    case TRUSTED_PLAN_API -> "trusted_plan_api";
-                    case TRUSTED_PROJECT_PLAN_READ -> "trusted_project_plan_read";
-                    case LEGACY_PLAN_REFLECT -> "explicit_legacy_plan_reflect";
-                    case PROJECT_READ -> "trusted_project_read";
-                    case CHAT -> "chat_tool_policy";
-                });
+                selected, explicitPlanRequest || explicitPlanSelection, selection.degraded(),
+                selection.degradedFrom(), selection.reason(), selection);
+        log.info("Agent strategy selected traceId={} capability={} origin={} requested={} selected={} candidates={} "
+                        + "degraded={} degradedFrom={} signals={} reasonCodes={} materialCoverage={}",
+                resolved.traceId(), request.capability(), selection.orchestration().selectionOrigin(),
+                selection.requestedStrategy(), selected,
+                selection.serverCandidates(), selection.degraded(), selection.degradedFrom(),
+                selection.orchestration().signals(), selection.orchestration().reasonCodes(),
+                selection.orchestration().materialRequirements());
         try {
             // planId is canonical on the coordination envelope and is copied only here,
             // after the trusted capability and conflict checks have completed.
-            AgentRuntimeResult result = runtimeService.run(resolved.withStrategy(selected).withPlanId(request.planId()));
+            AgentRuntimeRequest executable = resolved.withStrategy(selected)
+                    .withPlanId(request.planId())
+                    .withOrchestrationRequirements(selection.orchestration());
+            AgentRuntimeResult result = runtimeService.run(executable);
             AgentStopReason stopReason = result.stopReason() == null ? stopReason(result) : result.stopReason();
+            boolean degraded = decision.degraded() || result.degraded();
+            AgentStrategy degradedFrom = result.degradedFrom() == null
+                    ? decision.degradedFrom() : result.degradedFrom();
             return coordination(resolved, decision, result.withCoordination(
                     selected, stopReason, result.outcome() == null ? outcome(result) : result.outcome(),
-                    result.degraded(), result.degradedFrom()));
+                    degraded, degradedFrom));
         } catch (NoRuntimeAdapterException ex) {
             return coordination(resolved, decision, failed(decision, AgentStopReason.NO_RUNTIME_ADAPTER, ex.getMessage()));
         } catch (RuntimeException ex) {

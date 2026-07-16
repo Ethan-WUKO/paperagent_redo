@@ -511,6 +511,27 @@ class CompletionVerifierTest {
     }
 
     @Test
+    void newlyCreatedPlanIsOnlyPartialWhenItsOutcomeIsPlanCreated() {
+        AgentRuntimeRequest request = new AgentRuntimeRequest(AgentStrategy.PLAN_EXECUTE, 1L, List.of(), 7L,
+                "analyze the available material", "test", "model", null, null, 2, true, null, null, null, null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of(), 0, 0, "chat"), null, null, "trace", null, null);
+        AgentRuntimeResult executed = success("Plan 19 finished with status COMPLETED.\nSynthesis: complete.", List.of())
+                .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.COMPLETED, "SUCCESS", false, null)
+                .withPlanId(19L);
+        AgentRuntimeResult createdOnly = success("Plan 20 created.", List.of())
+                .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.COMPLETED, "PLAN_CREATED", false, null)
+                .withPlanId(20L);
+
+        CompletionVerification executedDecision = verifier.decide(request, executed, EvidenceLedger.empty(), 0);
+        CompletionVerification createdDecision = verifier.decide(request, createdOnly, EvidenceLedger.empty(), 0);
+
+        assertThat(executedDecision.status()).isEqualTo(CompletionStatus.VERIFIED);
+        assertThat(createdDecision.status()).isEqualTo(CompletionStatus.PARTIAL);
+        assertThat(createdDecision.reasons()).containsExactly("plan was created but has not been executed");
+    }
+
+    @Test
     void pureProjectToolInventoryDoesNotRequireFileEvidence() {
         AgentRuntimeResult result = verifier.verify(projectRequest(AgentStrategy.SINGLE_STEP_REACT, "你现在有哪些工具？"),
                 success("当前可用工具为 project_manifest 和 project_read_file。", List.of()));
