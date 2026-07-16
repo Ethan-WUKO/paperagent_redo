@@ -37,6 +37,19 @@ class LangChain4jToolCallingStrategyTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void suppressesDeepSeekDsmlProtocolFromUserFacingAssistantContent() {
+        LangChain4jToolCallingStrategy strategy = new LangChain4jToolCallingStrategy(
+                mock(LangChain4jChatModelAdapter.class), mock(LangChain4jToolProvider.class), objectMapper);
+
+        String sanitized = strategy.safeAssistantContent(
+                "<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name=\"project_read_file\">");
+
+        assertThat(sanitized).doesNotContainIgnoringCase("DSML", "project_read_file")
+                .contains("No Candidate was created", "no Project files were changed");
+        assertThat(strategy.safeAssistantContent("正常的 Project 回答")).isEqualTo("正常的 Project 回答");
+    }
+
+    @Test
     void executesAllowedToolAndReturnsFinalAnswer() {
         ToolRegistry registry = new ToolRegistry().register(new StubToolExecutor("search_web", objectMapper));
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);

@@ -51,7 +51,7 @@ final class CandidateProposalEvidenceSelector {
                         .filter(ref -> exact(ref, selector, currentVersion)).toList();
                 if (matches.size() != 1) {
                     throw new IllegalArgumentException(matches.isEmpty()
-                            ? "Evidence selector has no exact current trusted match"
+                            ? noExactMatchMessage(selector, trusted, currentVersion)
                             : "Evidence selector is ambiguous across trusted observations");
                 }
                 ids.add(matches.get(0).id());
@@ -62,6 +62,29 @@ final class CandidateProposalEvidenceSelector {
             idsByChange.add(List.copyOf(ids));
         }
         return new Selection(trusted, List.copyOf(idsByChange));
+    }
+
+    private String noExactMatchMessage(PortableEvidenceSelector selector, EvidenceLedger trusted,
+                                       ProjectVersionRef currentVersion) {
+        List<String> observedRanges = trusted.evidence().stream()
+                .filter(ref -> ref != null && ref.sourceType() == EvidenceSourceType.PROJECT
+                        && ref.versionStatus() == EvidenceVersionStatus.VERIFIED
+                        && ProjectEvidenceValidator.isTrusted(ref)
+                        && currentVersion.value().equals(ref.projectVersion())
+                        && selector.relativePath().value().equals(ref.file())
+                        && selector.fileHash().sha256().equals(ref.fileHash())
+                        && selector.parserVersion().equals(ref.parserVersion()))
+                .map(ref -> ref.startLine() + "-" + ref.endLine())
+                .distinct()
+                .limit(8)
+                .toList();
+        String available = observedRanges.isEmpty() ? "none" : String.join(", ", observedRanges);
+        return "Evidence selector has no exact current trusted match for "
+                + selector.relativePath().value() + " lines " + selector.startLine() + "-" + selector.endLine()
+                + ". A selector must exactly equal one completed project_read_file/project_search observation; "
+                + "a subrange of a larger read is not accepted. Exact observed ranges for this file/hash/parser: "
+                + available + ". Re-read exactly lines " + selector.startLine() + "-" + selector.endLine()
+                + " and then retry project_propose_candidate with that same range.";
     }
 
     private EvidenceLedger currentTrustedLedger(CandidateProposalExecutionScope.Context scope) {

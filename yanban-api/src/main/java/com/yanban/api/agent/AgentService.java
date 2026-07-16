@@ -408,7 +408,11 @@ public class AgentService {
             );
         }
 
-        ConversationIntentRouterService.IntentAction intentAction = conversationIntentRouterService.route(request.content());
+        // Project requests already have a trusted Project capability and a governed tool policy. Workspace
+        // navigation shortcuts must not intercept explicit Project operations such as Candidate proposals.
+        ConversationIntentRouterService.IntentAction intentAction = projectContext == null
+                ? conversationIntentRouterService.route(request.content())
+                : null;
         if (intentAction != null) {
             AgentMessage processMessage = saveProcessMessageIfNeeded(
                     session.getId(),

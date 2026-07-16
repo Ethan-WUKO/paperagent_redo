@@ -88,6 +88,29 @@ class ProjectCandidateProposalToolExecutorTest {
         verify(candidates).store(eq(USER_ID), eq(3L), any(), any(), any());
     }
 
+    @Test
+    void treatsBlankOptionalBaseHashAsAbsentForAddProposal() throws Exception {
+        when(projects.manifest(USER_ID, PROJECT_ID)).thenReturn(
+                new ProjectManifestResponse(PROJECT_ID, VERSION, List.of()));
+        EvidenceRef evidence = new EvidenceRef("trusted-plan:42:1", EvidenceSourceType.PROJECT, "PROJECT",
+                "paper/main.tex", "tool:x", null, HASH, "trusted", VERSION, HASH, 2, 4,
+                "project-read-file@1", EvidenceVersionStatus.VERIFIED);
+        when(selector.select(any(), any(), any())).thenReturn(new CandidateProposalEvidenceSelector.Selection(
+                new EvidenceLedger(List.of(evidence)), List.of(List.of(evidence.id()))));
+        CandidateArtifactResponse response = mock(CandidateArtifactResponse.class);
+        when(response.schemaVersion()).thenReturn("YANBAN_CANDIDATE_ARTIFACT_V1");
+        when(response.artifactId()).thenReturn(12L);
+        when(response.projectId()).thenReturn(PROJECT_ID);
+        when(candidates.store(eq(USER_ID), eq(3L), any(), any(), any())).thenReturn(response);
+        var arguments = validArguments();
+        var change = (com.fasterxml.jackson.databind.node.ObjectNode) arguments.path("changes").get(0);
+        change.put("type", "ADD").put("relativePath", "acceptance/new.md").put("baseFileHash", "");
+
+        try (ToolResultScope ignored = openScope()) {
+            assertThat(executor.execute(call(arguments)).success()).isTrue();
+        }
+    }
+
     private com.fasterxml.jackson.databind.node.ObjectNode validArguments() {
         var evidence = json.createObjectNode().put("relativePath", "paper/main.tex").put("fileHash", HASH)
                 .put("startLine", 2).put("endLine", 4).put("parserVersion", "project-read-file@1");

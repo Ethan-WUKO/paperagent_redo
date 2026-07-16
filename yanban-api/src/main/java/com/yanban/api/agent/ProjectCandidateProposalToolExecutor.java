@@ -53,7 +53,10 @@ public final class ProjectCandidateProposalToolExecutor implements ToolExecutor 
         this.evidenceSelector = evidenceSelector;
         this.objectMapper = objectMapper;
         this.definition = new ToolDefinition(TOOL_NAME,
-                "Create a validated read-only multi-file Candidate from full replacement text and exact portable Evidence provenance. This never applies changes.",
+                "Create a validated read-only multi-file Candidate from full replacement text and exact portable Evidence provenance. "
+                        + "Every Evidence selector must repeat the complete path, hash, startLine, endLine, and parserVersion "
+                        + "from one completed Project read/search observation exactly; selecting a subrange of a larger read is rejected, "
+                        + "so first re-read the exact range you intend to cite. This never applies changes.",
                 schema(objectMapper));
     }
 
@@ -180,9 +183,8 @@ public final class ProjectCandidateProposalToolExecutor implements ToolExecutor 
     private String optionalText(ObjectNode value, String field) {
         JsonNode node = value.get(field);
         if (node == null || node.isNull()) return null;
-        if (!node.isTextual() || node.textValue().isBlank()) {
-            throw new IllegalArgumentException(field + " must be a non-blank string when supplied");
-        }
+        if (!node.isTextual()) throw new IllegalArgumentException(field + " must be a string when supplied");
+        if (node.textValue().isBlank()) return null;
         return node.textValue();
     }
 
@@ -213,9 +215,12 @@ public final class ProjectCandidateProposalToolExecutor implements ToolExecutor 
         ObjectNode evidenceProperties = evidence.putObject("properties");
         evidenceProperties.putObject("relativePath").put("type", "string");
         evidenceProperties.putObject("fileHash").put("type", "string");
-        evidenceProperties.putObject("startLine").put("type", "integer");
-        evidenceProperties.putObject("endLine").put("type", "integer");
-        evidenceProperties.putObject("parserVersion").put("type", "string");
+        evidenceProperties.putObject("startLine").put("type", "integer")
+                .put("description", "Must exactly equal startLine from one completed Project observation; subranges are rejected.");
+        evidenceProperties.putObject("endLine").put("type", "integer")
+                .put("description", "Must exactly equal endLine from the same completed Project observation; subranges are rejected.");
+        evidenceProperties.putObject("parserVersion").put("type", "string")
+                .put("description", "Must exactly repeat parserVersion from that completed Project observation.");
         evidence.putArray("required").add("relativePath").add("fileHash").add("startLine")
                 .add("endLine").add("parserVersion");
         ObjectNode change = mapper.createObjectNode().put("type", "object").put("additionalProperties", false);

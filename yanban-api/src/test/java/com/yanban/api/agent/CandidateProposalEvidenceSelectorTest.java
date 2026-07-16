@@ -105,6 +105,24 @@ class CandidateProposalEvidenceSelectorTest {
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("no exact current trusted match");
     }
 
+    @Test
+    void explainsThatAReadSubrangeMustBeObservedExactlyBeforeProposal() throws Exception {
+        arrangeManifest(PROJECT_ID, VERSION, HASH);
+        CandidateProposalExecutionScope.Context scope = scope(List.of(
+                assistantCall("read-1", "project_read_file"),
+                ChatMessage.tool("read-1", json.writeValueAsString(readResult(PROJECT_ID, VERSION, HASH)))));
+        var subrange = new CandidateProposalEvidenceSelector.PortableEvidenceSelector(
+                new ProjectRelativePath("paper/main.tex"), new FileHash(HASH), 3, 3,
+                ProjectReadFileToolExecutor.PARSER_VERSION);
+
+        assertThatThrownBy(() -> selector.select(scope, new ProjectVersionRef(VERSION),
+                List.of(List.of(subrange))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("a subrange of a larger read is not accepted")
+                .hasMessageContaining("Exact observed ranges for this file/hash/parser: 2-4")
+                .hasMessageContaining("Re-read exactly lines 3-3");
+    }
+
     private CandidateProposalExecutionScope.Context scope(List<ChatMessage> messages) {
         return new CandidateProposalExecutionScope.Context(USER_ID, PROJECT_ID, 3L, messages, 0,
                 EvidenceLedger.empty(), Set.of("project_read_file", ProjectCandidateProposalToolExecutor.TOOL_NAME));

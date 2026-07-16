@@ -54,7 +54,11 @@ public class LangChain4jToolCallingStrategy {
             array-valued relativePaths fields.
             project_propose_candidate is the only proposal entry point. Call it only when the user explicitly asks
             for changes and after current Project tools have returned exact portable Evidence provenance. Supply full
-            replacement text and never place patch JSON in ordinary assistant text. A successful proposal remains
+            replacement text and never place patch JSON in ordinary assistant text. Each Evidence selector must copy
+            the complete path, hash, startLine, endLine, and parserVersion from one completed observation exactly.
+            A smaller range inside a larger project_read_file result is not an exact match: first call project_read_file
+            again with the precise startLine/endLine you intend to cite, then use that identical range in the proposal.
+            A successful proposal remains
             NOT_APPLIED and never changes Project files.
             To inspect all applicable files, call project_manifest, select its concrete relative paths, and
             pass those paths to the specialized tool. Never use ".", "*", "**", or "/" as a file path.
@@ -117,6 +121,7 @@ public class LangChain4jToolCallingStrategy {
         List<String> fallbacks = new ArrayList<>();
         Map<String, InvocationState> invocationStates = new LinkedHashMap<>();
         Set<String> verifiedObservations = new LinkedHashSet<>();
+        int projectEvidenceEpoch = 0;
         Set<String> allowedTools = new LinkedHashSet<>(request.toolPolicy().allowedTools());
         ToolProviderResult toolProviderResult = toolProvider.provideTools(request);
         List<ToolSpecification> toolSpecifications = new ArrayList<>(toolProviderResult.tools().keySet());
@@ -161,7 +166,7 @@ public class LangChain4jToolCallingStrategy {
 
             List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
             if (requests == null || requests.isEmpty()) {
-                String content = aiMessage.text();
+                String content = safeAssistantContent(aiMessage.text());
                 log.info("LangChain4j completed without tool call step={} assistantPreview={}",
                         step + 1,
                         abbreviate(content));
@@ -179,7 +184,8 @@ public class LangChain4jToolCallingStrategy {
                 ToolExecutionRequest toolRequest = requests.get(i);
                 String signature = toolRequest.name() + "|" + normalizeArguments(toolRequest.arguments());
                 InvocationState previous = invocationStates.get(signature);
-                String repeatError = repeatError(toolRequest, previous, request.toolPolicy().maxDuplicateToolCalls());
+                String repeatError = repeatError(toolRequest, previous,
+                        request.toolPolicy().maxDuplicateToolCalls(), projectEvidenceEpoch);
                 if (repeatError != null) {
                     String reason = repeatError + ": " + signature;
                     String reusedContent = reusedToolResult(previous, reason);
@@ -239,7 +245,11 @@ public class LangChain4jToolCallingStrategy {
                     fallbacks.add("Tool scope refinement required; execution budget was not consumed: "
                             + toolRequest.name());
                 }
-                invocationStates.put(signature, InvocationState.after(previous, toolRequest.id(), toolResult));
+                if (toolResult.success() && isProjectEvidenceObservation(toolRequest.name())) {
+                    projectEvidenceEpoch++;
+                }
+                invocationStates.put(signature, InvocationState.after(
+                        previous, toolRequest.id(), toolResult, projectEvidenceEpoch));
                 if (toolResult.success() && !toolResult.scopeRefinementRequired()
                         && registerVerifiedNewObservation(toolResult.content(), verifiedObservations)) {
                     successfulCallsSinceExtension++;
@@ -306,7 +316,8 @@ public class LangChain4jToolCallingStrategy {
         }
         TokenUsage totalUsage = TokenUsage.sum(usage, response == null ? null : response.tokenUsage());
         AiMessage aiMessage = response == null ? null : response.aiMessage();
-        if (aiMessage == null || !StringUtils.hasText(aiMessage.text())) {
+        String content = aiMessage == null ? null : safeAssistantContent(aiMessage.text());
+        if (!StringUtils.hasText(content)) {
             log.warn("LangChain4j final synthesis empty sessionId={} steps={} reason={}",
                     request.sessionId(), steps, reason);
             return failure(messages, toolTrace, fallbacks, steps, totalUsage,
@@ -314,11 +325,11 @@ public class LangChain4jToolCallingStrategy {
         }
         messages.add(aiMessage);
         if (!isStreaming(request)) {
-            emitToken(request, aiMessage.text());
+            emitToken(request, content);
         }
         log.info("LangChain4j final synthesis completed sessionId={} steps={} contentLength={} reason={}",
-                request.sessionId(), steps, aiMessage.text().length(), reason);
-        return success(messages, toolTrace, fallbacks, steps, totalUsage, aiMessage.text());
+                request.sessionId(), steps, content.length(), reason);
+        return success(messages, toolTrace, fallbacks, steps, totalUsage, content);
     }
 
     private AgentRuntimeResult synthesisTransportPartial(
@@ -368,15 +379,28 @@ public class LangChain4jToolCallingStrategy {
         dev.langchain4j.model.chat.response.ChatResponse response = callModel(finalRequest, request);
         TokenUsage totalUsage = TokenUsage.sum(usage, response == null ? null : response.tokenUsage());
         AiMessage aiMessage = response == null ? null : response.aiMessage();
-        if (aiMessage == null || !StringUtils.hasText(aiMessage.text())) {
+        String content = aiMessage == null ? null : safeAssistantContent(aiMessage.text());
+        if (!StringUtils.hasText(content)) {
             return failure(messages, toolTrace, fallbacks, steps, totalUsage,
                     "LangChain4j returned an empty final response after " + reason);
         }
         messages.add(aiMessage);
         if (!isStreaming(request)) {
-            emitToken(request, aiMessage.text());
+            emitToken(request, content);
         }
-        return success(messages, toolTrace, fallbacks, steps, totalUsage, aiMessage.text());
+        return success(messages, toolTrace, fallbacks, steps, totalUsage, content);
+    }
+
+    String safeAssistantContent(String content) {
+        if (!StringUtils.hasText(content)) return content;
+        String normalized = content.toLowerCase(Locale.ROOT);
+        boolean internalToolProtocol = normalized.contains("dsml")
+                && (normalized.contains("tool_calls") || normalized.contains("<｜｜dsml｜｜invoke")
+                || normalized.contains("<||dsml||invoke"));
+        if (!internalToolProtocol) return content;
+        log.warn("Suppressed model-internal DSML tool protocol from assistant content");
+        return "The requested Project operation did not complete. No Candidate was created and no Project files were changed. "
+                + "Please retry after reviewing the failed tool call in the process details.";
     }
 
     private void addSkippedToolResults(List<dev.langchain4j.data.message.ChatMessage> messages,
@@ -718,7 +742,8 @@ public class LangChain4jToolCallingStrategy {
         return canonical;
     }
 
-    private String repeatError(ToolExecutionRequest request, InvocationState previous, int maxDuplicates) {
+    private String repeatError(ToolExecutionRequest request, InvocationState previous,
+                               int maxDuplicates, int projectEvidenceEpoch) {
         if (previous == null) {
             return null;
         }
@@ -727,7 +752,10 @@ public class LangChain4jToolCallingStrategy {
             return "Tool metadata missing";
         }
         return switch (descriptor.repeatPolicy()) {
-            case DENY_SAME_INPUT -> "Duplicate tool call blocked";
+            case DENY_SAME_INPUT -> !previous.success()
+                    && ProjectCandidateProposalToolExecutor.TOOL_NAME.equals(request.name())
+                    && projectEvidenceEpoch > previous.projectEvidenceEpoch()
+                    ? null : "Duplicate tool call blocked";
             case POLL_UNTIL_TERMINAL -> {
                 if (descriptor.asyncMode() == ToolDescriptor.AsyncMode.SYNC || !previous.asyncStateObserved()) {
                     yield "Repeated asynchronous poll has no observable non-terminal state";
@@ -745,6 +773,10 @@ public class LangChain4jToolCallingStrategy {
                 yield previous.count() > maxDuplicates ? "Duplicate tool call blocked" : null;
             }
         };
+    }
+
+    private boolean isProjectEvidenceObservation(String toolName) {
+        return "project_read_file".equals(toolName) || "project_search".equals(toolName);
     }
 
     private boolean hasIdempotencyKey(String arguments) {
@@ -871,11 +903,14 @@ public class LangChain4jToolCallingStrategy {
         TOOL_CALL
     }
 
-    private record InvocationState(int count, String sourceToolCallId, ToolExecutionOutcome outcome) {
+    private record InvocationState(int count, String sourceToolCallId, ToolExecutionOutcome outcome,
+                                   int projectEvidenceEpoch) {
         private static InvocationState after(InvocationState previous,
                                              String sourceToolCallId,
-                                             ToolExecutionOutcome outcome) {
-            return new InvocationState(previous == null ? 1 : previous.count() + 1, sourceToolCallId, outcome);
+                                             ToolExecutionOutcome outcome,
+                                             int projectEvidenceEpoch) {
+            return new InvocationState(previous == null ? 1 : previous.count() + 1,
+                    sourceToolCallId, outcome, projectEvidenceEpoch);
         }
 
         private boolean success() {
