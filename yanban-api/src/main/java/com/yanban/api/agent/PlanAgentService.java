@@ -325,8 +325,12 @@ public class PlanAgentService {
         List<AgentPlanStep> savedSteps = new ArrayList<>();
         int order = 1;
         for (PlanningAgentPlanner.StepSpec step : spec.steps()) {
-            List<String> allowedTools = resolvePersistedStepAllowedTools(
-                    step, planToolPolicy, projectContext != null);
+            // A controlled Plan step is itself part of the attested envelope. Persist its
+            // exact server-planned Worker tool union; the ordinary semantic expansion below
+            // is intentionally reserved for model-planned Project steps.
+            List<String> allowedTools = controlledDispatch == null
+                    ? resolvePersistedStepAllowedTools(step, planToolPolicy, projectContext != null)
+                    : resolvePersistedAllowedTools(step.allowedTools(), planToolPolicy);
             savedSteps.add(steps.save(new AgentPlanStep(
                     plan.getId(),
                     step.id(),
@@ -2487,7 +2491,8 @@ public class PlanAgentService {
         ResolvedToolPolicy currentPolicy = toolPolicyEngine
                 .decideProject(skill == null ? null : skill.allowedTools(), null).resolved();
         AgentRuntimeRequest base = new AgentRuntimeRequest(
-                null, session.getId(), List.of(), userId, plan.getGoal(), endpoint.providerKey(), endpoint.modelName(),
+                AgentStrategy.PLAN_EXECUTE, session.getId(), List.of(), userId, plan.getGoal(),
+                endpoint.providerKey(), endpoint.modelName(),
                 null, null, 1, Boolean.TRUE.equals(plan.getRagDisabled()), skill == null ? null : skill.id(),
                 endpoint.apiKey(), endpoint.apiUrl(), skill == null ? null : skill.prompt(),
                 AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING, currentPolicy,

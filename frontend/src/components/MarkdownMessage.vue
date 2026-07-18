@@ -6,6 +6,7 @@
 import DOMPurify from 'dompurify';
 import MarkdownIt from 'markdown-it';
 import { computed } from 'vue';
+import { configureMarkdownLinkPolicy } from '@/utils/markdownLinkPolicy';
 import { normalizeLooseMarkdown } from '@/utils/markdownNormalization';
 
 const props = defineProps<{
@@ -13,11 +14,11 @@ const props = defineProps<{
   variant?: 'default' | 'project';
 }>();
 
-const markdown = new MarkdownIt({
+const markdown = configureMarkdownLinkPolicy(new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true,
-});
+}));
 
 const defaultLinkOpen = markdown.renderer.rules.link_open
   || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));

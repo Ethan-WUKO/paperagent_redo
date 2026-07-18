@@ -81,6 +81,7 @@ public class AgentService {
     private final ChatModelProvider titleModelProvider;
     private final UserAccountPolicy accountPolicy;
     private final AgentRequestDedupService requestDedupService;
+    private final AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver;
 
     public AgentService(AgentSessionRepository sessions,
                         AgentMessageRepository messages,
@@ -101,7 +102,8 @@ public class AgentService {
                         LongTermMemoryRetrievalService longTermMemoryRetrievalService,
                         @Qualifier("chatModelProvider") ChatModelProvider titleModelProvider,
                         UserAccountPolicy accountPolicy,
-                        AgentRequestDedupService requestDedupService) {
+                        AgentRequestDedupService requestDedupService,
+                        AgentRuntimeTokenBudgetResolver runtimeTokenBudgetResolver) {
         this.sessions = sessions;
         this.messages = messages;
         this.turns = turns;
@@ -122,6 +124,7 @@ public class AgentService {
         this.titleModelProvider = titleModelProvider;
         this.accountPolicy = accountPolicy;
         this.requestDedupService = requestDedupService;
+        this.runtimeTokenBudgetResolver = runtimeTokenBudgetResolver;
     }
 
     @Transactional
@@ -499,7 +502,7 @@ public class AgentService {
                     endpoint.providerKey(),
                     endpoint.modelName(),
                     null,
-                    null,
+                    runtimeTokenBudgetResolver.resolve(endpoint.providerKey()),
                     session.getMaxSteps(),
                     runtimeRagDisabled,
                     request.skillId(),

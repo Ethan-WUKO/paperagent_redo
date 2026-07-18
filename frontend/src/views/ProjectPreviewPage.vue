@@ -548,6 +548,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NInput, NModal, NSpace, NSpin, NTag } from 'naive-ui';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
@@ -609,6 +610,8 @@ interface CandidateReviewItem {
 
 const authStore = useAuthStore();
 const { isEnglish } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const projects = ref<ProjectSummaryResponse[]>([]);
 const activeProjectId = ref<number | null>(null);
 const projectSessions = ref<AgentSessionResponse[]>([]);
@@ -1113,6 +1116,7 @@ function openApplyConfirmation() {
 async function confirmApplyCandidate() {
   const projectId = activeProjectId.value;
   const item = selectedCandidate.value;
+  const epoch = projectEpoch;
   if (!projectId || !item?.candidate || !candidateCanApply(item) || selectedChangeIndexes.value.size === 0) return;
   loading.applyCandidate = true;
   applicationMessage.value = '';
@@ -1125,8 +1129,11 @@ async function confirmApplyCandidate() {
     applicationMessage.value = `New Project version ${shortHash(data.resultVersion)} was published. Candidate ${item.artifact.id} remains NOT_APPLIED.`;
     selectedFile.value = null;
     searchResults.value = [];
-    await Promise.all([loadManifest(projectEpoch), loadRevisions()]);
-    if (activeSessionId.value) await loadCandidates(activeSessionId.value, projectEpoch);
+    await Promise.all([loadManifest(epoch), loadRevisions()]);
+    await Promise.all([
+      activeSessionId.value ? loadCandidates(activeSessionId.value, epoch) : Promise.resolve(),
+      selectedPlan.value ? selectPlan(selectedPlan.value, epoch) : Promise.resolve(),
+    ]);
     showInspector('versions');
   } catch (cause) {
     const status = apiStatus(cause);
@@ -1169,6 +1176,7 @@ async function confirmRollback() {
   const projectId = activeProjectId.value;
   const target = rollbackTarget.value;
   const currentVersion = manifest.value?.version;
+  const epoch = projectEpoch;
   if (!projectId || !target || !currentVersion) return;
   loading.rollback = true;
   revisionMessage.value = '';
@@ -1180,8 +1188,11 @@ async function confirmRollback() {
     revisionMessage.value = `Current Project rolled back to ${shortHash(data.resultVersion)}. No history was deleted.`;
     selectedFile.value = null;
     searchResults.value = [];
-    await Promise.all([loadManifest(projectEpoch), loadRevisions()]);
-    if (activeSessionId.value) await loadCandidates(activeSessionId.value, projectEpoch);
+    await Promise.all([loadManifest(epoch), loadRevisions()]);
+    await Promise.all([
+      activeSessionId.value ? loadCandidates(activeSessionId.value, epoch) : Promise.resolve(),
+      selectedPlan.value ? selectPlan(selectedPlan.value, epoch) : Promise.resolve(),
+    ]);
   } catch (cause) {
     const status = apiStatus(cause);
     revisionMessageType.value = status === 409 ? 'warning' : 'error';
@@ -1410,6 +1421,27 @@ function currentSessionId() {
   return activeSessionId.value;
 }
 
+function positiveQueryId(value: unknown): number | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const parsed = typeof raw === 'string' ? Number(raw) : NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function requestedSessionId(projectId: number): number | null {
+  return positiveQueryId(route.query.projectId) === projectId
+    ? positiveQueryId(route.query.sessionId)
+    : null;
+}
+
+function syncProjectLocation(projectId: number | null, sessionId: number | null) {
+  const query = { ...route.query };
+  if (projectId) query.projectId = String(projectId);
+  else delete query.projectId;
+  if (sessionId) query.sessionId = String(sessionId);
+  else delete query.sessionId;
+  void router.replace({ query });
+}
+
 async function ensureSession() {
   if (sessionFlight) return sessionFlight;
   sessionFlight = ensureSessionOnce(false).finally(() => {
@@ -1427,13 +1459,16 @@ async function ensureSessionOnce(_recovered: boolean): Promise<number | null> {
     projectSessions.value = (await listProjectSessions(project.id)).data;
     if (activeProjectId.value !== project.id) return null;
     if (projectSessions.value.length) {
-      activeSessionId.value = projectSessions.value[0].id;
+      const requested = requestedSessionId(project.id);
+      activeSessionId.value = projectSessions.value.find((item) => item.id === requested)?.id || projectSessions.value[0].id;
+      syncProjectLocation(project.id, activeSessionId.value);
       return activeSessionId.value;
     }
     const created = (await createProjectSession(project.id, { title: DEFAULT_SESSION_TITLE, ragDisabled: true })).data;
     if (activeProjectId.value !== project.id) return null;
     projectSessions.value = [created];
     activeSessionId.value = created.id;
+    syncProjectLocation(project.id, created.id);
     return created.id;
   } finally {
     if (activeProjectId.value === project.id) loading.sessions = false;
@@ -1445,7 +1480,12 @@ async function loadProjects() {
   error.value = '';
   try {
     projects.value = (await listProjects()).data;
-    const wanted = activeProjectId.value && projects.value.some((item) => item.id === activeProjectId.value) ? activeProjectId.value : projects.value[0]?.id;
+    const requested = positiveQueryId(route.query.projectId);
+    const wanted = requested && projects.value.some((item) => item.id === requested)
+      ? requested
+      : activeProjectId.value && projects.value.some((item) => item.id === activeProjectId.value)
+        ? activeProjectId.value
+        : projects.value[0]?.id;
     if (wanted) await selectProject(wanted);
   } catch (cause) {
     error.value = apiError(cause);
@@ -1575,7 +1615,15 @@ async function loadPlans(sessionId = currentSessionId(), epoch = projectEpoch) {
   const value = (await listPlans(sessionId)).data;
   if (epoch === projectEpoch) {
     plans.value = value;
-    if (selectedPlan.value) selectedPlan.value = value.find((item) => item.id === selectedPlan.value?.id) || null;
+    const preserved = selectedPlan.value
+      ? value.find((item) => item.id === selectedPlan.value?.id) || null
+      : null;
+    const restored = preserved || value[0] || null;
+    if (restored && selectedPlan.value?.id !== restored.id) {
+      await selectPlan(restored, epoch);
+    } else {
+      selectedPlan.value = restored;
+    }
   }
 }
 
@@ -1758,17 +1806,23 @@ async function createPlan() {
   }
 }
 
-async function selectPlan(plan: AgentPlanResponse) {
+async function selectPlan(plan: AgentPlanResponse, epoch = projectEpoch) {
+  const projectId = activeProjectId.value;
   selectedPlan.value = plan;
-  if (!activeProjectId.value) return;
+  if (!projectId) return;
   loading.evidence = true;
   try {
-    evidence.value = (await listProjectEvidence(activeProjectId.value, plan.id)).data;
+    const value = (await listProjectEvidence(projectId, plan.id)).data;
+    if (epoch === projectEpoch && projectId === activeProjectId.value && selectedPlan.value?.id === plan.id) {
+      evidence.value = value;
+    }
   } catch (cause) {
-    error.value = apiError(cause);
-    evidence.value = [];
+    if (epoch === projectEpoch && projectId === activeProjectId.value && selectedPlan.value?.id === plan.id) {
+      error.value = apiError(cause);
+      evidence.value = [];
+    }
   } finally {
-    loading.evidence = false;
+    if (epoch === projectEpoch && projectId === activeProjectId.value) loading.evidence = false;
   }
 }
 
@@ -1843,6 +1897,7 @@ async function selectConversation(sessionId: number) {
   projectEpoch++;
   sessionFlight = null;
   activeSessionId.value = sessionId;
+  syncProjectLocation(activeProjectId.value, sessionId);
   messages.value = [];
   plans.value = [];
   evidence.value = [];
@@ -1885,6 +1940,7 @@ async function startNewConversation() {
     if (epoch !== projectEpoch) return;
     projectSessions.value = [created, ...projectSessions.value.filter((item) => item.id !== created.id)];
     activeSessionId.value = created.id;
+    syncProjectLocation(project.id, created.id);
     centerTab.value = 'chat';
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -1957,6 +2013,7 @@ async function deleteConversation(session: AgentSessionResponse) {
     activeSessionId.value = null;
     const next = projectSessions.value[0];
     if (next) await selectConversation(next.id);
+    else syncProjectLocation(activeProjectId.value, null);
   } catch (cause) {
     error.value = apiError(cause);
   }
@@ -1996,6 +2053,7 @@ async function removeActiveProject() {
     searchResults.value = [];
     projectSessions.value = [];
     activeSessionId.value = null;
+    syncProjectLocation(null, null);
     messages.value = [];
     plans.value = [];
     evidence.value = [];

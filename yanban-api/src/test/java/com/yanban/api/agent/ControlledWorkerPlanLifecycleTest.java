@@ -82,7 +82,9 @@ class ControlledWorkerPlanLifecycleTest {
         when(projects.manifest(USER_ID, PROJECT_ID)).thenReturn(manifest);
         AgentToolPolicyEngine policy = mock(AgentToolPolicyEngine.class);
         List<String> tools = List.of(ResearchToolContracts.PROJECT_LATEX_OUTLINE,
-                ResearchToolContracts.PROJECT_CODE_SYMBOLS);
+                ResearchToolContracts.PROJECT_CODE_SYMBOLS,
+                "project_read_file",
+                "project_search");
         when(policy.decideProject(null, null)).thenReturn(new AgentToolPolicyEngine.Decision(tools, 6, 1, "test"));
         PlanningAgentPlanner planner = mock(PlanningAgentPlanner.class);
         ControlledReadOnlyWorkerRuntimeAdapter controlledExecutor = mock(ControlledReadOnlyWorkerRuntimeAdapter.class);
@@ -122,6 +124,10 @@ class ControlledWorkerPlanLifecycleTest {
             assertThat(step.getPlanId()).isEqualTo(PLAN_ID);
             assertThat(step.getStatus()).isEqualTo("DEGRADED");
             assertThat(step.getResult()).contains("Canonical controlled answer", "projectEvidenceRefs=");
+            assertThat(step.getAllowedToolsJson())
+                    .contains(ResearchToolContracts.PROJECT_LATEX_OUTLINE,
+                            ResearchToolContracts.PROJECT_CODE_SYMBOLS)
+                    .doesNotContain("project_read_file", "project_search");
         });
         assertThat(storedEvents).extracting(AgentPlanEvent::getEventType)
                 .contains("plan_created", "plan_started", "step_started", "step_project_evidence",
@@ -130,6 +136,7 @@ class ControlledWorkerPlanLifecycleTest {
         ArgumentCaptor<AgentRuntimeRequest> executed = ArgumentCaptor.forClass(AgentRuntimeRequest.class);
         verify(controlledExecutor).executeWithinPlan(executed.capture());
         assertThat(executed.getValue().planId()).isEqualTo(PLAN_ID);
+        assertThat(executed.getValue().strategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
         assertThat(executed.getValue().controlledWorkerDispatch().parentRunId()).isEqualTo("AGENT_PLAN:19");
         verifyNoInteractions(planner);
     }
