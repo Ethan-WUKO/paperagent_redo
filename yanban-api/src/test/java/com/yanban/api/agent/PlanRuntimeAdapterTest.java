@@ -71,6 +71,24 @@ class PlanRuntimeAdapterTest {
     }
 
     @Test
+    void adapterCarriesServerPersistedPlanLevelIntoRuntimeProjectionMetadata() {
+        PlanAgentService service = mock(PlanAgentService.class);
+        AgentPlanResponse durable = new AgentPlanResponse(19L, 11L, "goal", "summary", "FAILED",
+                false, null, "failed", null, null, null, null, List.of(),
+                "FAILURE", null, "L2_DURABLE");
+        when(service.executePlanResultWithinAdapter(7L, 19L, "trace", true))
+                .thenReturn(new PlanAgentService.PlanExecutionResult(durable, AgentRuntimeStopSignal.NONE));
+
+        AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(new AgentRuntimeRequest(
+                AgentStrategy.PLAN_EXECUTE, 11L, List.of(), 7L, "persisted goal", "test", "model", null, null,
+                1, false, null, null, null, null, AgentRuntimeMode.LANGCHAIN4J,
+                AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING, List.of(), 0, 0, "trace", null, null)
+                .withPlanId(19L));
+
+        assertThat(result.planPersistenceLevel()).isEqualTo("L2_DURABLE");
+    }
+
+    @Test
     void trustedCreateWithAutoLikeTextDoesNotExecute() {
         PlanAgentService service = mock(PlanAgentService.class);
         when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any()))

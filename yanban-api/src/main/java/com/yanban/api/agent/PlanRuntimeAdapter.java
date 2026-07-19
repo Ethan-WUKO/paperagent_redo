@@ -83,6 +83,7 @@ public class PlanRuntimeAdapter implements RuntimeAdapter {
                         terminal.degraded(), terminal.degraded() ? AgentStrategy.PLAN_EXECUTE : null)
                 .withRuntimeStopSignal(terminal.stopSignal())
                 .withPlanId(plan.id())
+                .withPlanPersistenceLevel(plan.persistenceLevel())
                 .withTrustedEvidenceLedger(execution.evidenceLedger())
                 .withDomainRuntimeFacts(execution.domainRuntimeFacts());
     }

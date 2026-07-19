@@ -129,6 +129,7 @@ public class AgentPlanStep {
     }
 
     public void markCompleted(String result) {
+        requireSameTerminalResult(AgentPlanStepStatus.COMPLETED, result);
         this.status = AgentPlanStepStatus.COMPLETED.name();
         this.result = result;
         this.errorMessage = null;
@@ -142,6 +143,7 @@ public class AgentPlanStep {
     }
 
     public void markDegraded(String result, String warning) {
+        requireSameTerminalResult(AgentPlanStepStatus.DEGRADED, result);
         this.status = AgentPlanStepStatus.DEGRADED.name();
         this.result = result;
         this.errorMessage = warning;
@@ -182,11 +184,27 @@ public class AgentPlanStep {
         this.finishedAt = null;
     }
 
+    /** Recovery retries only the unfinished boundary and never refunds an already consumed attempt. */
+    public void prepareForRecoveryRetry() {
+        this.status = AgentPlanStepStatus.PENDING.name();
+        this.result = null;
+        this.errorMessage = null;
+        this.finishedAt = null;
+    }
+
     public void updateDependenciesJson(String dependenciesJson) {
         this.dependenciesJson = dependenciesJson;
     }
 
     public void updateSortOrder(Integer sortOrder) {
         this.sortOrder = sortOrder;
+    }
+
+    private void requireSameTerminalResult(AgentPlanStepStatus target, String candidate) {
+        if ((AgentPlanStepStatus.COMPLETED.name().equals(status)
+                || AgentPlanStepStatus.DEGRADED.name().equals(status))
+                && (!target.name().equals(status) || !java.util.Objects.equals(result, candidate))) {
+            throw new IllegalStateException("terminal step result is immutable");
+        }
     }
 }

@@ -17,7 +17,10 @@ import com.yanban.api.skills.SkillsService;
 import com.yanban.core.agent.AgentPlan;
 import com.yanban.core.agent.AgentPlanEvent;
 import com.yanban.core.agent.AgentPlanEventRepository;
+import com.yanban.core.agent.AgentPlanExecutionLease;
+import com.yanban.core.agent.AgentPlanLeaseLostException;
 import com.yanban.core.agent.AgentPlanRepository;
+import com.yanban.core.agent.AgentPlanRunLeaseService;
 import com.yanban.core.agent.AgentPlanStatus;
 import com.yanban.core.agent.AgentPlanStep;
 import com.yanban.core.agent.AgentPlanStepRepository;
@@ -28,6 +31,7 @@ import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ToolCall;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -41,12 +45,19 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -64,6 +75,8 @@ public class PlanAgentService {
     private static final int MAX_DUPLICATE_TOOL_CALLS_PER_PLAN_STEP = 1;
     private static final int PLAN_EXECUTOR_THREADS = 2;
     private static final int PLAN_BUDGET_SECONDS = 240;
+    private static final Duration PLAN_LEASE_DURATION = Duration.ofSeconds(30);
+    private static final int PLAN_HEARTBEAT_SECONDS = 10;
     private static final String REPAIR_STEP_PREFIX = "repair_";
 
     private final AgentPlanRepository plans;
@@ -80,7 +93,12 @@ public class PlanAgentService {
     private final ObjectMapper objectMapper;
     private final ProjectService projectService;
     private final ControlledReadOnlyWorkerRuntimeAdapter controlledWorkerExecutor;
+    private final AgentPlanRunLeaseService runLeases;
+    private final AgentPlanCheckpointService checkpoints;
     private final ExecutorService planExecutor = Executors.newFixedThreadPool(PLAN_EXECUTOR_THREADS);
+    private final ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
+    private final InheritableThreadLocal<AgentPlanExecutionLease> executionLease = new InheritableThreadLocal<>();
+    private final String executionOwner = "plan-service-" + UUID.randomUUID();
 
     @Autowired
     public PlanAgentService(AgentPlanRepository plans,
@@ -96,7 +114,9 @@ public class PlanAgentService {
                              AgentToolPolicyEngine toolPolicyEngine,
                              ObjectMapper objectMapper,
                              ProjectService projectService,
-                             ControlledReadOnlyWorkerRuntimeAdapter controlledWorkerExecutor) {
+                             ControlledReadOnlyWorkerRuntimeAdapter controlledWorkerExecutor,
+                             AgentPlanRunLeaseService runLeases,
+                             AgentPlanCheckpointService checkpoints) {
         this.plans = plans;
         this.steps = steps;
         this.events = events;
@@ -111,6 +131,28 @@ public class PlanAgentService {
         this.objectMapper = objectMapper;
         this.projectService = projectService;
         this.controlledWorkerExecutor = controlledWorkerExecutor;
+        this.runLeases = runLeases;
+        this.checkpoints = checkpoints;
+    }
+
+    /** Source-compatible constructor retained for focused tests and non-Spring callers. */
+    public PlanAgentService(AgentPlanRepository plans,
+                            AgentPlanStepRepository steps,
+                            AgentPlanEventRepository events,
+                            AgentService agentService,
+                            AgentRuntimeService agentRuntimeService,
+                            AgentRuntimeCoordinator runtimeCoordinator,
+                            PlanningAgentPlanner planner,
+                            PlanStepVerifier stepVerifier,
+                            UserSettingsService userSettingsService,
+                            SkillsService skillsService,
+                            AgentToolPolicyEngine toolPolicyEngine,
+                            ObjectMapper objectMapper,
+                            ProjectService projectService,
+                            ControlledReadOnlyWorkerRuntimeAdapter controlledWorkerExecutor) {
+        this(plans, steps, events, agentService, agentRuntimeService, runtimeCoordinator, planner, stepVerifier,
+                userSettingsService, skillsService, toolPolicyEngine, objectMapper, projectService,
+                controlledWorkerExecutor, null, null);
     }
 
     /** Source-compatible constructor for focused tests that do not execute a controlled Worker Plan. */
@@ -160,6 +202,7 @@ public class PlanAgentService {
     @PreDestroy
     void shutdownPlanExecutor() {
         planExecutor.shutdownNow();
+        heartbeatExecutor.shutdownNow();
     }
 
     @Transactional
@@ -320,7 +363,8 @@ public class PlanAgentService {
                         : ProjectPlanEnvelope.wrapControlled(
                                 objectMapper, spec.rawJson(), projectContext, controlledEnvelope)
         );
-        plan = plans.saveAndFlush(plan);
+        if (projectContext != null) plan.enableDurableExecution();
+        plan = persistPlan(plan);
 
         List<AgentPlanStep> savedSteps = new ArrayList<>();
         int order = 1;
@@ -331,7 +375,7 @@ public class PlanAgentService {
             List<String> allowedTools = controlledDispatch == null
                     ? resolvePersistedStepAllowedTools(step, planToolPolicy, projectContext != null)
                     : resolvePersistedAllowedTools(step.allowedTools(), planToolPolicy);
-            savedSteps.add(steps.save(new AgentPlanStep(
+            savedSteps.add(persistStep(new AgentPlanStep(
                     plan.getId(),
                     step.id(),
                     order++,
@@ -425,11 +469,15 @@ public class PlanAgentService {
         String traceId = newPlanTraceId(planId);
         // Fail closed before changing async state, and fully reissue controlled authority from persistence.
         validatePlanExecutionBoundary(plan, userId, traceId);
+        if (durableExecutionEnabled(plan)) {
+            runLeases.queue(planId, userId);
+        } else {
+            plan.markRunning();
+            plans.saveAndFlush(plan);
+        }
         recordEvent(plan.getId(), null, "plan_queued", Map.of("traceId", traceId, "mode", "async"));
-        plan.markRunning();
-        plans.saveAndFlush(plan);
         scheduleAsyncExecution(userId, planId, traceId);
-        return toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
+        return getPlan(userId, planId);
     }
 
     public AgentPlanResponse retryPlan(Long userId, Long planId) {
@@ -445,17 +493,32 @@ public class PlanAgentService {
         validatePlanExecutionBoundary(plan, userId, newPlanTraceId(planId));
 
         List<AgentPlanStep> planSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
+        boolean durable = durableExecutionEnabled(plan);
+        AgentPlanStep exhausted = durable ? planSteps.stream()
+                .filter(step -> !planStepSatisfied(step))
+                .filter(step -> Math.max(0, step.getAttemptCount()) >= MAX_STEP_ATTEMPTS)
+                .findFirst().orElse(null) : null;
+        if (exhausted != null) {
+            recordEvent(plan.getId(), exhausted.getId(), "plan_retry_rejected", Map.of(
+                    "stepKey", exhausted.getStepKey(),
+                    "attemptsConsumed", Math.max(0, exhausted.getAttemptCount()),
+                    "reason", "STEP_ATTEMPT_BUDGET_EXHAUSTED"));
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Durable Plan retry budget is exhausted for step " + exhausted.getStepKey() + ".");
+        }
         long retryable = 0;
         for (AgentPlanStep step : planSteps) {
             if (!planStepSatisfied(step)) {
                 retryable++;
-                step.resetForRetry();
-                steps.save(step);
+                if (durable) step.prepareForRecoveryRetry();
+                else step.resetForRetry();
+                persistStep(step);
             }
         }
         steps.flush();
-        plan.resetForRetry();
-        plans.saveAndFlush(plan);
+        if (durable) plan.resetForDurableRetry();
+        else plan.resetForRetry();
+        persistPlan(plan);
         recordEvent(plan.getId(), null, "plan_retry_queued", Map.of("retryableStepCount", retryable));
         return executePlanAsync(userId, planId);
     }
@@ -470,13 +533,18 @@ public class PlanAgentService {
             try {
                 AgentPlan plan = plans.findByIdAndUserId(planId, userId).orElse(null);
                 if (plan != null && !plan.terminal()) {
-                    plan.markFailed("Async plan execution crashed: "
-                            + abbreviate(blankToDefault(ex.getMessage(), ex.getClass().getSimpleName()), 1200));
-                    plans.saveAndFlush(plan);
-                    recordEvent(plan.getId(), null, "plan_failed", Map.of(
-                            "traceId", traceId,
-                            "error", plan.getErrorMessage()
-                    ));
+                    String error = abbreviate(blankToDefault(ex.getMessage(), ex.getClass().getSimpleName()), 1200);
+                    if (durableExecutionEnabled(plan)) {
+                        recordEvent(plan.getId(), null, "plan_execution_interrupted", Map.of(
+                                "traceId", traceId, "error", error));
+                    } else {
+                        plan.markFailed("Async plan execution crashed: " + error);
+                        persistPlan(plan);
+                        recordEvent(plan.getId(), null, "plan_failed", Map.of(
+                                "traceId", traceId,
+                                "error", plan.getErrorMessage()
+                        ));
+                    }
                 }
             } catch (Exception markEx) {
                 log.warn("Failed to mark async plan execution failure planId={}", planId, markEx);
@@ -536,6 +604,10 @@ public class PlanAgentService {
             throw new IllegalArgumentException("controlled Plan execution requires its persisted parent identity");
         }
         AgentPlan plan = getOwnedPlan(parentRequest.userId(), planId);
+        if (durableExecutionEnabled(plan)) {
+            return executePlanInternal(parentRequest.userId(), planId, traceId,
+                    persistConversationSummary, parentRequest);
+        }
         AgentRuntimeRequest recovered = restoreControlledExecutionRequest(
                 plan, parentRequest.userId(), traceId, persistConversationSummary);
         if (recovered == null) {
@@ -551,6 +623,9 @@ public class PlanAgentService {
         if (AgentPlanStatus.PAUSED.name().equals(plan.getStatus())) {
             recordEvent(planId, null, "plan_execution_paused", Map.of("traceId", traceId, "outcome", "PAUSED"));
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Plan is paused and cannot be executed.");
+        }
+        if (durableExecutionEnabled(plan)) {
+            return executePlanInternal(userId, planId, traceId, persistConversationSummary, null).plan();
         }
         AgentRuntimeRequest recoveredControlled = restoreControlledExecutionRequest(
                 plan, userId, traceId, persistConversationSummary);
@@ -595,6 +670,8 @@ public class PlanAgentService {
                                                     boolean persistConversationSummary,
                                                     AgentRuntimeRequest controlledParentRequest) {
         String previousTraceId = MDC.get("traceId");
+        AgentPlanExecutionLease claimedLease = null;
+        LeaseHeartbeat heartbeat = null;
         MDC.put("traceId", traceId);
         try {
             AgentPlan plan = getOwnedPlan(userId, planId);
@@ -605,15 +682,73 @@ public class PlanAgentService {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Plan is paused and cannot be executed.");
             }
 
-            AgentSession session = agentService.getOwnedSession(userId, plan.getSessionId());
-            ResolvedSkill skill = resolveSkill(userId, plan.getSkillId());
-            ProjectRuntimeContext projectContext = restoreProjectContext(plan, userId);
+            if (durableExecutionEnabled(plan)) {
+                var claim = runLeases.claim(planId, userId, executionOwner, PLAN_LEASE_DURATION);
+                if (claim.isEmpty()) {
+                    AgentPlan current = getOwnedPlan(userId, planId);
+                    return completedExecution(toResponse(current,
+                            steps.findByPlanIdOrderBySortOrderAsc(current.getId())));
+                }
+                claimedLease = claim.orElseThrow();
+                executionLease.set(claimedLease);
+                plan = getOwnedPlan(userId, planId);
+                heartbeat = startHeartbeat(claimedLease, plan.getStartedAt());
+            }
+
+            AgentSession session;
+            ResolvedSkill skill;
+            ProjectRuntimeContext projectContext;
+            ResolvedToolPolicy checkpointPolicy;
+            AgentPlanCheckpointService.BudgetCeiling checkpointCeiling;
+            ProjectManifestResponse validatedManifest;
+            try {
+                session = agentService.getOwnedSession(userId, plan.getSessionId());
+                skill = resolveSkill(userId, plan.getSkillId());
+                projectContext = restoreProjectContext(plan, userId);
+                JsonNode controlledEnvelope = ProjectPlanEnvelope.restoreControlled(
+                        objectMapper, plan.getRawPlanJson(), userId);
+                if (controlledEnvelope != null) {
+                    controlledParentRequest = restoreControlledExecutionRequest(
+                            plan, userId, traceId, persistConversationSummary);
+                } else if (controlledParentRequest != null
+                        && controlledParentRequest.controlledWorkerDispatch() != null) {
+                    throw new IllegalStateException("persisted Plan no longer contains its controlled Worker envelope");
+                }
+                // Model configuration is durable authority too: a deleted custom endpoint is not a retryable crash.
+                userSettingsService.resolveModelEndpoint(
+                        userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
+                checkpointPolicy = projectContext == null ? null
+                        : controlledParentRequest != null && controlledParentRequest.toolPolicy() != null
+                        ? controlledParentRequest.toolPolicy()
+                        : toolPolicyEngine.decideProject(skill == null ? null : skill.allowedTools(), null).resolved();
+                checkpointCeiling = projectContext == null ? null : checkpointCeiling(plan, checkpointPolicy);
+                validatedManifest = projectContext == null ? null
+                        : projectService.manifest(userId, projectContext.projectId());
+                if (claimedLease != null) {
+                    AgentPlanCheckpointService.Validation validation = checkpoints.initializeOrValidate(
+                            claimedLease, checkpointPolicy, checkpointCeiling);
+                    checkpointCeiling = validation.budgetCeiling();
+                    validatedManifest = validation.manifest();
+                    if (validation.recovery()) recoverInterruptedSteps(plan, traceId);
+                    checkpoints.saveBoundary(claimedLease, checkpointPolicy, checkpointCeiling);
+                    plan = getOwnedPlan(userId, planId);
+                }
+            } catch (AgentPlanLeaseLostException exception) {
+                throw exception;
+            } catch (RuntimeException exception) {
+                if (claimedLease != null && permanentRecoveryRejection(exception)) {
+                    return rejectDurableRecovery(claimedLease, planId, traceId, exception);
+                }
+                throw exception;
+            }
             String projectManifestSummary = projectContext == null ? ""
-                    : buildPlanManifestSummary(userId, projectContext.projectId());
+                    : buildPlanManifestSummary(validatedManifest);
             Map<String, String> sharedExecutionState = restoreExecutionState(plan.getId());
             plan.markRunning();
-            plans.saveAndFlush(plan);
-            LocalDateTime deadlineAt = LocalDateTime.now().plusSeconds(PLAN_BUDGET_SECONDS);
+            plan = persistPlan(plan);
+            LocalDateTime deadlineAt = plan.getStartedAt() == null
+                    ? LocalDateTime.now().plusSeconds(PLAN_BUDGET_SECONDS)
+                    : plan.getStartedAt().plusSeconds(PLAN_BUDGET_SECONDS);
             recordEvent(plan.getId(), null, "plan_started", Map.of(
                     "goal", plan.getGoal(),
                     "traceId", traceId,
@@ -640,24 +775,35 @@ public class PlanAgentService {
 
                 AgentPlanStep failedStep = firstFailedStep(allSteps);
                 if (failedStep != null) {
-                    if (controlledParentRequest == null
-                            && recoverFailedStep(plan, session, allSteps, failedStep, skill, projectContext)) {
+                    boolean unknownCompletion = unknownCompletionFailure(failedStep);
+                    if (!unknownCompletion && controlledParentRequest == null
+                            && recoverFailedStep(plan, session, allSteps, failedStep, skill, projectContext,
+                            checkpointCeiling)) {
                         allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
+                        checkpointBoundary(checkpointPolicy, checkpointCeiling);
                         continue;
                     }
                     String failedError = failedStep.getErrorMessage();
                     failedStep.markFailed(failedError, failedStep.getResult());
-                    steps.saveAndFlush(failedStep);
+                    persistStep(failedStep);
                     markBlockedSteps(allSteps, failedStep);
                     allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
-                    preserveBoundedFailureSynthesis(plan, allSteps, failedStep);
-                    allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
+                    if (!unknownCompletion) {
+                        preserveBoundedFailureSynthesis(plan, allSteps, failedStep);
+                        allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
+                    }
                     plan.markFailed("Step " + failedStep.getStepKey() + " failed: " + failedStep.getErrorMessage());
-                    plans.saveAndFlush(plan);
-                    recordEvent(plan.getId(), failedStep.getId(), "plan_failed", Map.of(
+                    Map<String, Object> failureEvent = Map.of(
                             "traceId", traceId,
                             "error", plan.getErrorMessage()
-                    ));
+                    );
+                    if (currentExecutionLease() != null) {
+                        recordEvent(plan.getId(), failedStep.getId(), "plan_failed", failureEvent);
+                        plan = finishDurablePlan(plan, allSteps, "FAILED");
+                    } else {
+                        persistPlan(plan);
+                        recordEvent(plan.getId(), failedStep.getId(), "plan_failed", failureEvent);
+                    }
                     if (persistConversationSummary) {
                         persistConversationSummary(userId, session.getId(), plan, allSteps);
                     }
@@ -669,38 +815,63 @@ public class PlanAgentService {
                     break;
                 }
                 List<AgentPlanStep> batch = executable.stream()
-                        .limit(MAX_PARALLEL_STEPS)
+                        // A durable global tool budget is allocated at each dispatch boundary; serialize L2 batches.
+                        .limit(currentExecutionLease() == null ? MAX_PARALLEL_STEPS : 1)
                         .toList();
                 executeStepBatch(plan, session, allSteps, batch, skill, projectContext, projectManifestSummary,
-                        sharedExecutionState, deadlineAt, traceId, controlledParentRequest);
+                        sharedExecutionState, deadlineAt, traceId, controlledParentRequest, checkpointCeiling);
                 allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
+                checkpointBoundary(checkpointPolicy, checkpointCeiling);
             }
 
             boolean allCompleted = allSteps.stream().allMatch(this::planStepSatisfied);
             if (allCompleted) {
                 plan.markCompleted();
-                plans.saveAndFlush(plan);
-                recordEvent(plan.getId(), null, "plan_completed", Map.of(
+                Map<String, Object> completionEvent = Map.of(
                         "traceId", traceId,
                         "summary", buildFinalSummary(plan, allSteps)
-                ));
+                );
+                if (currentExecutionLease() != null) {
+                    recordEvent(plan.getId(), null, "plan_completed", completionEvent);
+                    plan = finishDurablePlan(plan, allSteps, "COMPLETED");
+                } else {
+                    persistPlan(plan);
+                    recordEvent(plan.getId(), null, "plan_completed", completionEvent);
+                }
             } else {
                 plan.markFailed("Plan cannot continue because dependencies or steps remain incomplete.");
-                plans.saveAndFlush(plan);
-                recordEvent(plan.getId(), null, "plan_final_verification_failed", Map.of(
+                Map<String, Object> verificationEvent = Map.of(
                         "traceId", traceId,
                         "error", plan.getErrorMessage()
-                ));
+                );
+                if (currentExecutionLease() != null) {
+                    recordEvent(plan.getId(), null, "plan_final_verification_failed", verificationEvent);
+                } else {
+                    persistPlan(plan);
+                    recordEvent(plan.getId(), null, "plan_final_verification_failed", verificationEvent);
+                }
                 recordEvent(plan.getId(), null, "plan_stalled", Map.of(
                         "traceId", traceId,
                         "error", plan.getErrorMessage()
                 ));
+                if (currentExecutionLease() != null) {
+                    plan = finishDurablePlan(plan, allSteps, "FAILED");
+                }
             }
             if (persistConversationSummary) {
                 persistConversationSummary(userId, session.getId(), plan, allSteps);
             }
             return completedExecution(toResponse(plan, allSteps));
         } finally {
+            stopHeartbeat(heartbeat);
+            if (claimedLease != null) {
+                try {
+                    runLeases.release(claimedLease, "INTERRUPTED");
+                } catch (RuntimeException ignored) {
+                    // A terminal transition, cancellation, or a newer fence already owns the row.
+                }
+            }
+            executionLease.remove();
             restoreTraceId(previousTraceId);
         }
     }
@@ -725,8 +896,12 @@ public class PlanAgentService {
     public AgentPlanResponse cancelPlan(Long userId, Long planId) {
         AgentPlan plan = getOwnedPlan(userId, planId);
         if (!plan.terminal()) {
-            plan.markCancelled("User cancelled plan.");
-            plans.saveAndFlush(plan);
+            if (durableExecutionEnabled(plan)) {
+                plan = runLeases.cancel(planId, userId, "User cancelled plan.");
+            } else {
+                plan.markCancelled("User cancelled plan.");
+                persistPlan(plan);
+            }
             recordEvent(plan.getId(), null, "plan_cancelled", Map.of("reason", "User cancelled plan."));
         }
         return toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
@@ -750,10 +925,19 @@ public class PlanAgentService {
                                       List<AgentPlanStep> allSteps,
                                       AgentPlanStep failedStep,
                                       ResolvedSkill skill,
-                                      ProjectRuntimeContext projectContext) {
+                                      ProjectRuntimeContext projectContext,
+                                      AgentPlanCheckpointService.BudgetCeiling checkpointCeiling) {
+        if (unknownCompletionFailure(failedStep)) return false;
+        if (currentExecutionLease() != null && checkpointCeiling != null
+                && remainingDurableToolCalls(checkpointCeiling) == 0) {
+            recordEvent(plan.getId(), failedStep.getId(), "step_repair_rejected", Map.of(
+                    "stepKey", failedStep.getStepKey(),
+                    "reason", "TOTAL_TOOL_BUDGET_EXHAUSTED"));
+            return false;
+        }
         String failedError = failedStep.getErrorMessage();
         failedStep.markRepairing(failedError);
-        steps.saveAndFlush(failedStep);
+        persistStep(failedStep);
         recordEvent(plan.getId(), failedStep.getId(), "step_repair_started", Map.of(
                 "stepKey", failedStep.getStepKey(),
                 "error", blankToDefault(failedError, "Step failed.")
@@ -764,6 +948,11 @@ public class PlanAgentService {
         return tryDegradeFailedStep(plan, failedStep, failedError);
     }
 
+    private boolean unknownCompletionFailure(AgentPlanStep step) {
+        return step != null && StringUtils.hasText(step.getErrorMessage())
+                && step.getErrorMessage().startsWith("UNKNOWN_COMPLETION:");
+    }
+
     private void executeStep(AgentPlan plan,
                              AgentSession session,
                              List<AgentPlanStep> allSteps,
@@ -771,10 +960,11 @@ public class PlanAgentService {
                              ResolvedSkill skill,
                              ProjectRuntimeContext projectContext,
                              String projectManifestSummary,
-                              Map<String, String> sharedExecutionState,
-                              LocalDateTime deadlineAt,
-                              String traceId,
-                              AgentRuntimeRequest controlledParentRequest) {
+                               Map<String, String> sharedExecutionState,
+                               LocalDateTime deadlineAt,
+                               String traceId,
+                               AgentRuntimeRequest controlledParentRequest,
+                               AgentPlanCheckpointService.BudgetCeiling checkpointCeiling) {
         recordEvent(plan.getId(), step.getId(), "step_started", Map.of(
                 "stepKey", step.getStepKey(),
                 "title", blankToDefault(step.getTitle(), ""),
@@ -814,14 +1004,17 @@ public class PlanAgentService {
             }
             if (persistedControlled != null) {
                 executeControlledPlanStep(plan, allSteps, step, projectContext, traceId,
-                        attempt + 1, controlledParentRequest);
+                        attempt + 1, controlledParentRequest, checkpointCeiling);
                 return;
             }
+            ResolvedToolPolicy runtimeToolPolicy = constrainDurableToolPolicy(
+                    plan, step, resolveRuntimeToolPolicy(step, plan, skill, projectContext),
+                    checkpointCeiling, traceId);
+            if (runtimeToolPolicy == null) return;
             step.markRunning();
-            steps.saveAndFlush(step);
+            persistStep(step);
             UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                     plan.getUserId(), session.getModelProviderSnapshot(), session.getModelSnapshot());
-            ResolvedToolPolicy runtimeToolPolicy = resolveRuntimeToolPolicy(step, plan, skill, projectContext);
             AgentRuntimeRequest runtimeRequest = new AgentRuntimeRequest(
                     AgentStrategy.SINGLE_STEP_REACT,
                     session.getId(),
@@ -1106,7 +1299,8 @@ public class PlanAgentService {
                                            ProjectRuntimeContext projectContext,
                                            String traceId,
                                            int attempt,
-                                           AgentRuntimeRequest parentRequest) {
+                                           AgentRuntimeRequest parentRequest,
+                                           AgentPlanCheckpointService.BudgetCeiling checkpointCeiling) {
         if (parentRequest == null || parentRequest.controlledWorkerDispatch() == null
                 || controlledWorkerExecutor == null || projectContext == null) {
             String error = "Controlled Worker dispatch is unavailable for this persisted Plan.";
@@ -1115,8 +1309,21 @@ public class PlanAgentService {
                     "stepKey", step.getStepKey(), "error", error, "traceId", traceId));
             return;
         }
+        if (currentExecutionLease() != null && checkpointCeiling != null) {
+            int remaining = remainingDurableToolCalls(checkpointCeiling);
+            int attestedBudget = Math.max(0, parentRequest.toolPolicy().maxToolCalls());
+            if (remaining < attestedBudget) {
+                String error = "TOOL_BUDGET_EXHAUSTED: remaining total budget cannot safely reissue "
+                        + "the persisted controlled Worker dispatch.";
+                step.markFailed(error, step.getResult());
+                recordEvent(plan.getId(), step.getId(), "step_tool_budget_exhausted", Map.of(
+                        "stepKey", step.getStepKey(), "remainingToolCalls", remaining,
+                        "requiredToolCalls", attestedBudget, "traceId", traceId));
+                return;
+            }
+        }
         step.markRunning();
-        steps.saveAndFlush(step);
+        persistStep(step);
         ProjectRuntimeContext currentContext = revalidateProject(plan.getUserId(), projectContext.projectId());
         EvidenceLedger inherited = new ProjectEvidenceValidator(projectService).current(
                 plan.getUserId(), currentContext, dependencyEvidence(plan.getId(), allSteps, step));
@@ -1181,13 +1388,15 @@ public class PlanAgentService {
                                   Map<String, String> sharedExecutionState,
                                   LocalDateTime deadlineAt,
                                   String traceId,
-                                  AgentRuntimeRequest controlledParentRequest) {
+                                  AgentRuntimeRequest controlledParentRequest,
+                                  AgentPlanCheckpointService.BudgetCeiling checkpointCeiling) {
         if (batch.isEmpty()) {
             return;
         }
         if (batch.size() == 1) {
             executeStepSafely(plan, session, allSteps, batch.get(0), skill, projectContext,
-                    projectManifestSummary, sharedExecutionState, deadlineAt, traceId, controlledParentRequest);
+                    projectManifestSummary, sharedExecutionState, deadlineAt, traceId, controlledParentRequest,
+                    checkpointCeiling);
             return;
         }
 
@@ -1204,7 +1413,7 @@ public class PlanAgentService {
                 futures.add(executor.submit(withMdc(parentMdc,
                         () -> executeStepSafely(plan, session, allSteps, step, skill, projectContext,
                                 projectManifestSummary, sharedExecutionState, deadlineAt, traceId,
-                                controlledParentRequest))));
+                                controlledParentRequest, checkpointCeiling))));
             }
             for (Future<?> future : futures) {
                 try {
@@ -1257,18 +1466,19 @@ public class PlanAgentService {
                                    Map<String, String> sharedExecutionState,
                                    LocalDateTime deadlineAt,
                                    String traceId,
-                                   AgentRuntimeRequest controlledParentRequest) {
+                                   AgentRuntimeRequest controlledParentRequest,
+                                   AgentPlanCheckpointService.BudgetCeiling checkpointCeiling) {
         try {
             executeStep(plan, session, allSteps, step, skill, projectContext, projectManifestSummary,
-                    sharedExecutionState, deadlineAt, traceId, controlledParentRequest);
-            steps.saveAndFlush(step);
+                    sharedExecutionState, deadlineAt, traceId, controlledParentRequest, checkpointCeiling);
+            persistStep(step);
         } catch (Exception ex) {
             String error = "Step worker failed unexpectedly: "
                     + abbreviate(blankToDefault(ex.getMessage(), ex.getClass().getSimpleName()), 1200);
             log.warn("Plan step worker failed unexpectedly planId={} stepKey={} traceId={}",
                     plan.getId(), step.getStepKey(), traceId, ex);
             step.markFailed(error, step.getResult());
-            steps.saveAndFlush(step);
+            persistStep(step);
             recordEvent(plan.getId(), step.getId(), "step_failed", Map.of(
                     "stepKey", step.getStepKey(),
                     "error", error,
@@ -1282,7 +1492,7 @@ public class PlanAgentService {
             if (AgentPlanStepStatus.PENDING.name().equals(step.getStatus())
                     || AgentPlanStepStatus.RUNNING.name().equals(step.getStatus())) {
                 step.markFailed("Step batch interrupted before completion.");
-                steps.saveAndFlush(step);
+                persistStep(step);
                 recordEvent(plan.getId(), step.getId(), "step_failed", Map.of(
                         "stepKey", step.getStepKey(),
                         "error", step.getErrorMessage(),
@@ -1382,7 +1592,7 @@ public class PlanAgentService {
                     existingKeys,
                     failedStep.getStepKey()
             );
-            AgentPlanStep saved = steps.save(new AgentPlanStep(
+            AgentPlanStep saved = persistStep(new AgentPlanStep(
                     plan.getId(),
                     repairKey,
                     nextOrder++,
@@ -1408,7 +1618,7 @@ public class PlanAgentService {
         String finalRepairKey = appendedSteps.get(appendedSteps.size() - 1).getStepKey();
         redirectDependents(allSteps, failedStep.getStepKey(), finalRepairKey);
         failedStep.markSuperseded("Superseded by recovery step " + finalRepairKey + ": " + failedStep.getErrorMessage());
-        steps.saveAndFlush(failedStep);
+        persistStep(failedStep);
         steps.flush();
         recordEvent(plan.getId(), failedStep.getId(), "plan_repaired", Map.of(
                 "failedStepKey", failedStep.getStepKey(),
@@ -1429,7 +1639,7 @@ public class PlanAgentService {
                 + "This step did not fully satisfy the verifier. Downstream steps should compensate for the missing items.\n"
                 + abbreviate(warning, 1200);
         failedStep.markDegraded(degradedResult, warning);
-        steps.saveAndFlush(failedStep);
+        persistStep(failedStep);
         recordEvent(plan.getId(), failedStep.getId(), "step_degraded", Map.of(
                 "stepKey", failedStep.getStepKey(),
                 "warning", abbreviate(warning, 1200),
@@ -1447,7 +1657,7 @@ public class PlanAgentService {
         for (AgentPlanStep step : allSteps) {
             if (step.getSortOrder() != null && step.getSortOrder() > failedStep.getSortOrder()) {
                 step.updateSortOrder(step.getSortOrder() + repairStepCount);
-                steps.save(step);
+                persistStep(step);
             }
         }
     }
@@ -1528,7 +1738,7 @@ public class PlanAgentService {
                     .distinct()
                     .toList();
             step.updateDependenciesJson(writeJson(rewritten));
-            steps.save(step);
+            persistStep(step);
             recordEvent(step.getPlanId(), step.getId(), "step_dependency_rewired", Map.of(
                     "stepKey", step.getStepKey(),
                     "oldDependency", oldDependency,
@@ -1634,7 +1844,7 @@ public class PlanAgentService {
             if (AgentPlanStepStatus.PENDING.name().equals(step.getStatus())
                     && readStringList(step.getDependenciesJson()).contains(failedStep.getStepKey())) {
                 step.markSkipped("Dependency step failed: " + failedStep.getStepKey());
-                steps.save(step);
+                persistStep(step);
                 recordEvent(failedStep.getPlanId(), step.getId(), "step_skipped", Map.of(
                         "stepKey", step.getStepKey(),
                         "reason", step.getErrorMessage()
@@ -1691,7 +1901,7 @@ public class PlanAgentService {
 
         String warning = "DEPENDENCY_PARTIAL: " + failure;
         terminalSynthesis.markDegraded(bounded.toString(), warning);
-        steps.saveAndFlush(terminalSynthesis);
+        persistStep(terminalSynthesis);
         recordEvent(plan.getId(), terminalSynthesis.getId(), "step_degraded_after_dependency_failure", Map.of(
                 "stepKey", terminalSynthesis.getStepKey(),
                 "failedStepKey", failedStep.getStepKey(),
@@ -1719,7 +1929,7 @@ public class PlanAgentService {
         if (missing.isEmpty()) return false;
 
         synthesis.markRunning();
-        steps.saveAndFlush(synthesis);
+        persistStep(synthesis);
         List<String> missingTargets = missing.stream()
                 .map(AgentPlanStep::getErrorMessage)
                 .map(value -> value.substring(ProjectMaterialScope.MISSING_TARGET_PREFIX.length()).trim())
@@ -1761,7 +1971,7 @@ public class PlanAgentService {
 
         String warning = "DEPENDENCY_PARTIAL: required Project material missing: " + targetList;
         synthesis.markDegraded(bounded.toString(), warning);
-        steps.saveAndFlush(synthesis);
+        persistStep(synthesis);
         recordEvent(plan.getId(), synthesis.getId(), "step_degraded_missing_material_dependency", Map.of(
                 "stepKey", synthesis.getStepKey(),
                 "missingStepKeys", missing.stream().map(AgentPlanStep::getStepKey).toList(),
@@ -2099,8 +2309,8 @@ public class PlanAgentService {
                 "综合", "最终", "结论", "交叉核对");
     }
 
-    private String buildPlanManifestSummary(Long userId, Long projectId) {
-        ProjectManifestResponse manifest = projectService.manifest(userId, projectId);
+    private String buildPlanManifestSummary(ProjectManifestResponse manifest) {
+        if (manifest == null) return "";
         StringBuilder summary = new StringBuilder("version=")
                 .append(blankToDefault(manifest.version(), "unknown"))
                 .append(", files=").append(manifest.files().size()).append("\n");
@@ -2429,21 +2639,27 @@ public class PlanAgentService {
         for (AgentPlanStep step : allSteps) {
             if (AgentPlanStepStatus.PENDING.name().equals(step.getStatus())) {
                 step.markSkipped(error);
-                steps.save(step);
+                persistStep(step);
             } else if (AgentPlanStepStatus.RUNNING.name().equals(step.getStatus())
                     || AgentPlanStepStatus.REPAIRING.name().equals(step.getStatus())) {
                 step.markFailed(error, step.getResult());
-                steps.save(step);
+                persistStep(step);
             }
         }
         steps.flush();
         plan.markFailed(error);
-        plans.saveAndFlush(plan);
-        recordEvent(plan.getId(), null, "plan_budget_exceeded", Map.of(
+        Map<String, Object> event = Map.of(
                 "traceId", traceId,
                 "budgetSeconds", PLAN_BUDGET_SECONDS,
                 "error", error
-        ));
+        );
+        if (currentExecutionLease() != null) {
+            recordEvent(plan.getId(), null, "plan_budget_exceeded", event);
+            finishDurablePlan(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()), "BUDGET_EXHAUSTED");
+        } else {
+            persistPlan(plan);
+            recordEvent(plan.getId(), null, "plan_budget_exceeded", event);
+        }
         if (persistConversationSummary) {
             persistConversationSummary(userId, sessionId, plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
         }
@@ -2588,21 +2804,23 @@ public class PlanAgentService {
 
     /** Reads only server-persisted step evidence events, never model result prose. */
     private EvidenceLedger evidenceFromStepEvents(Long planId) {
-        List<EvidenceRef> refs = new ArrayList<>();
-        for (AgentPlanEvent event : events.findByPlanIdOrderByCreatedAtAsc(planId)) {
+        Map<String, EvidenceRef> refs = new LinkedHashMap<>();
+        List<AgentPlanEvent> persisted = events.findByPlanIdOrderByCreatedAtAsc(planId);
+        if (persisted == null) persisted = List.of();
+        for (AgentPlanEvent event : persisted) {
             if (!"step_project_evidence".equals(event.getEventType()) || !StringUtils.hasText(event.getPayloadJson())) continue;
             try {
                 JsonNode values = objectMapper.readTree(event.getPayloadJson()).path("evidence");
                 if (!values.isArray()) continue;
                 for (JsonNode value : values) {
                     EvidenceRef ref = objectMapper.treeToValue(value, EvidenceRef.class);
-                    if (ref != null && ProjectEvidenceValidator.isTrusted(ref)) refs.add(ref);
+                    if (ref != null && ProjectEvidenceValidator.isTrusted(ref)) refs.putIfAbsent(ref.id(), ref);
                 }
             } catch (Exception ignored) {
                 // A malformed event cannot manufacture completion evidence.
             }
         }
-        return new EvidenceLedger(refs);
+        return new EvidenceLedger(List.copyOf(refs.values()));
     }
 
     /** Reconstructs only typed server-owned Plan observations; legacy diagnostic text proves nothing. */
@@ -2713,11 +2931,40 @@ public class PlanAgentService {
                 blankToDefault(ref.chunk(), ""), blankToDefault(ref.citation(), ""));
         String observationId = java.util.UUID.nameUUIDFromBytes(
                 identity.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        EvidenceRef existing = existingStepEvidence(context, plan, step, observationId, ref);
+        if (existing != null) return existing;
         return new EvidenceRef("trusted-plan:" + context.projectId() + ":" + plan.getId() + ":"
                 + step.getId() + ":" + attempt + ":" + observationId,
                 EvidenceSourceType.PROJECT, "PROJECT", ref.file(), ref.chunk(), ref.citation(), ref.version(),
                 "persisted plan step project observation", ref.projectVersion(), ref.fileHash(), ref.startLine(),
                 ref.endLine(), ref.parserVersion(), ref.versionStatus());
+    }
+
+    private EvidenceRef existingStepEvidence(ProjectRuntimeContext context, AgentPlan plan,
+                                              AgentPlanStep step, String observationId, EvidenceRef current) {
+        List<AgentPlanEvent> persisted = events.findByPlanIdOrderByCreatedAtAsc(plan.getId());
+        if (persisted == null) return null;
+        String prefix = "trusted-plan:" + context.projectId() + ":" + plan.getId() + ":" + step.getId() + ":";
+        for (AgentPlanEvent event : persisted) {
+            if (!step.getId().equals(event.getStepId())
+                    || !"step_project_evidence".equals(event.getEventType())
+                    || !StringUtils.hasText(event.getPayloadJson())) continue;
+            try {
+                JsonNode evidence = objectMapper.readTree(event.getPayloadJson()).path("evidence");
+                if (!evidence.isArray()) continue;
+                for (JsonNode value : evidence) {
+                    EvidenceRef candidate = objectMapper.treeToValue(value, EvidenceRef.class);
+                    if (candidate.id().startsWith(prefix) && candidate.id().endsWith(":" + observationId)
+                            && java.util.Objects.equals(candidate.projectVersion(), current.projectVersion())
+                            && java.util.Objects.equals(candidate.fileHash(), current.fileHash())) {
+                        return candidate;
+                    }
+                }
+            } catch (Exception ignored) {
+                // Malformed historical evidence cannot be reused as an audited receipt.
+            }
+        }
+        return null;
     }
 
     private DomainRuntimeFacts.ConsistencyFact persistedConsistencyFact(
@@ -2747,6 +2994,176 @@ public class PlanAgentService {
                 fact.consistent(), fact.source());
     }
 
+    private boolean durableExecutionEnabled(AgentPlan plan) {
+        return plan != null && "L2_DURABLE".equals(plan.getPersistenceLevel())
+                && runLeases != null && checkpoints != null;
+    }
+
+    private AgentPlan persistPlan(AgentPlan plan) {
+        AgentPlanExecutionLease lease = currentExecutionLease();
+        if (lease != null && plan != null && lease.planId().equals(plan.getId())) {
+            return runLeases.saveOwnedPlan(lease, plan);
+        }
+        return plans.saveAndFlush(plan);
+    }
+
+    private AgentPlanStep persistStep(AgentPlanStep step) {
+        AgentPlanExecutionLease lease = currentExecutionLease();
+        if (lease != null && step != null && lease.planId().equals(step.getPlanId())) {
+            return runLeases.saveOwnedStep(lease, step);
+        }
+        return steps.save(step);
+    }
+
+    private AgentPlanExecutionLease currentExecutionLease() {
+        return executionLease.get();
+    }
+
+    private AgentPlan finishDurablePlan(AgentPlan plan, List<AgentPlanStep> planSteps, String status) {
+        AgentPlanExecutionLease lease = currentExecutionLease();
+        if (lease == null) return persistPlan(plan);
+        String canonical = AgentPlanStatus.COMPLETED.name().equals(plan.getStatus())
+                ? toResponse(plan, planSteps).finalAnswer() : null;
+        if (AgentPlanStatus.COMPLETED.name().equals(plan.getStatus()) && !StringUtils.hasText(canonical)) {
+            canonical = buildFinalSummary(plan, planSteps);
+        }
+        String canonicalHash = StringUtils.hasText(canonical) ? AgentPlanCheckpointService.sha256(canonical) : null;
+        return runLeases.finish(lease, plan, canonical, canonicalHash, status);
+    }
+
+    private AgentPlanCheckpointService.BudgetCeiling checkpointCeiling(AgentPlan plan,
+                                                                        ResolvedToolPolicy policy) {
+        int stepCount = Math.max(1, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()).size());
+        int maxToolCalls;
+        try {
+            maxToolCalls = policy == null ? 0 : Math.multiplyExact(Math.max(0, policy.maxToolCalls()), stepCount);
+        } catch (ArithmeticException exception) {
+            throw new IllegalStateException("durable Plan tool budget overflow", exception);
+        }
+        return new AgentPlanCheckpointService.BudgetCeiling(
+                PLAN_BUDGET_SECONDS, MAX_STEP_ATTEMPTS, MAX_DUPLICATE_TOOL_CALLS_PER_PLAN_STEP, maxToolCalls);
+    }
+
+    private void checkpointBoundary(ResolvedToolPolicy policy,
+                                    AgentPlanCheckpointService.BudgetCeiling ceiling) {
+        AgentPlanExecutionLease lease = currentExecutionLease();
+        if (lease != null) checkpoints.saveBoundary(lease, policy, ceiling);
+    }
+
+    private int remainingDurableToolCalls(AgentPlanCheckpointService.BudgetCeiling ceiling) {
+        AgentPlanExecutionLease lease = currentExecutionLease();
+        return lease == null || ceiling == null
+                ? Integer.MAX_VALUE : checkpoints.remainingToolCalls(lease, ceiling);
+    }
+
+    private ResolvedToolPolicy constrainDurableToolPolicy(AgentPlan plan, AgentPlanStep step,
+                                                           ResolvedToolPolicy policy,
+                                                           AgentPlanCheckpointService.BudgetCeiling ceiling,
+                                                           String traceId) {
+        if (currentExecutionLease() == null || ceiling == null) return policy;
+        int remaining = remainingDurableToolCalls(ceiling);
+        int dispatchLimit = Math.min(Math.max(0, policy.maxToolCalls()), remaining);
+        if (dispatchLimit == 0 && !policy.allowedTools().isEmpty()) {
+            String error = "TOOL_BUDGET_EXHAUSTED: no persisted total tool budget remains for this step.";
+            step.markFailed(error, step.getResult());
+            recordEvent(plan.getId(), step.getId(), "step_tool_budget_exhausted", Map.of(
+                    "stepKey", step.getStepKey(), "remainingToolCalls", remaining, "traceId", traceId));
+            return null;
+        }
+        return new ResolvedToolPolicy(policy.allowedTools(), dispatchLimit,
+                Math.min(policy.maxDuplicateToolCalls(), dispatchLimit),
+                policy.reason() + "+durable_remaining_total_budget");
+    }
+
+    private PlanExecutionResult rejectDurableRecovery(AgentPlanExecutionLease lease, Long planId,
+                                                       String traceId, RuntimeException exception) {
+        String error = "RECOVERY_REJECTED: " + abbreviate(
+                blankToDefault(exception.getMessage(), exception.getClass().getSimpleName()), 1200);
+        recordEvent(planId, null, "plan_recovery_rejected", Map.of("traceId", traceId, "error", error));
+        AgentPlan rejected = runLeases.rejectRecovery(lease, error);
+        return completedExecution(toResponse(rejected, steps.findByPlanIdOrderBySortOrderAsc(planId)));
+    }
+
+    private boolean permanentRecoveryRejection(RuntimeException exception) {
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause instanceof AgentPlanLeaseLostException
+                    || cause instanceof org.springframework.dao.DataAccessException
+                    || cause instanceof jakarta.persistence.PersistenceException
+                    || cause instanceof org.springframework.web.client.ResourceAccessException) {
+                return false;
+            }
+            if (cause instanceof ResponseStatusException status
+                    && status.getStatusCode().is5xxServerError()) {
+                return false;
+            }
+        }
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ResponseStatusException status
+                    && status.getStatusCode().is4xxClientError()) {
+                return true;
+            }
+            if (cause instanceof IllegalArgumentException || cause instanceof IllegalStateException) return true;
+        }
+        return false;
+    }
+
+    private void recoverInterruptedSteps(AgentPlan plan, String traceId) {
+        for (AgentPlanStep step : steps.findByPlanIdOrderBySortOrderAsc(plan.getId())) {
+            if (!AgentPlanStepStatus.RUNNING.name().equals(step.getStatus())
+                    && !AgentPlanStepStatus.REPAIRING.name().equals(step.getStatus())) continue;
+            if (Math.max(0, step.getAttemptCount()) < MAX_STEP_ATTEMPTS) {
+                step.prepareForRecoveryRetry();
+                persistStep(step);
+                recordEvent(plan.getId(), step.getId(), "step_recovery_retry_queued", Map.of(
+                        "stepKey", step.getStepKey(), "attemptsConsumed", step.getAttemptCount(),
+                        "traceId", traceId));
+            } else {
+                step.markFailed("UNKNOWN_COMPLETION: interrupted step exhausted its safe retry budget.", step.getResult());
+                persistStep(step);
+                recordEvent(plan.getId(), step.getId(), "step_recovery_failed_closed", Map.of(
+                        "stepKey", step.getStepKey(), "attemptsConsumed", step.getAttemptCount(),
+                        "traceId", traceId));
+            }
+        }
+    }
+
+    private LeaseHeartbeat startHeartbeat(AgentPlanExecutionLease lease, LocalDateTime startedAt) {
+        AtomicBoolean active = new AtomicBoolean(true);
+        ScheduledFuture<?> future = heartbeatExecutor.scheduleAtFixedRate(() -> {
+            if (!active.get()) return;
+            if (startedAt != null && LocalDateTime.now().isAfter(startedAt.plusSeconds(PLAN_BUDGET_SECONDS))) {
+                active.set(false);
+                return;
+            }
+            try {
+                if (!runLeases.renew(lease, PLAN_LEASE_DURATION)) active.set(false);
+            } catch (RuntimeException exception) {
+                active.set(false);
+                log.warn("Durable Plan heartbeat stopped planId={} fence={}", lease.planId(), lease.fence(), exception);
+            }
+        }, PLAN_HEARTBEAT_SECONDS, PLAN_HEARTBEAT_SECONDS, TimeUnit.SECONDS);
+        return new LeaseHeartbeat(active, future);
+    }
+
+    private void stopHeartbeat(LeaseHeartbeat heartbeat) {
+        if (heartbeat == null) return;
+        heartbeat.active().set(false);
+        heartbeat.future().cancel(false);
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    @Scheduled(fixedDelayString = "${yanban.agent.plan-recovery.scan-ms:15000}")
+    void recoverExpiredDurablePlans() {
+        if (runLeases == null) return;
+        for (AgentPlanRunLeaseService.RecoverableRun run : runLeases.expiredRuns()) {
+            String traceId = "plan-" + run.planId() + "-restart-" + UUID.randomUUID().toString().substring(0, 8);
+            recordEvent(run.planId(), null, "plan_restart_recovery_queued", Map.of("traceId", traceId));
+            scheduleAsyncExecution(run.userId(), run.planId(), traceId);
+        }
+    }
+
+    private record LeaseHeartbeat(AtomicBoolean active, ScheduledFuture<?> future) { }
+
     private AgentPlan getOwnedPlan(Long userId, Long planId) {
         return plans.findByIdAndUserId(planId, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Plan does not exist."));
@@ -2763,6 +3180,8 @@ public class PlanAgentService {
     }
 
     private void recordEvent(Long planId, Long stepId, String type, Map<String, ?> payload) {
+        AgentPlanExecutionLease lease = currentExecutionLease();
+        boolean fencedWrite = lease != null && lease.planId().equals(planId);
         try {
             ObjectNode node = objectMapper.createObjectNode();
             if (payload != null) {
@@ -2771,10 +3190,48 @@ public class PlanAgentService {
                     payloadNode.fields().forEachRemaining(entry -> node.set(entry.getKey(), entry.getValue()));
                 }
             }
-            events.save(new AgentPlanEvent(planId, stepId, type, objectMapper.writeValueAsString(node)));
+            ObjectNode semantic = node.deepCopy();
+            semantic.remove("traceId");
+            String payloadJson = objectMapper.writeValueAsString(node);
+            String idempotencyKey = "evt:" + AgentPlanCheckpointService.sha256(
+                    planId + "|" + stepId + "|" + type + "|" + canonicalEventJson(semantic));
+            AgentPlanEvent event = new AgentPlanEvent(planId, stepId, type, payloadJson, idempotencyKey);
+            if (fencedWrite) {
+                runLeases.saveOwnedEvent(lease, event);
+                return;
+            }
+            var existing = events.findByPlanIdAndIdempotencyKey(planId, idempotencyKey);
+            if (existing == null || existing.isEmpty()) events.save(event);
         } catch (Exception ex) {
+            if (ex instanceof AgentPlanLeaseLostException leaseLost) throw leaseLost;
+            if (fencedWrite) {
+                throw new IllegalStateException("durable Plan event persistence failed", ex);
+            }
             log.warn("Failed to record plan event planId={} stepId={} type={}", planId, stepId, type, ex);
         }
+    }
+
+    private String canonicalEventJson(JsonNode value) throws Exception {
+        if (value == null || value.isValueNode()) return objectMapper.writeValueAsString(value);
+        if (value.isArray()) {
+            StringBuilder result = new StringBuilder("[");
+            for (int index = 0; index < value.size(); index++) {
+                if (index > 0) result.append(',');
+                result.append(canonicalEventJson(value.get(index)));
+            }
+            return result.append(']').toString();
+        }
+        List<String> names = new ArrayList<>();
+        value.fieldNames().forEachRemaining(names::add);
+        names.sort(String::compareTo);
+        StringBuilder result = new StringBuilder("{");
+        for (int index = 0; index < names.size(); index++) {
+            if (index > 0) result.append(',');
+            String name = names.get(index);
+            result.append(objectMapper.writeValueAsString(name)).append(':')
+                    .append(canonicalEventJson(value.get(name)));
+        }
+        return result.append('}').toString();
     }
 
     private List<String> readStringList(String json) {

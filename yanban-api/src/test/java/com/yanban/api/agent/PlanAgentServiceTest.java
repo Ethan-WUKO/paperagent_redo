@@ -137,7 +137,6 @@ class PlanAgentServiceTest {
                         "builtin",
                         "DeepSeek"));
         when(plans.saveAndFlush(any(AgentPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(steps.saveAndFlush(any(AgentPlanStep.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(events.save(any(AgentPlanEvent.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(toolPolicyEngine.decide(any(), org.mockito.ArgumentMatchers.anyBoolean(), any()))
                 .thenReturn(new AgentToolPolicyEngine.Decision(List.of(), 3, 1, "test_plan_policy"));
@@ -275,6 +274,27 @@ class PlanAgentServiceTest {
                 new ProjectFileEntry("paper/main.tex", 1, Instant.EPOCH, stale))));
         assertThat(service.listProjectEvidence(USER_ID, 42L, PLAN_ID)).singleElement().satisfies(value -> assertThat(value.current()).isFalse());
         assertThatThrownBy(() -> service.listProjectEvidence(USER_ID, 99L, PLAN_ID)).isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    void restartReusesPreviouslyRegisteredEvidenceObservationId() throws Exception {
+        String hash = "e".repeat(64);
+        ProjectRuntimeContext context = new ProjectRuntimeContext(USER_ID, 42L);
+        AgentPlanStep step = newStep("step_1", 1, List.of());
+        EvidenceRef current = new EvidenceRef("trusted-tool:42:observation", EvidenceSourceType.PROJECT,
+                "PROJECT", "paper/main.tex", "tool:read", null, hash, "read", hash, hash,
+                1, 2, "test-parser@1", EvidenceVersionStatus.VERIFIED);
+        EvidenceRef first = ReflectionTestUtils.invokeMethod(
+                service, "persistedStepEvidence", current, context, plan, step, 1);
+        AgentPlanEvent receipt = new AgentPlanEvent(PLAN_ID, step.getId(), "step_project_evidence",
+                objectMapper.writeValueAsString(java.util.Map.of("evidence", List.of(first))));
+        when(events.findByPlanIdOrderByCreatedAtAsc(PLAN_ID)).thenReturn(List.of(receipt));
+
+        EvidenceRef recovered = ReflectionTestUtils.invokeMethod(
+                service, "persistedStepEvidence", current, context, plan, step, 2);
+
+        assertThat(recovered.id()).isEqualTo(first.id()).contains(":" + step.getId() + ":1:");
     }
 
     @Test

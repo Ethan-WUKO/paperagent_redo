@@ -119,6 +119,36 @@ class AgentTaskWorkspaceServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test void trustedProjectPlanProjectionRestoresL2WithoutTrustingClientCapabilityFields() throws Exception {
+        AgentRuntimeResult result = result(true, "canonical", null).withPlanPersistenceLevel("L2_DURABLE");
+        AgentRunIdentity identity = new AgentRunIdentity("AGENT_PLAN", "plan-12", 7L, 11L, 99L);
+        AgentRunProjection trusted = AgentRunProjection.fromRuntime(result, identity);
+        AgentTaskWorkspace captured = service.capture(request(7L, 99L), result, trusted);
+        ObjectNode forged = (ObjectNode) json.readTree(service.checkpoint(captured));
+        forged.put("persistenceLevel", "L0_REQUEST_BOUND");
+        forged.put("checkpointAvailable", false);
+        forged.put("restartResumable", false);
+
+        AgentTaskWorkspace restored = service.restore(
+                forged.toString(), request(7L, 99L), trusted).orElseThrow();
+
+        assertThat(restored.persistenceLevel()).isEqualTo("L2_DURABLE");
+        assertThat(restored.checkpointAvailable()).isTrue();
+        assertThat(restored.restartResumable()).isTrue();
+    }
+
+    @Test void historicalProjectPlanWithoutServerDurabilityRemainsL1InWorkspace() {
+        AgentRuntimeResult result = result(true, "historical", null);
+        AgentRunIdentity identity = new AgentRunIdentity("AGENT_PLAN", "plan-l1", 7L, 11L, 99L);
+
+        AgentTaskWorkspace workspace = service.capture(
+                request(7L, 99L), result, AgentRunProjection.fromRuntime(result, identity));
+
+        assertThat(workspace.persistenceLevel()).isEqualTo("L1_PERSISTED");
+        assertThat(workspace.checkpointAvailable()).isFalse();
+        assertThat(workspace.restartResumable()).isFalse();
+    }
+
     @Test void doesNotAcceptChainOfThoughtCategoryOrExpandToolPolicy() {
         assertThatThrownBy(() -> AgentWorkspaceMemoryType.valueOf("CHAIN_OF_THOUGHT")).isInstanceOf(IllegalArgumentException.class);
         AgentRuntimeRequest request = request(7L, null);

@@ -2,7 +2,7 @@ package com.yanban.core.agent;
 
 import java.util.List;
 
-/** Migration-free L0 workspace projection owned by the canonical run identity. */
+/** Bounded workspace projection owned by the canonical run identity. */
 public record AgentTaskWorkspace(
         AgentRunIdentity identity,
         AgentTaskState state,
@@ -30,8 +30,16 @@ public record AgentTaskWorkspace(
         sessionSummary = blankToNull(sessionSummary);
         canonicalAnswer = blankToNull(canonicalAnswer);
         persistenceLevel = persistenceLevel == null ? "L0_REQUEST_BOUND" : persistenceLevel;
-        if (!"L0_REQUEST_BOUND".equals(persistenceLevel) || checkpointAvailable || restartResumable) {
-            throw new IllegalArgumentException("Task Workspace is L0 request-bound and cannot claim checkpoint or restart capability");
+        boolean l0 = "L0_REQUEST_BOUND".equals(persistenceLevel)
+                && !checkpointAvailable && !restartResumable;
+        boolean l1 = "L1_PERSISTED".equals(persistenceLevel)
+                && !checkpointAvailable && !restartResumable
+                && "AGENT_PLAN".equals(identity.source());
+        boolean l2 = "L2_DURABLE".equals(persistenceLevel)
+                && checkpointAvailable && restartResumable
+                && "AGENT_PLAN".equals(identity.source()) && identity.projectId() != null;
+        if (!l0 && !l1 && !l2) {
+            throw new IllegalArgumentException("Task Workspace persistence capability does not match its canonical run");
         }
         droppedItemCount = Math.max(0, droppedItemCount);
     }

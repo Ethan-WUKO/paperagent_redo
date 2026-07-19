@@ -14,7 +14,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-/** Bounded, process-local Task Workspace assembly. It owns no tools, credentials or durable storage. */
+/** Bounded Task Workspace assembly. Durable capability comes only from the canonical Project Plan. */
 @Service
 public class AgentTaskWorkspaceService {
     private final ObjectMapper objectMapper;
@@ -83,7 +83,7 @@ public class AgentTaskWorkspaceService {
                 projection.restartResumable(), dropped);
     }
 
-    /** Export boundary only; L0 does not claim a durable checkpoint. */
+    /** Export boundary only; L2 persistence is owned by the canonical Plan row, never this JSON. */
     public String checkpoint(AgentTaskWorkspace workspace) {
         try { return objectMapper.writeValueAsString(workspace); }
         catch (Exception ex) { throw new IllegalStateException("workspace checkpoint serialization failed", ex); }
@@ -127,7 +127,8 @@ public class AgentTaskWorkspaceService {
                     List.of("Canonical run reference: " + trustedProjection.identity().runId()),
                     List.of("Recovered audited memory only; runtime step details are unavailable."),
                     remainingWork(trustedProjection), bounded, summary, trustedProjection.canonicalAnswer(),
-                    "L0_REQUEST_BOUND", false, false, dropped));
+                    trustedProjection.persistenceLevel(), trustedProjection.checkpointAvailable(),
+                    trustedProjection.restartResumable(), dropped));
         } catch (Exception ex) { return Optional.empty(); }
     }
 

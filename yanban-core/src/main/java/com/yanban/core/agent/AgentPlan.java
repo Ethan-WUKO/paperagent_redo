@@ -57,6 +57,42 @@ public class AgentPlan {
     @Column(name = "finished_at")
     private LocalDateTime finishedAt;
 
+    @Column(name = "persistence_level", nullable = false, length = 32)
+    private String persistenceLevel;
+
+    @Column(name = "lease_owner", length = 128)
+    private String leaseOwner;
+
+    @Column(name = "lease_token", length = 64)
+    private String leaseToken;
+
+    @Column(name = "lease_fence", nullable = false)
+    private Long leaseFence;
+
+    @Column(name = "lease_expires_at")
+    private LocalDateTime leaseExpiresAt;
+
+    @Column(name = "heartbeat_at")
+    private LocalDateTime heartbeatAt;
+
+    @Column(name = "checkpoint_json", columnDefinition = "LONGTEXT")
+    private String checkpointJson;
+
+    @Column(name = "checkpoint_hash", length = 64)
+    private String checkpointHash;
+
+    @Column(name = "checkpoint_version", nullable = false)
+    private Long checkpointVersion;
+
+    @Column(name = "recovery_status", nullable = false, length = 32)
+    private String recoveryStatus;
+
+    @Column(name = "canonical_answer", columnDefinition = "LONGTEXT")
+    private String canonicalAnswer;
+
+    @Column(name = "canonical_answer_hash", length = 64)
+    private String canonicalAnswerHash;
+
     protected AgentPlan() {
     }
 
@@ -70,6 +106,10 @@ public class AgentPlan {
         this.ragDisabled = Boolean.TRUE.equals(ragDisabled);
         this.skillId = skillId;
         this.rawPlanJson = rawPlanJson;
+        this.persistenceLevel = "L1_PERSISTED";
+        this.leaseFence = 0L;
+        this.checkpointVersion = 0L;
+        this.recoveryStatus = "NONE";
     }
 
     @PrePersist
@@ -77,6 +117,10 @@ public class AgentPlan {
         LocalDateTime now = LocalDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
+        if (this.persistenceLevel == null) this.persistenceLevel = "L1_PERSISTED";
+        if (this.leaseFence == null) this.leaseFence = 0L;
+        if (this.checkpointVersion == null) this.checkpointVersion = 0L;
+        if (this.recoveryStatus == null) this.recoveryStatus = "NONE";
     }
 
     @PreUpdate
@@ -98,6 +142,22 @@ public class AgentPlan {
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public LocalDateTime getStartedAt() { return startedAt; }
     public LocalDateTime getFinishedAt() { return finishedAt; }
+    public String getPersistenceLevel() { return persistenceLevel; }
+    public String getLeaseOwner() { return leaseOwner; }
+    public String getLeaseToken() { return leaseToken; }
+    public Long getLeaseFence() { return leaseFence; }
+    public LocalDateTime getLeaseExpiresAt() { return leaseExpiresAt; }
+    public LocalDateTime getHeartbeatAt() { return heartbeatAt; }
+    public String getCheckpointJson() { return checkpointJson; }
+    public String getCheckpointHash() { return checkpointHash; }
+    public Long getCheckpointVersion() { return checkpointVersion; }
+    public String getRecoveryStatus() { return recoveryStatus; }
+    public String getCanonicalAnswer() { return canonicalAnswer; }
+    public String getCanonicalAnswerHash() { return canonicalAnswerHash; }
+
+    public void enableDurableExecution() {
+        this.persistenceLevel = "L2_DURABLE";
+    }
 
     public void markRunning() {
         this.status = AgentPlanStatus.RUNNING.name();
@@ -134,11 +194,91 @@ public class AgentPlan {
         this.errorMessage = null;
         this.startedAt = null;
         this.finishedAt = null;
+        this.recoveryStatus = "RETRY_QUEUED";
+    }
+
+    /** Explicit durable retry keeps the original elapsed-time budget and checkpoint history. */
+    public void resetForDurableRetry() {
+        this.status = AgentPlanStatus.REVIEWING.name();
+        this.errorMessage = null;
+        this.finishedAt = null;
+        this.recoveryStatus = "RETRY_QUEUED";
     }
 
     public boolean terminal() {
         return AgentPlanStatus.COMPLETED.name().equals(status)
                 || AgentPlanStatus.FAILED.name().equals(status)
                 || AgentPlanStatus.CANCELLED.name().equals(status);
+    }
+
+    boolean durableExecution() {
+        return "L2_DURABLE".equals(persistenceLevel);
+    }
+
+    boolean leaseActiveAt(LocalDateTime databaseNow) {
+        return leaseOwner != null && leaseToken != null && leaseExpiresAt != null
+                && leaseExpiresAt.isAfter(databaseNow);
+    }
+
+    boolean leaseMatches(String owner, String token, long fence) {
+        return owner != null && owner.equals(leaseOwner)
+                && token != null && token.equals(leaseToken)
+                && leaseFence != null && leaseFence == fence;
+    }
+
+    void claimLease(String owner, String token, LocalDateTime databaseNow,
+                    LocalDateTime leaseUntil, boolean recovery) {
+        this.leaseOwner = owner;
+        this.leaseToken = token;
+        this.leaseFence = (leaseFence == null ? 0L : leaseFence) + 1L;
+        this.heartbeatAt = databaseNow;
+        this.leaseExpiresAt = leaseUntil;
+        this.recoveryStatus = recovery ? "RECOVERING" : "CLAIMED";
+        markRunning();
+    }
+
+    void queueForExecution() {
+        markRunning();
+        this.recoveryStatus = "QUEUED";
+    }
+
+    void renewLease(LocalDateTime databaseNow, LocalDateTime leaseUntil) {
+        this.heartbeatAt = databaseNow;
+        this.leaseExpiresAt = leaseUntil;
+        this.recoveryStatus = "RUNNING";
+    }
+
+    void releaseLease(String status) {
+        this.leaseOwner = null;
+        this.leaseToken = null;
+        this.leaseExpiresAt = null;
+        this.heartbeatAt = null;
+        this.recoveryStatus = status;
+    }
+
+    void storeCheckpoint(String json, String hash, long version) {
+        this.checkpointJson = json;
+        this.checkpointHash = hash;
+        this.checkpointVersion = version;
+        this.recoveryStatus = "CHECKPOINTED";
+    }
+
+    void publishCanonicalAnswer(String answer, String hash) {
+        if (answer == null || answer.isBlank()) return;
+        if (canonicalAnswer == null) {
+            canonicalAnswer = answer;
+            canonicalAnswerHash = hash;
+            return;
+        }
+        if (!canonicalAnswer.equals(answer) || !java.util.Objects.equals(canonicalAnswerHash, hash)) {
+            throw new IllegalStateException("canonical answer is already published");
+        }
+    }
+
+    void copyLifecycleFrom(AgentPlan source) {
+        this.status = source.status;
+        this.errorMessage = source.errorMessage;
+        this.startedAt = source.startedAt;
+        this.finishedAt = source.finishedAt;
     }
 }

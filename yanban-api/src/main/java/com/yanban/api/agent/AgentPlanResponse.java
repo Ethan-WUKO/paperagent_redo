@@ -20,8 +20,20 @@ public record AgentPlanResponse(
         LocalDateTime finishedAt,
         List<AgentPlanStepResponse> steps,
         String executionOutcome,
-        String finalAnswer
+        String finalAnswer,
+        String persistenceLevel
 ) {
+    /** Source-compatible bridge for callers created before persistence level was projected. */
+    public AgentPlanResponse(
+            Long id, Long sessionId, String goal, String summary, String status, Boolean ragDisabled,
+            String skillId, String errorMessage, LocalDateTime createdAt, LocalDateTime updatedAt,
+            LocalDateTime startedAt, LocalDateTime finishedAt, List<AgentPlanStepResponse> steps,
+            String executionOutcome, String finalAnswer
+    ) {
+        this(id, sessionId, goal, summary, status, ragDisabled, skillId, errorMessage, createdAt, updatedAt,
+                startedAt, finishedAt, steps, executionOutcome, finalAnswer, null);
+    }
+
     public AgentPlanResponse(
             Long id,
             Long sessionId,
@@ -39,7 +51,7 @@ public record AgentPlanResponse(
     ) {
         this(id, sessionId, goal, summary, status, ragDisabled, skillId, errorMessage,
                 createdAt, updatedAt, startedAt, finishedAt, steps,
-                executionOutcome(status, steps), finalAnswer(steps));
+                executionOutcome(status, steps), finalAnswer(steps), null);
     }
 
     public static AgentPlanResponse from(AgentPlan plan, List<AgentPlanStepResponse> steps) {
@@ -58,7 +70,8 @@ public record AgentPlanResponse(
                 plan.getFinishedAt(),
                 steps,
                 executionOutcome(plan.getStatus(), steps),
-                finalAnswer(steps)
+                plan.getCanonicalAnswer() == null ? finalAnswer(steps) : plan.getCanonicalAnswer(),
+                plan.getPersistenceLevel()
         );
     }
 

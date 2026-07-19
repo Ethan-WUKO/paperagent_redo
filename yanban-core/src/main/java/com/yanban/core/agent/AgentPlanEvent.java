@@ -7,10 +7,12 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "agent_plan_events")
+@Table(name = "agent_plan_events", uniqueConstraints = @UniqueConstraint(
+        name = "uk_agent_plan_events_idempotency", columnNames = {"plan_id", "idempotency_key"}))
 public class AgentPlanEvent {
 
     @Id
@@ -29,6 +31,9 @@ public class AgentPlanEvent {
     @Column(name = "payload_json", columnDefinition = "LONGTEXT")
     private String payloadJson;
 
+    @Column(name = "idempotency_key", length = 128)
+    private String idempotencyKey;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -36,10 +41,16 @@ public class AgentPlanEvent {
     }
 
     public AgentPlanEvent(Long planId, Long stepId, String eventType, String payloadJson) {
+        this(planId, stepId, eventType, payloadJson, null);
+    }
+
+    public AgentPlanEvent(Long planId, Long stepId, String eventType, String payloadJson,
+                          String idempotencyKey) {
         this.planId = planId;
         this.stepId = stepId;
         this.eventType = eventType;
         this.payloadJson = payloadJson;
+        this.idempotencyKey = idempotencyKey;
     }
 
     @PrePersist
@@ -52,5 +63,6 @@ public class AgentPlanEvent {
     public Long getStepId() { return stepId; }
     public String getEventType() { return eventType; }
     public String getPayloadJson() { return payloadJson; }
+    public String getIdempotencyKey() { return idempotencyKey; }
     public LocalDateTime getCreatedAt() { return createdAt; }
 }

@@ -166,6 +166,9 @@ class AgentRuntimeCoordinatorTest {
         assertThat(results.get(3).taskWorkspace().planReferences()).containsExactly(
                 "Canonical run reference: AGENT_PLAN:91", "Selected strategy: PLAN_EXECUTE");
         assertThat(results.get(3).taskWorkspace().observedStepSummaries()).containsExactly("Runtime steps observed: 2");
+        assertThat(results.get(3).taskWorkspace().persistenceLevel()).isEqualTo("L1_PERSISTED");
+        assertThat(results.get(3).taskWorkspace().checkpointAvailable()).isFalse();
+        assertThat(results.get(3).taskWorkspace().restartResumable()).isFalse();
         org.mockito.ArgumentCaptor<AgentRuntimeRequest> captured = org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
         verify(runtime, org.mockito.Mockito.times(4)).run(captured.capture());
         assertThat(captured.getAllValues()).allSatisfy(r -> assertThat(r.allowedToolNames()).containsExactly("read"));
@@ -439,8 +442,8 @@ class AgentRuntimeCoordinatorTest {
         assertThat(result.taskWorkspace().identity()).isEqualTo(result.runProjection().identity());
         assertThat(result.taskWorkspace().state()).isEqualTo(result.runProjection().state());
         assertThat(result.taskWorkspace().canonicalAnswer()).isEqualTo(result.runProjection().canonicalAnswer());
-        assertThat(result.taskWorkspace().persistenceLevel()).isEqualTo("L0_REQUEST_BOUND");
-        assertThat(result.taskWorkspace().checkpointAvailable()).isFalse();
-        assertThat(result.taskWorkspace().restartResumable()).isFalse();
+        assertThat(result.taskWorkspace().persistenceLevel()).isEqualTo(result.runProjection().persistenceLevel());
+        assertThat(result.taskWorkspace().checkpointAvailable()).isEqualTo(result.runProjection().checkpointAvailable());
+        assertThat(result.taskWorkspace().restartResumable()).isEqualTo(result.runProjection().restartResumable());
     }
 }

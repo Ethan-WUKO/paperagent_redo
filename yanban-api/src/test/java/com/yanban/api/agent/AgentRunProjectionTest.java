@@ -83,6 +83,29 @@ class AgentRunProjectionTest {
         assertThat(projection.canonicalAnswer()).isNull();
     }
 
+    @Test
+    void onlyPersistedL2PlanProjectsRecoveryCapabilityAndHistoricalProjectPlanRemainsL1() {
+        AgentRuntimeResult result = new AgentRuntimeResult(true, "done", List.of(), 1,
+                null, List.of(), List.of(), null, null, null);
+
+        AgentRunProjection durable = AgentRunProjection.fromRuntime(
+                result.withPlanPersistenceLevel("L2_DURABLE"),
+                new AgentRunIdentity("AGENT_PLAN", "plan-9", 1L, 1L, 42L));
+        AgentRunProjection historical = AgentRunProjection.fromRuntime(
+                result.withPlanPersistenceLevel("L1_PERSISTED"),
+                new AgentRunIdentity("AGENT_PLAN", "plan-8", 1L, 1L, 42L));
+        AgentRunProjection ordinary = AgentRunProjection.fromRuntime(result,
+                new AgentRunIdentity("RUNTIME_TRACE", "trace-9", 1L, 1L, 42L));
+
+        assertThat(durable.persistenceLevel()).isEqualTo("L2_DURABLE");
+        assertThat(durable.checkpointAvailable()).isTrue();
+        assertThat(durable.restartResumable()).isTrue();
+        assertThat(historical.persistenceLevel()).isEqualTo("L1_PERSISTED");
+        assertThat(historical.checkpointAvailable()).isFalse();
+        assertThat(historical.restartResumable()).isFalse();
+        assertThat(ordinary.persistenceLevel()).isEqualTo("L0_REQUEST_BOUND");
+    }
+
     private AgentRunProjection project(AgentRuntimeResult result) {
         return AgentRunProjection.fromRuntime(result,
                 new AgentRunIdentity("RUNTIME_TRACE", "test-trace", 1L, 1L, null));

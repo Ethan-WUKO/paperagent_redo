@@ -1,6 +1,7 @@
 package com.yanban.core.agent;
 
 import java.util.List;
+import java.util.Optional;
 import java.time.LocalDateTime;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -8,4 +9,6 @@ public interface AgentPlanEventRepository extends JpaRepository<AgentPlanEvent, 
     List<AgentPlanEvent> findByPlanIdOrderByCreatedAtAsc(Long planId);
 
     List<AgentPlanEvent> findByCreatedAtAfterOrderByCreatedAtDesc(LocalDateTime createdAt);
+
+    Optional<AgentPlanEvent> findByPlanIdAndIdempotencyKey(Long planId, String idempotencyKey);
 }

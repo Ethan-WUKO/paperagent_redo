@@ -18,15 +18,19 @@ public record AgentRunProjection(AgentRunIdentity identity, AgentTaskState state
     }
 
     public static AgentRunProjection fromRuntime(AgentRuntimeResult result, AgentRunIdentity identity) {
+        boolean persistedPlan = "AGENT_PLAN".equals(identity.source());
+        boolean durableProjectPlan = persistedPlan && "L2_DURABLE".equals(result.planPersistenceLevel());
+        String persistenceLevel = durableProjectPlan
+                ? "L2_DURABLE" : persistedPlan ? "L1_PERSISTED" : "L0_REQUEST_BOUND";
         if (result.stopReason() == AgentStopReason.PAUSED) {
             return new AgentRunProjection(identity,
                     AgentTaskState.active(AgentTaskStatus.PAUSED, AgentTaskPhase.PAUSED),
-                    null, "L0_REQUEST_BOUND", false, false);
+                    null, persistenceLevel, durableProjectPlan, false);
         }
         if (result.stopReason() == AgentStopReason.WAITING_FOR_USER) {
             return new AgentRunProjection(identity,
                     AgentTaskState.active(AgentTaskStatus.WAITING_INPUT, AgentTaskPhase.WAITING_INPUT),
-                    null, "L0_REQUEST_BOUND", false, false);
+                    null, persistenceLevel, durableProjectPlan, false);
         }
         boolean controlledStop = result.runtimeStopSignal() != AgentRuntimeStopSignal.NONE
                 || result.stopReason() == AgentStopReason.PLAN_PARTIAL
@@ -38,7 +42,8 @@ public record AgentRunProjection(AgentRunIdentity identity, AgentTaskState state
         boolean publishable = outcome == AgentTaskOutcome.SUCCEEDED || outcome == AgentTaskOutcome.PARTIAL;
         return new AgentRunProjection(identity, state,
                 publishable && hasCanonicalAnswer(result) ? result.assistantContent() : null,
-                "L0_REQUEST_BOUND", false, false);
+                persistenceLevel,
+                durableProjectPlan, durableProjectPlan);
     }
 
     private static boolean hasCanonicalAnswer(AgentRuntimeResult result) {
