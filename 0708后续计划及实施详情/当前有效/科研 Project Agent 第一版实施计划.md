@@ -2,14 +2,14 @@
 
 > 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
-> 最近同步：2026-07-18
-> 已审查工程基线：`78a6d0b`（Worker 12 受控双 Worker 真实模型与本地 UI 验收收口）
+> 最近同步：2026-07-20
+> 已审查工程基线：`a35a93d`（Worker 14 Docker Sandboxes 受治理执行与真实本地用户旅程验收收口）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
-> 当前工程基线：`78a6d0b`（受控双 Worker 只读场景已完成工程与本地真实验收）
+> 当前工程基线：`a35a93d`（Worker 14 已完成工程、真实 Provider E2E 与本地完整用户旅程验收）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`WORKER_10_11_LOCAL_ACCEPTED / WORKER_12_LOCAL_UI_ACCEPTED / WORKER_13_READY_TO_START`
+> 当前发布状态：`WORKER_10_14_LOCAL_ACCEPTED / WORKER_15_READY_TO_START`
 > 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
 > 当前进度：Worker 1 至 Worker 7 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome、canonical answer 与 PARTIAL/取消/失败语义。Worker 5 基线 `1c40159` 在该投影上增加 L0 Task Workspace，保存目标、成功条件、计划引用、观测步骤摘要、剩余工作和有界短期记忆；任意 JSON 快照中的记忆只能降级为明确标记的非权威审计摘要，不能伪造 Evidence、Candidate、Artifact、失败结果或工具观察。`823a820` 在不扩权的前提下完成 Worker 5 后本地回归闭环。Worker 6 基线 `956ce42` 以服务端 manifest 的 portable relative path、文件大小和 SHA-256 内容哈希确定性派生 ProjectVersion，并将 Project Evidence、Plan 持久化 Evidence、Candidate 与 Artifact 绑定到同一版本；旧 Evidence 缺少完整版本、范围或 parser provenance 时保持 fail-closed，不能伪造 VERIFIED。Worker 7A 至 7D 完成长短期记忆治理、受信只读接入、用户确认/拒绝/纠正/删除和双语治理界面。Worker 8A 基线 `d4970cd` 冻结受信 ProjectVersion 沙箱快照、不可变 UTF-8 全文替换 Candidate、base/result hash、EvidenceRefs、审查 diff、预算和 `NOT_APPLIED` 验证契约。Worker 8B 基线 `83c6b56` 将该契约接入服务端受信工作副本：只读取 Candidate 与 Evidence 涉及的文本文件，读取前后对完整 manifest 二次校验，任意未请求文件并发变化也返回 409；Candidate 只能由显式结构化 intent 和当前受信 Evidence ledger 生成，公共 artifact API 不能伪造保留类型，持久化后每次读取都重新物化、证明和验证，始终保持 `NOT_APPLIED`。Worker 8C 基线 `8ff3339` 新增受治理的 `project_propose_candidate` 生产入口，并通过当前轮真实工具结果和服务端 artifact 再认证投影 Candidate；Project 页从真实 API 展示多文件变更、ProjectVersion、指纹、验证状态、review diff 与 Evidence provenance，始终保持 `NOT_APPLIED`。主对话独立验证 Worker 8C 定向后端 66/66、完整 reactor 889 项零失败且 9 项既有条件跳过、前端 3/3、生产构建及 `git diff --check` 通过。Worker 8 不包含真实 Project 写入、命令、外部网络、migration 或自动应用；真实模型生成、多文件展示、409 STALE 和 422 INVALID 仍由用户进行本地 UI 验收。MVP 发布门脚本仍有基线遗留的绝对路径创建用例禁用治理项，发布前必须单独收口。该结论不表示用户本地科研验收完成，也不表示持久化 checkpoint/重启恢复、多版本历史与导出或安全应用已经完成。
@@ -568,7 +568,7 @@ Worker 开发
 
 ### Worker 14：Docker Sandboxes 受治理执行沙箱
 
-状态：`ENGINEERING_ACCEPTED_PENDING_REAL_E2E`
+状态：`LOCAL_USER_JOURNEY_ACCEPTED / WORKER_15_READY`
 
 - 真实执行沙箱必须由部署环境显式设置 `YANBAN_SANDBOX_ENABLED=true` 才能启用；默认关闭时不探测、不连接、不启动 Sandbox Provider，现有 Chat、ReAct、Plan、Worker、Candidate、Project revision、Paper/Literature 和基础设施服务保持原行为。
 - `enabled=true` 只授予进入受治理 Sandbox Provider 的资格，不授予宿主机命令、Docker socket、任意网络、密钥或 Project 真实写入。Provider 或 broker 不可用时，沙箱任务必须以明确 `SANDBOX_UNAVAILABLE` fail-closed，禁止回退到宿主机 Shell、普通容器或跳过验证后声称成功。
@@ -578,7 +578,20 @@ Worker 开发
 - 每次执行使用服务端 ProjectVersion、当前 skill/tool policy、命令 profile和预算重新校验；工作副本限制为受信 Project 相对路径，命令为结构化 argv，环境默认空、网络显式 deny-all，资源硬上限为单并发、2 CPU、4 GiB、15 分钟和 20 MiB。取消、超时、异常和重启统一进入可恢复 cleanup；cleanup 未确认不得发布成功 Evidence。Candidate 始终 `NOT_APPLIED`。
 - receipt 与 canonical request digest 绑定 user/project/session/plan/step/fence/ProjectVersion/policy；同 key 异 digest 冲突。API receipt 审计与 fenced Plan 投影分离，确定性撤销/STALE fail-closed，瞬时投影失败仅重试 projection，不重新执行 Broker 任务。checkpoint 不保存密钥、原始环境、宿主绝对路径、无界输出或思维链。
 - 离线工程验证已覆盖默认关闭、配置、迁移、Provider 不可用、路径/symlink、命令/env/network、资源/输出、取消/cleanup、并发幂等、lease/fence/reclaim、receipt 恶意响应、authority 撤销、Project STALE、Worker 13 恢复与 canonical exactly-once；完整 Maven reactor 与 `git diff --check` 已通过。
-- 当前开发机未安装且未运行真实 `sbx`，没有执行真实 Provider E2E，也不代表产品最终验收完成。仍需按宿主机 Broker 架构完成独立的本地真实 E2E，验证实际 `sbx` JSON/策略/生命周期兼容后才能从 `PENDING_REAL_E2E` 升级为最终验收状态。
+- 2026-07-20 已完成真实本地 Provider E2E 与完整用户旅程：真实登录、Project 普通问答、沙箱确认/拒绝、成功、非零失败、超时、取消、重复确认、刷新与重启恢复、沙箱关闭不影响普通问答、原始 stdout/stderr 与只读分析摘要展示均已实际验证。完整 Maven reactor 828 项零失败零错误、8 项条件跳过；独立定向后端 65 项、前端确认测试与 `vue-tsc`、`git diff --check` 均通过；临时服务已停止，专用 Provider 无残留 sandbox。
+
+### Worker 15：Candidate 沙箱验证与显式应用闭环
+
+状态：`READY_TO_START`
+
+- 目标是连接已经交付的 Candidate、Worker 14 沙箱和 Worker 9 revision：Agent 生成的 Candidate 始终先保持 `NOT_APPLIED`，在受信 ProjectVersion 的沙箱工作副本中运行必要验证，向用户展示 diff、原始 stdout/stderr、执行事实与只读分析摘要；只有用户显式接受后，才沿 Worker 9 既有流程生成新的不可变 ProjectVersion。
+- 第一版仅实现最短闭环：选择一个现有 Candidate、物化原始 ProjectVersion 与 Candidate 到隔离工作副本、执行服务端允许的编译/测试 profile、保存与 Candidate 绑定的验证 receipt、展示验证结果、接受或拒绝、接受后应用并保留历史/回滚/导出。不得自动应用，不得绕过用户确认，不得直接修改当前 ProjectVersion。
+- 执行事实只来自 Broker 的 `status/exitCode/timedOut/provider`；原始输出可以交给无工具、无写权限、无网络、不能触发后续动作的只读分析 Agent 总结。摘要必须标明“基于输出、未独立验证”，不能覆盖执行事实，也不能自行写入 Project/Plan/Evidence 或启动后续执行。
+- 沿用 Worker 14 的最小安全边界：功能默认关闭、用户确认、结构化命令与受信相对路径、默认禁网、资源/超时/输出上限、敏感环境变量不注入、取消与 cleanup。禁止为第一版新增 HMAC、复杂历史 provenance、攻击矩阵或其他会阻塞基本闭环的生产级过度保护。
+- Candidate 内容或 ProjectVersion 变化后，旧验证结果不得用于新的应用；但不扩展为通用恶意代码判定系统。验证失败可以保留 Candidate 和诊断结果供用户继续修改，不得伪装为成功或自动降级为未验证应用。
+- 所有权限定为 Candidate 验证编排、验证结果投影、Project 页面审查/确认交互及必要的向后兼容迁移和测试。不得修改 Worker 10-14 的工具权限、Evidence 语义、持久化恢复、Broker 隔离、Candidate `NOT_APPLIED` 默认状态和 Worker 9 revision/rollback/export 契约。
+- 必测最小矩阵：验证成功、编译/测试失败、超时、取消、重复请求幂等、刷新/重启后结果可见、Candidate 或 ProjectVersion 变化使旧验证失效、拒绝不写 Project、接受后恰好生成一个新 ProjectVersion、回滚/导出不回归、沙箱关闭或不可用时普通问答与 Candidate 审查仍可用且验证明确不可用。
+- 停止条件：需要任意宿主机命令、开放网络或密钥、真实模型/MCP 扩权、自动应用、跨 Worker 大范围重构、删除/覆盖用户文件、不可逆迁移或产品方向取舍。遇到这些情况必须回主对话确认。
 
 ## 16. 审查与停止条件
 
