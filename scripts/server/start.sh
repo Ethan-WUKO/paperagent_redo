@@ -5,5 +5,4 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 require_app_files
 lock_deployment
-compose up -d
-compose ps
+start_stack
