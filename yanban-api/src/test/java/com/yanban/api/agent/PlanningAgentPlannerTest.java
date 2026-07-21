@@ -83,6 +83,201 @@ class PlanningAgentPlannerTest {
     }
 
     @Test
+    void readOnlyThreeFilePlanCannotInventCandidateAndEndsWithRequestedAnalysis() {
+        when(modelProvider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("""
+                {"summary":"Analyze three files","steps":[
+                  {"id":"read1","title":"Read Success","description":"Read Success.java","type":"FILE_READ",\
+                   "dependencies":[],"allowedTools":["project_read_file"],"successCriteria":"Success observed"},
+                  {"id":"read2","title":"Read Failure","description":"Read Failure.java","type":"FILE_READ",\
+                   "dependencies":[],"allowedTools":["project_read_file"],"successCriteria":"Failure observed"},
+                  {"id":"read3","title":"Read Infinite","description":"Read Infinite.java","type":"FILE_READ",\
+                   "dependencies":[],"allowedTools":["project_read_file"],"successCriteria":"Infinite observed"},
+                  {"id":"candidate","title":"Propose candidate code","description":"Create Runner.java Candidate",\
+                   "type":"FILE_WRITE","dependencies":["read1","read2","read3"],\
+                   "allowedTools":["project_propose_candidate"],"successCriteria":"Candidate proposed successfully"}
+                ]}
+                """), "stop", null));
+        String goal = "请按依赖顺序完成三个步骤：先分别读取 Success.java、Failure.java、Infinite.java；"
+                + "再比较它们的正常、失败和超时行为；最后生成一张测试矩阵并给出结论。";
+
+        PlanningAgentPlanner.PlanSpec plan = planner.createPlan(
+                goal, "deepseek", "deepseek-v4-flash", "key", null, null,
+                List.of("project_read_file", "project_propose_candidate"));
+
+        assertThat(plan.executable()).isTrue();
+        assertThat(plan.steps()).extracting(PlanningAgentPlanner.StepSpec::type)
+                .containsExactly("FILE_READ", "FILE_READ", "FILE_READ", "ANALYSIS");
+        assertThat(plan.steps()).flatExtracting(PlanningAgentPlanner.StepSpec::allowedTools)
+                .doesNotContain("project_propose_candidate");
+        assertThat(plan.steps().get(3)).satisfies(step -> {
+            assertThat(step.title()).isEqualTo("Synthesize requested analysis");
+            assertThat(step.description()).contains("comparison, matrix or report", "Do not propose");
+            assertThat(step.successCriteria()).contains("original read-only request");
+        });
+        assertThat(plan.rawJson()).doesNotContain("project_propose_candidate", "Candidate proposed successfully");
+
+        ArgumentCaptor<ChatRequest> request = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(modelProvider).chat(request.capture());
+        assertThat(request.getValue().messages().get(0).content())
+                .contains("read-only: use FILE_READ plus ANALYSIS/VERIFICATION")
+                .contains("Resolved plan tool allowlist:\nproject_read_file\n");
+    }
+
+    @Test
+    void explicitRunnerCandidateRequestKeepsAuthorizedCandidateTool() {
+        when(modelProvider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("""
+                {"summary":"Propose Runner change","steps":[
+                  {"id":"read","title":"Read inputs","description":"Read the three files","type":"FILE_READ",\
+                   "dependencies":[],"allowedTools":["project_read_file"],"successCriteria":"Inputs observed"},
+                  {"id":"candidate","title":"Propose Runner.java candidate","description":"Propose requested modification",\
+                   "type":"TOOL","dependencies":["read"],"allowedTools":["project_propose_candidate"],\
+                   "successCriteria":"Candidate remains NOT_APPLIED"}
+                ]}
+                """), "stop", null));
+
+        PlanningAgentPlanner.PlanSpec plan = planner.createPlan(
+                "请基于这些文件提出 Runner.java 修改候选", "deepseek", "deepseek-v4-flash", "key", null,
+                null, List.of("project_read_file", "project_propose_candidate"));
+
+        assertThat(plan.executable()).isTrue();
+        assertThat(plan.steps().get(1).allowedTools()).containsExactly("project_propose_candidate");
+        assertThat(plan.steps().get(1).title()).contains("Runner.java candidate");
+        assertThat(plan.rawJson()).contains("project_propose_candidate", "NOT_APPLIED");
+    }
+
+    @Test
+    void naturalChineseAndEnglishCodeEditRequestsKeepCandidateToolWithoutCandidateTerminology() {
+        String plannedCandidate = """
+                {"summary":"Modify requested code","steps":[
+                  {"id":"read","title":"Read target","description":"Read the target code","type":"FILE_READ",
+                   "dependencies":[],"allowedTools":["project_read_file"],"successCriteria":"Target observed"},
+                  {"id":"change","title":"Prepare reviewable change","description":"Implement the requested edit",
+                   "type":"TOOL","dependencies":["read"],"allowedTools":["project_propose_candidate"],
+                   "successCriteria":"The change remains NOT_APPLIED"}
+                ]}
+                """;
+        when(modelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant(plannedCandidate), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant(plannedCandidate), "stop", null));
+
+        PlanningAgentPlanner.PlanSpec chinese = planner.createPlan(
+                "\u8bf7\u4fee\u6539 Runner.java\uff0c\u8ba9\u5b83\u589e\u52a0\u8d85\u65f6\u5904\u7406\uff1b\u4e0d\u8981\u81ea\u52a8\u5e94\u7528", "deepseek", "model", "key", null, null,
+                List.of("project_read_file", "project_propose_candidate"));
+        PlanningAgentPlanner.PlanSpec english = planner.createPlan(
+                "fix this Java file", "deepseek", "model", "key", null, null,
+                List.of("project_read_file", "project_propose_candidate"));
+
+        assertThat(List.of(chinese, english)).allSatisfy(plan -> {
+            assertThat(plan.executable()).isTrue();
+            assertThat(plan.steps().get(1).allowedTools()).containsExactly("project_propose_candidate");
+            assertThat(plan.rawJson()).contains("project_propose_candidate", "NOT_APPLIED");
+        });
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(modelProvider, times(2)).chat(requests.capture());
+        assertThat(requests.getAllValues()).allSatisfy(request ->
+                assertThat(request.messages().get(0).content())
+                        .contains("project_read_file", "project_propose_candidate"));
+    }
+
+    @Test
+    void negatedOrNonCodeChangeLanguageCannotExposeOrForceCandidateTool() {
+        String inventedCandidate = """
+                {"summary":"Invented change","steps":[
+                  {"id":"read","title":"Read","description":"Read source","type":"FILE_READ",
+                   "dependencies":[],"allowedTools":["project_read_file"],"successCriteria":"Source observed"},
+                  {"id":"candidate","title":"Create Candidate","description":"Create an unrequested change",
+                   "type":"TOOL","dependencies":["read"],"allowedTools":["project_propose_candidate"],
+                   "successCriteria":"Candidate proposed"}
+                ]}
+                """;
+        when(modelProvider.chat(any())).thenReturn(
+                new ChatResponse(ChatMessage.assistant(inventedCandidate), "stop", null));
+
+        List<String> goals = List.of(
+                "\u8bf7\u5206\u6790\u5982\u4f55\u4fee\u6539 Runner.java\uff0c\u4f46\u4e0d\u8981\u751f\u6210\u6539\u52a8",
+                "\u8bfb\u53d6\u6587\u6863\u5e76\u6bd4\u8f83 Candidate \u548c patch \u7684\u6982\u5ff5\uff0c\u4e0d\u8981\u4fee\u6539\u9879\u76ee",
+                "\u4fee\u6539\u8bba\u6587\u7684\u5206\u6790\u65b9\u6cd5\u5e76\u7ed9\u51fa\u5efa\u8bae");
+
+        for (String goal : goals) {
+            PlanningAgentPlanner.PlanSpec plan = planner.createPlan(
+                    goal, "deepseek", "model", "key", null, null,
+                    List.of("project_read_file", "project_propose_candidate"));
+
+            assertThat(plan.executable()).isTrue();
+            assertThat(plan.steps()).flatExtracting(PlanningAgentPlanner.StepSpec::allowedTools)
+                    .doesNotContain("project_propose_candidate");
+            assertThat(plan.steps().get(1).type()).isEqualTo("ANALYSIS");
+            assertThat(plan.rawJson()).doesNotContain("project_propose_candidate", "Candidate proposed");
+        }
+
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(modelProvider, times(3)).chat(requests.capture());
+        assertThat(requests.getAllValues()).allSatisfy(request ->
+                assertThat(request.messages().get(0).content())
+                        .contains("Resolved plan tool allowlist:\nproject_read_file\n")
+                        .doesNotContain("Server-confirmed code/file change intent"));
+    }
+
+    @Test
+    void explicitNaturalEditRepairsAnAnalysisOnlyPlanIntoARequiredCandidateStep() {
+        when(modelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {"summary":"Describe edit","steps":[{"id":"analysis","title":"Explain",
+                        "description":"Explain how to edit Runner.java","type":"ANALYSIS","dependencies":[],
+                        "allowedTools":[],"successCriteria":"Suggestion written"}]}
+                        """), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {"summary":"Prepare edit","steps":[{"id":"change","title":"Prepare change",
+                        "description":"Create the requested Runner.java change","type":"TOOL","dependencies":[],
+                        "allowedTools":["project_propose_candidate"],"successCriteria":"Candidate is NOT_APPLIED"}]}
+                        """), "stop", null));
+
+        PlanningAgentPlanner.PlanSpec plan = planner.createPlan(
+                "modify Runner.java to handle timeout", "deepseek", "model", "key", null, null,
+                List.of("project_read_file", "project_propose_candidate"));
+
+        assertThat(plan.executable()).isTrue();
+        assertThat(plan.steps()).singleElement().satisfies(step ->
+                assertThat(step.allowedTools()).containsExactly("project_propose_candidate"));
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(modelProvider, times(2)).chat(requests.capture());
+        assertThat(requests.getAllValues()).allSatisfy(request ->
+                assertThat(request.messages().get(0).content())
+                        .contains("Server-confirmed code/file change intent")
+                        .contains("must end with one change step"));
+    }
+
+    @Test
+    void explicitProjectCodeRunRepairsPlanThatOmittedSandboxExecution() {
+        when(modelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {"summary":"Inspect source","steps":[{"id":"read","title":"Read source",
+                        "description":"Read src/main/java/xhs_1111.java","type":"FILE_READ","dependencies":[],
+                        "allowedTools":["project_read_file"],"successCriteria":"Source observed"}]}
+                        """), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("""
+                        {"summary":"Run source","steps":[
+                        {"id":"read","title":"Read source","description":"Read src/main/java/xhs_1111.java",
+                        "type":"FILE_READ","dependencies":[],"allowedTools":["project_read_file"],
+                        "successCriteria":"Source observed"},
+                        {"id":"run","title":"Run source","description":"Run src/main/java/xhs_1111.java",
+                        "type":"SANDBOX_EXECUTE","dependencies":["read"],"allowedTools":["sandbox_execute"],
+                        "successCriteria":"Report governed sandbox status, exit code, stdout and stderr"}]}
+                        """), "stop", null));
+
+        PlanningAgentPlanner.PlanSpec plan = planner.createPlan(
+                "src/main/java/xhs_1111.java，运行这个程序，结果是什么？",
+                "deepseek", "model", "key", null, null,
+                List.of("project_read_file", "sandbox_execute"));
+
+        assertThat(plan.executable()).isTrue();
+        assertThat(plan.steps()).extracting(PlanningAgentPlanner.StepSpec::type)
+                .containsExactly("FILE_READ", "SANDBOX_EXECUTE");
+        assertThat(plan.steps().get(1).allowedTools()).containsExactly("sandbox_execute");
+        verify(modelProvider, times(2)).chat(any());
+    }
+
+    @Test
     void createPlanReceivesBoundedCrossMaterialRequirementsInSystemPromptOnly() {
         when(modelProvider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("""
                 {"summary":"Audit materials","steps":[{
@@ -373,5 +568,24 @@ class PlanningAgentPlannerTest {
         assertThat(toolFree.executable()).isTrue();
         assertThat(toolFree.steps()).singleElement().satisfies(step ->
                 assertThat(step.allowedTools()).isEmpty());
+    }
+
+    @Test
+    void plannerReceivesGovernedLanguagePreferenceWithoutChangingToolAllowlist() {
+        when(modelProvider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("""
+                {"summary":"\u4e2d\u6587\u8ba1\u5212","steps":[{"id":"s1","title":"\u8bfb\u53d6","description":"\u8bfb\u53d6 README",\
+                "type":"TOOL","dependencies":[],"allowedTools":["project_read_file"],"successCriteria":"\u5b8c\u6210\u6982\u62ec"}]}
+                """), "stop", null));
+
+        planner.createPlan("Summarize README", "test", "model", "key", null, null,
+                List.of("project_read_file"), AgentOrchestrationRequirements.empty(),
+                "- memory#1 [PREFERENCE] \u9ed8\u8ba4\u4f7f\u7528\u4e2d\u6587\u56de\u7b54");
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(modelProvider).chat(captor.capture());
+        assertThat(captor.getValue().messages().get(0).content())
+                .contains("\u9ed8\u8ba4\u4f7f\u7528\u4e2d\u6587\u56de\u7b54")
+                .contains("never changes tools, permissions, or evidence requirements")
+                .contains("project_read_file");
     }
 }

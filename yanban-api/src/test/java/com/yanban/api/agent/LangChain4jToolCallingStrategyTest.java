@@ -83,6 +83,31 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
+    void firstSuccessfulProjectCandidateProposalForcesToolsDisabledFinalSummary() {
+        ToolRegistry registry = new ToolRegistry().register(
+                new StubToolExecutor(ProjectCandidateProposalToolExecutor.TOOL_NAME, objectMapper));
+        LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
+        when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
+                .thenReturn(toolCall("candidate-1", ProjectCandidateProposalToolExecutor.TOOL_NAME,
+                        "{\"query\":\"Runner.java\"}"))
+                .thenReturn(answer("Candidate Runner.java is validated and remains NOT_APPLIED."));
+        AgentRuntimeRequest request = request(
+                List.of(ProjectCandidateProposalToolExecutor.TOOL_NAME), 12, 1)
+                .withProjectContext(new ProjectRuntimeContext(8L, 42L));
+
+        AgentRuntimeResult result = new LangChain4jToolCallingStrategy(
+                chatModel, toolProvider(registry), objectMapper).run(request);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).contains("Runner.java", "NOT_APPLIED");
+        assertThat(result.toolTrace()).hasSize(1);
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel, org.mockito.Mockito.times(2)).chat(requests.capture(), any(AgentRuntimeRequest.class));
+        assertThat(requests.getAllValues().get(0).parameters().toolSpecifications()).hasSize(1);
+        assertThat(requests.getAllValues().get(1).parameters().toolSpecifications()).isEmpty();
+    }
+
+    @Test
     void truncatedFinalAnswerGetsOneToolsDisabledCompactRewrite() {
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
         when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class)))

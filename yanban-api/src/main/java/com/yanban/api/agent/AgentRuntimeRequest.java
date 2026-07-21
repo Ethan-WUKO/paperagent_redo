@@ -148,6 +148,17 @@ public record AgentRuntimeRequest(
                 persistPlanConversationSummary, controlledWorkerDispatch);
     }
 
+    /** DIRECT is a model-only answer path; it must not inherit tool authority from an AUTO request. */
+    public AgentRuntimeRequest withoutToolAuthority(String reason) {
+        ResolvedToolPolicy denyAll = ResolvedToolPolicy.denyAll(0, 0,
+                reason == null || reason.isBlank() ? "direct_strategy" : reason);
+        return new AgentRuntimeRequest(strategy, sessionId, history, userId, userMessage, provider, model,
+                temperature, maxTokens, maxSteps, ragDisabled, skillId, apiKey, apiUrl, skillPrompt, runtimeMode,
+                toolCallingMode, denyAll, 0, 0, traceId, tokenConsumer, processConsumer,
+                planId, projectContext, inheritedTrustedEvidence, orchestrationRequirements,
+                persistPlanConversationSummary, controlledWorkerDispatch);
+    }
+
     /** Attach server-owned plan identity after a Plan API request has been authorized. */
     public AgentRuntimeRequest withPlanId(Long planId) {
         return new AgentRuntimeRequest(strategy, sessionId, history, userId, userMessage, provider, model,

@@ -1,6 +1,7 @@
 package com.yanban.api.agent.worker;
 
 import com.yanban.api.agent.AgentRequestCapability;
+import com.yanban.api.agent.AgentOrchestrationRequirements;
 import com.yanban.api.agent.ProjectMaterialScope;
 import com.yanban.api.agent.AgentRuntimeRequest;
 import com.yanban.api.agent.AgentStrategy;
@@ -178,9 +179,7 @@ public class ControlledWorkerDispatchPlanner {
         if (request == null || capability != AgentRequestCapability.PROJECT_READ
                 || request.strategy() != AgentStrategy.PLAN_EXECUTE || request.planId() != null
                 || request.projectContext() == null || request.orchestrationRequirements() == null
-                || request.orchestrationRequirements().selectionOrigin() != AgentStrategySelectionOrigin.SERVER_AUTO
-                || !request.orchestrationRequirements().reasonCodes()
-                        .contains(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN)
+                || !eligibleAutomaticPlanSelection(request.orchestrationRequirements())
                 || !request.orchestrationRequirements().crossMaterial()
                 || request.maxSteps() < MIN_PARENT_STEPS || request.maxTokens() == null
                 || request.maxTokens() < MIN_PARENT_TOKENS || request.toolPolicy().maxToolCalls() < 2) {
@@ -192,6 +191,16 @@ public class ControlledWorkerDispatchPlanner {
         return materials.contains(ResearchMaterialKind.PAPER_LATEX)
                 && (materials.contains(ResearchMaterialKind.CODE)
                 || materials.contains(ResearchMaterialKind.EXPERIMENT_CONFIG));
+    }
+
+    private boolean eligibleAutomaticPlanSelection(AgentOrchestrationRequirements requirements) {
+        return (requirements.selectionOrigin() == AgentStrategySelectionOrigin.SERVER_AUTO
+                && requirements.reasonCodes().contains(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN))
+                || (requirements.selectionOrigin() == AgentStrategySelectionOrigin.LLM_ROUTER
+                && requirements.reasonCodes().contains(AgentStrategyReasonCode.LLM_ROUTER_PLAN))
+                || (requirements.selectionOrigin() == AgentStrategySelectionOrigin.ROUTER_FALLBACK
+                && requirements.reasonCodes().contains(AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_PLAN)
+                && requirements.reasonCodes().contains(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN));
     }
 
     private WorkerTaskAttestation attest(WorkerServerAuthority authority, WorkerTaskPacket packet) {

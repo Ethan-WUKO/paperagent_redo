@@ -94,7 +94,8 @@ public class CompletionVerifier {
                     !deterministicMissingTarget
                             && reflectionAttempts == 0 && domainAllowsRepair(domain), reflectionAttempts, domain);
         }
-        if (request.projectContext() != null && requiresProjectFileEvidence(request.userMessage())
+        if (request.projectContext() != null && !isVerifiedRouterDirectKnowledgeRequest(request)
+                && requiresProjectFileEvidence(request.userMessage())
                 && !hasCurrentProjectFileEvidence(ledger, request.projectContext().projectId(),
                 request.controlledWorkerDispatch() != null)) {
             reasons.add("no current authorized Project file evidence for projectId=" + request.projectContext().projectId());
@@ -416,6 +417,39 @@ public class CompletionVerifier {
      */
     static boolean requiresProjectFileEvidence(String task) {
         return !isPureProjectCapabilityInquiry(task);
+    }
+
+    /**
+     * Project completion without file Evidence is limited to a server-validated knowledge DIRECT decision,
+     * including the bounded deterministic fallback. The Coordinator must already have removed every tool capability.
+     */
+    static boolean isVerifiedRouterDirectKnowledgeRequest(AgentRuntimeRequest request) {
+        if (request == null || request.projectContext() == null || request.strategy() != AgentStrategy.DIRECT
+                || request.toolPolicy() == null || !request.toolPolicy().allowedTools().isEmpty()
+                || request.toolPolicy().maxToolCalls() != 0 || request.orchestrationRequirements() == null) {
+            return false;
+        }
+        AgentOrchestrationRequirements audit = request.orchestrationRequirements();
+        return isTrustedKnowledgeDirectAudit(audit);
+    }
+
+    /** Defense-in-depth projection uses the immutable Coordinator decision, never a client field. */
+    static boolean isVerifiedRouterDirectKnowledgeSelection(AgentStrategySelection selection,
+                                                            AgentRuntimeResult result) {
+        if (selection == null || result == null || selection.selectedStrategy() != AgentStrategy.DIRECT
+                || result.selectedStrategy() != AgentStrategy.DIRECT || result.completionVerification() == null
+                || result.completionVerification().status() != CompletionStatus.VERIFIED) {
+            return false;
+        }
+        AgentOrchestrationRequirements audit = selection.orchestration();
+        return isTrustedKnowledgeDirectAudit(audit);
+    }
+
+    private static boolean isTrustedKnowledgeDirectAudit(AgentOrchestrationRequirements audit) {
+        return (audit.selectionOrigin() == AgentStrategySelectionOrigin.LLM_ROUTER
+                && audit.reasonCodes().contains(AgentStrategyReasonCode.LLM_ROUTER_DIRECT))
+                || (audit.selectionOrigin() == AgentStrategySelectionOrigin.ROUTER_FALLBACK
+                && audit.reasonCodes().contains(AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_DIRECT));
     }
 
     private static boolean isPureProjectCapabilityInquiry(String task) {

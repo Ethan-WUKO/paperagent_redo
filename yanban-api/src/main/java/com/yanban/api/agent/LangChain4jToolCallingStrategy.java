@@ -93,6 +93,11 @@ public class LangChain4jToolCallingStrategy {
             Use only the conversation and tool results already available to produce one complete final answer.
             Preserve every requested conclusion section and state any evidence limitation explicitly.
             """;
+    private static final String SUCCESSFUL_CANDIDATE_FINAL_ANSWER_PROMPT = """
+            A governed Candidate proposal was created successfully. Do not call any more tools and do not create
+            another Candidate. Summarize the latest successful Candidate tool result, including its target files,
+            validation state, and NOT_APPLIED application status. Never claim that Project files were changed.
+            """;
     private static final String NO_PROGRESS_FINAL_ANSWER_PROMPT = """
             Every tool request in the latest assistant step duplicated an earlier invocation, so no new
             tool execution was performed. Do not call any more tools. Use the tool results already present
@@ -317,6 +322,15 @@ public class LangChain4jToolCallingStrategy {
                     return finalAnswerWithoutMoreTools(
                             messages, toolTrace, fallbacks, step + 1, totalUsage, request, reason);
                 }
+                if (request.projectContext() != null && toolResult.success()
+                        && ProjectCandidateProposalToolExecutor.TOOL_NAME.equals(toolRequest.name())) {
+                    String reason = "Successful governed Candidate proposal";
+                    addSkippedToolResults(messages, toolTrace, requests, i + 1, step + 1, reason);
+                    log.info("LangChain4j stopping after first successful Candidate proposal sessionId={} toolCalls={}",
+                            request.sessionId(), toolCalls);
+                    return finalAnswerWithoutMoreTools(
+                            messages, toolTrace, fallbacks, step + 1, totalUsage, request, reason);
+                }
             }
             if (newToolCallsThisStep == 0 && reusedToolCallsThisStep > 0) {
                 String reason = "No new tool progress: all " + reusedToolCallsThisStep
@@ -344,12 +358,17 @@ public class LangChain4jToolCallingStrategy {
                                                            String reason) {
         boolean reservedSynthesis = reason != null && reason.startsWith("Reserved final synthesis round");
         boolean missingTarget = reason != null && reason.startsWith(ProjectMaterialScope.MISSING_TARGET_PREFIX);
-        emitProcess(request, missingTarget
+        boolean successfulCandidate = reason != null && reason.startsWith("Successful governed Candidate proposal");
+        emitProcess(request, successfulCandidate
+                ? "Candidate proposal created. Generating its final NOT_APPLIED summary."
+                : missingTarget
                 ? "The explicitly requested Project file was not found. Generating a bounded result without substitutes."
                 : reservedSynthesis
                 ? "Using the reserved final round to synthesize the answer from existing results."
                 : "Tool-call budget reached. Generating the final answer from existing results.");
-        messages.add(SystemMessage.from(missingTarget
+        messages.add(SystemMessage.from(successfulCandidate
+                ? SUCCESSFUL_CANDIDATE_FINAL_ANSWER_PROMPT
+                : missingTarget
                 ? MISSING_TARGET_FINAL_ANSWER_PROMPT
                 : reservedSynthesis ? RESERVED_FINAL_ANSWER_PROMPT : TOOL_BUDGET_FINAL_ANSWER_PROMPT));
         ChatRequest finalRequest = ChatRequest.builder()

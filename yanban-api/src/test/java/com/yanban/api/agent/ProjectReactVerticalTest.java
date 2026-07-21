@@ -40,14 +40,17 @@ class ProjectReactVerticalTest {
         LangChain4jToolCallingStrategy strategy = new LangChain4jToolCallingStrategy(model,
                 new LangChain4jToolProvider(registry, json, new AgentLangChain4jTools(registry, json)), json);
         RuntimeAdapter adapter = new RuntimeAdapter() {
-            public boolean supports(AgentStrategy value) { return value == AgentStrategy.SINGLE_STEP_REACT; }
+            public boolean supports(AgentStrategy value) { return value == AgentStrategy.PLAN_EXECUTE; }
             public AgentRuntimeResult run(AgentRuntimeRequest request) { return strategy.run(request); }
         };
         AgentRuntimeCoordinator coordinator = new AgentRuntimeCoordinator(new AgentRuntimeService(List.of(adapter)), new AgentStrategySelector());
         AgentRuntimeRequest request = request().withProjectContext(new ProjectRuntimeContext(7L, 42L));
 
-        AgentRuntimeResult result = coordinator.coordinate(AgentCoordinationRequest.projectRead(request)).runtimeResult();
+        AgentCoordinationResult coordination = coordinator.coordinate(AgentCoordinationRequest.projectRead(request));
+        AgentRuntimeResult result = coordination.runtimeResult();
 
+        assertThat(coordination.decision().strategySelection().selectedStrategy())
+                .isEqualTo(AgentStrategy.PLAN_EXECUTE);
         assertThat(result.success()).isTrue();
         String toolContent = result.messages().stream().filter(m -> "tool".equals(m.role())).map(ChatMessage::content).findFirst().orElse("");
         assertThat(toolContent)

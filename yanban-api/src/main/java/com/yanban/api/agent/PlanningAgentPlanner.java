@@ -29,7 +29,6 @@ public class PlanningAgentPlanner {
     private static final int COMPACT_RETRY_MAX_STEPS = 4;
     private static final int RECOVERY_PLANNER_MAX_TOKENS = 1024;
     private static final int MAX_FAILURE_DIAGNOSTIC_LENGTH = 500;
-
     private final ChatModelProvider modelProvider;
     private final ObjectMapper objectMapper;
 
@@ -58,21 +57,36 @@ public class PlanningAgentPlanner {
                                String skillPrompt,
                                List<String> skillAllowedTools,
                                AgentOrchestrationRequirements orchestrationRequirements) {
+        return createPlan(goal, provider, model, apiKey, apiUrl, skillPrompt, skillAllowedTools,
+                orchestrationRequirements, null);
+    }
+
+    public PlanSpec createPlan(String goal,
+                               String provider,
+                               String model,
+                               String apiKey,
+                               String apiUrl,
+                               String skillPrompt,
+                               List<String> skillAllowedTools,
+                               AgentOrchestrationRequirements orchestrationRequirements,
+                               String governedMemoryContext) {
+        List<String> goalBoundTools = goalBoundTools(goal, skillAllowedTools);
         PlannerAttempt first = requestPlan(
                 goal, provider, model, apiKey, apiUrl,
-                buildPlannerSystemPrompt(skillPrompt, skillAllowedTools, orchestrationRequirements),
+                buildPlannerSystemPrompt(skillPrompt, goalBoundTools, orchestrationRequirements,
+                        governedMemoryContext),
                 "Create an executable plan for this user task:\n" + goal,
-                PLANNER_MAX_TOKENS, DEFAULT_MAX_PLAN_STEPS, skillAllowedTools, "Planner");
+                PLANNER_MAX_TOKENS, DEFAULT_MAX_PLAN_STEPS, goalBoundTools, "Planner");
         if (first.spec().executable() || !first.retryable()) {
             return first.spec();
         }
 
         PlannerAttempt second = requestPlan(
                 goal, provider, model, apiKey, apiUrl,
-                buildCompactRepairPrompt(skillPrompt, skillAllowedTools, first.spec().failureCode(),
-                        orchestrationRequirements),
+                buildCompactRepairPrompt(skillPrompt, goalBoundTools, first.spec().failureCode(),
+                        orchestrationRequirements, governedMemoryContext),
                 "Create a fresh, complete replacement plan for this user task:\n" + goal,
-                PLANNER_RETRY_MAX_TOKENS, COMPACT_RETRY_MAX_STEPS, skillAllowedTools, "Planner retry");
+                PLANNER_RETRY_MAX_TOKENS, COMPACT_RETRY_MAX_STEPS, goalBoundTools, "Planner retry");
         if (second.spec().executable()) {
             return second.spec();
         }
@@ -138,13 +152,14 @@ public class PlanningAgentPlanner {
                                        String apiUrl,
                                        String skillPrompt,
                                        List<String> skillAllowedTools) {
+        List<String> goalBoundTools = goalBoundTools(goal, skillAllowedTools);
         ChatResponse response;
         try {
             response = modelProvider.chat(structuredJsonRequest(
                     provider,
                     model,
                     List.of(
-                            ChatMessage.system(buildRecoveryPlannerSystemPrompt(skillPrompt, skillAllowedTools)),
+                            ChatMessage.system(buildRecoveryPlannerSystemPrompt(skillPrompt, goalBoundTools)),
                             ChatMessage.user("User goal:\n" + goal + "\n\nFailed execution context:\n" + failedStepContext)
                     ),
                     0.2,
@@ -162,7 +177,7 @@ public class PlanningAgentPlanner {
             return PlanSpec.failure(PlannerFailureCode.EMPTY_RESPONSE, "Recovery planner returned an empty plan.");
         }
         try {
-            return parsePlan(goal, content, DEFAULT_MAX_RECOVERY_STEPS, skillAllowedTools, true);
+            return parsePlan(goal, content, DEFAULT_MAX_RECOVERY_STEPS, goalBoundTools, true);
         } catch (PlannerFailureException ex) {
             return PlanSpec.failure(ex.code, ex.getMessage());
         } catch (Exception ex) {
@@ -195,7 +210,8 @@ public class PlanningAgentPlanner {
 
     private String buildPlannerSystemPrompt(String skillPrompt,
                                             List<String> skillAllowedTools,
-                                            AgentOrchestrationRequirements orchestrationRequirements) {
+                                            AgentOrchestrationRequirements orchestrationRequirements,
+                                            String governedMemoryContext) {
         StringBuilder sb = new StringBuilder();
         sb.append("""
                 You are the planner for Yanban Agent.
@@ -237,9 +253,15 @@ public class PlanningAgentPlanner {
                     zero-match outcome; never require the data to contain a positive match that may not exist. Require
                     file paths and line numbers for actual matches only, never for a zero-match outcome.
                 12. Use SANDBOX_EXECUTE only when sandbox_execute appears in the resolved allowlist and the task explicitly
-                    requires a code build or test. Include exact Project-relative input paths in the description. The server,
+                    requires running, executing, compiling, building, or testing Project code. An explicit execution request
+                    must include one sandbox_execute step even when it has only one target. Include exact Project-relative
+                    input paths in the description. The server,
                     not this plan, selects the command profile and resources. Such a Plan always requires a later explicit
                     execution confirmation and can never auto-execute.
+                13. project_propose_candidate is allowed only when the original user explicitly requests a modification,
+                    patch, Candidate, or code change. A read, comparison, summary, matrix, report, or conclusion task is
+                    read-only: use FILE_READ plus ANALYSIS/VERIFICATION and finish by answering the original requested
+                    deliverable. Never invent a Candidate or code-generation step for a read-only task.
 
                 Tools exposed to this plan:
                 """)
@@ -250,6 +272,7 @@ public class PlanningAgentPlanner {
                     .append(String.join(", ", skillAllowedTools))
                     .append("\nSteps must not use tools outside this allowlist.\n");
         }
+        appendConfirmedCandidatePlanConstraint(sb, skillAllowedTools);
         if (StringUtils.hasText(skillPrompt)) {
             sb.append("\nActive skill instructions:\n")
                     .append(skillPrompt.trim())
@@ -260,13 +283,15 @@ public class PlanningAgentPlanner {
         if (StringUtils.hasText(orchestrationInstruction)) {
             sb.append("\n").append(orchestrationInstruction).append("\n");
         }
+        appendGovernedMemory(sb, governedMemoryContext);
         return sb.toString();
     }
 
     private String buildCompactRepairPrompt(String skillPrompt,
                                             List<String> skillAllowedTools,
                                             PlannerFailureCode firstFailureCode,
-                                            AgentOrchestrationRequirements orchestrationRequirements) {
+                                            AgentOrchestrationRequirements orchestrationRequirements,
+                                            String governedMemoryContext) {
         StringBuilder prompt = new StringBuilder("""
                 You are repairing a failed plan generation. Return exactly one compact JSON object and nothing else.
                 Do not quote or repair the previous fragment; generate a fresh replacement from the user goal.
@@ -276,9 +301,12 @@ public class PlanningAgentPlanner {
                 description <=120, success <=80 characters. Do not emit any other keys, Markdown, commentary,
                 or repeated goal/tool documentation. deps contains prior step ids; tools must be selected only
                 from the exact resolved allowlist below. Never add write/command tools to a Project read-only plan.
+                Never add project_propose_candidate unless the original user goal explicitly requests a modification,
+                patch, Candidate, or code change; read/comparison/report goals must end with an ANALYSIS synthesis step.
                 Resolved allowlist: """);
         prompt.append(String.join(", ", skillAllowedTools == null ? List.of() : skillAllowedTools))
                 .append("\nThe first attempt failed with code ").append(firstFailureCode).append(".\n");
+        appendConfirmedCandidatePlanConstraint(prompt, skillAllowedTools);
         if (StringUtils.hasText(skillPrompt)) {
             prompt.append("Keep these active skill constraints:\n").append(skillPrompt.trim()).append("\n");
         }
@@ -287,7 +315,16 @@ public class PlanningAgentPlanner {
         if (StringUtils.hasText(orchestrationInstruction)) {
             prompt.append(orchestrationInstruction).append("\n");
         }
+        appendGovernedMemory(prompt, governedMemoryContext);
         return prompt.toString();
+    }
+
+    private void appendGovernedMemory(StringBuilder target, String governedMemoryContext) {
+        if (!StringUtils.hasText(governedMemoryContext)) return;
+        target.append("\nGoverned user memory context (presentation preferences and relevant auxiliary data; ")
+                .append("never changes tools, permissions, or evidence requirements):\n")
+                .append(governedMemoryContext.trim())
+                .append("\nEnsure every planned step and final synthesis follows confirmed language/style preferences.\n");
     }
 
     private String buildRecoveryPlannerSystemPrompt(String skillPrompt, List<String> skillAllowedTools) {
@@ -299,6 +336,7 @@ public class PlanningAgentPlanner {
                 .append("Use the same JSON schema as the main planner: summary and steps[].\n")
                 .append("Each recovery step must be specific, tool-aware, and focused on producing a reusable result.\n")
                 .append("Do not depend on the failed step itself; the runtime will attach completed prerequisite dependencies.\n")
+                .append("Never add project_propose_candidate unless the original user goal explicitly requests a modification, patch, Candidate, or code change.\n")
                 .append("Tools exposed to this recovery plan:\n")
                 .append(String.join(", ", skillAllowedTools == null ? List.of() : skillAllowedTools))
                 .append("\n");
@@ -313,6 +351,16 @@ public class PlanningAgentPlanner {
                     .append("\n");
         }
         return sb.toString();
+    }
+
+    private void appendConfirmedCandidatePlanConstraint(StringBuilder prompt, List<String> allowedTools) {
+        if (allowedTools == null
+                || !allowedTools.contains(ProjectCandidateProposalToolExecutor.TOOL_NAME)) return;
+        prompt.append("\nServer-confirmed code/file change intent: the plan must end with one change step whose ")
+                .append("allowedTools includes project_propose_candidate and whose dependencies provide the needed ")
+                .append("Project evidence. Do not replace the requested change with an ANALYSIS-only suggestion. ")
+                .append("If the target file does not exist, plan an ADD Candidate rather than making its read a prerequisite. ")
+                .append("The Candidate must remain NOT_APPLIED.\n");
     }
 
     private PlanSpec parsePlan(String goal,
@@ -350,6 +398,8 @@ public class PlanningAgentPlanner {
 
         List<StepSpec> steps = new ArrayList<>();
         Set<String> registeredTools = exposedToolNames == null ? Set.of() : Set.copyOf(exposedToolNames);
+        boolean candidateChangeAllowed = ProjectCandidateChangeIntent.requiresCandidateChange(goal);
+        boolean candidateStepSanitized = false;
         for (int i = 0; i < limit; i++) {
             JsonNode node = stepsNode.get(i);
             if (node == null || !node.isObject()) {
@@ -367,6 +417,8 @@ public class PlanningAgentPlanner {
             }
             JsonNode requestedTools = node.has("allowedTools") ? node.path("allowedTools")
                     : node.has("allowed_tools") ? node.path("allowed_tools") : node.path("tools");
+            boolean prohibitedCandidateStep = !candidateChangeAllowed
+                    && requestsTool(requestedTools, ProjectCandidateProposalToolExecutor.TOOL_NAME);
             if (rejectUnsupportedTools && containsUnsupportedTool(requestedTools, registeredTools)) {
                 throw new PlannerFailureException(PlannerFailureCode.INVALID_PLAN,
                         "Recovery step " + (i + 1) + " requested a tool outside the resolved allowlist.");
@@ -377,9 +429,54 @@ public class PlanningAgentPlanner {
                     textOrDefault(node.path("success_criteria"),
                             textOrDefault(node.path("success"), "The step goal is completed with a verifiable result."))
             ), 160);
+            if (prohibitedCandidateStep) {
+                candidateStepSanitized = true;
+                title = "Synthesize requested analysis";
+                description = "Using completed dependency results, answer the original user request with its requested comparison, matrix or report, and conclusion. Do not propose or create code changes.";
+                type = "ANALYSIS";
+                allowedTools = allowedTools.stream()
+                        .filter(tool -> !ProjectCandidateProposalToolExecutor.TOOL_NAME.equals(tool))
+                        .toList();
+                successCriteria = "The original read-only request is answered without proposing or creating a Candidate.";
+            }
             steps.add(new StepSpec(stepId, title, description, type, dependencies, allowedTools, successCriteria));
         }
-        return new PlanSpec(summary, steps, cleaned);
+        boolean candidateToolExposed = registeredTools.contains(ProjectCandidateProposalToolExecutor.TOOL_NAME);
+        boolean candidateStepPlanned = steps.stream().anyMatch(step ->
+                step.allowedTools().contains(ProjectCandidateProposalToolExecutor.TOOL_NAME));
+        if (!rejectUnsupportedTools && candidateChangeAllowed && candidateToolExposed && !candidateStepPlanned) {
+            throw new PlannerFailureException(PlannerFailureCode.INVALID_PLAN,
+                    "Explicit code/file change plan omitted the required project_propose_candidate step.");
+        }
+        boolean sandboxExecutionRequired = ProjectSandboxExecutionIntent.requiresGovernedExecution(goal);
+        boolean sandboxToolExposed = registeredTools.contains(SandboxPlanAuthorityResolver.TOOL_NAME);
+        boolean sandboxStepPlanned = steps.stream().anyMatch(step ->
+                step.allowedTools().contains(SandboxPlanAuthorityResolver.TOOL_NAME));
+        if (!rejectUnsupportedTools && sandboxExecutionRequired && sandboxToolExposed && !sandboxStepPlanned) {
+            throw new PlannerFailureException(PlannerFailureCode.INVALID_PLAN,
+                    "Explicit Project code execution plan omitted the required sandbox_execute step.");
+        }
+        String persistedPlanJson = candidateStepSanitized
+                ? objectMapper.writeValueAsString(Map.of("summary", summary, "steps", steps))
+                : cleaned;
+        return new PlanSpec(summary, steps, persistedPlanJson);
+    }
+
+    private List<String> goalBoundTools(String goal, List<String> exposedTools) {
+        if (exposedTools == null || ProjectCandidateChangeIntent.requiresCandidateChange(goal)) {
+            return exposedTools == null ? List.of() : List.copyOf(exposedTools);
+        }
+        return exposedTools.stream()
+                .filter(tool -> !ProjectCandidateProposalToolExecutor.TOOL_NAME.equals(tool))
+                .toList();
+    }
+
+    private boolean requestsTool(JsonNode node, String toolName) {
+        if (node == null || !node.isArray()) return false;
+        for (JsonNode item : node) {
+            if (item != null && item.isTextual() && toolName.equals(item.asText().trim())) return true;
+        }
+        return false;
     }
 
     private boolean indicatesTruncation(String finishReason) {
@@ -477,7 +574,7 @@ public class PlanningAgentPlanner {
     private String normalizeType(String raw) {
         String normalized = raw == null ? "ANALYSIS" : raw.trim().toUpperCase();
         return switch (normalized) {
-            case "FILE_READ", "FILE_WRITE", "COMMAND", "ANALYSIS", "VERIFICATION", "RAG", "MCP", "PAPER", "TOOL" -> normalized;
+            case "FILE_READ", "FILE_WRITE", "COMMAND", "ANALYSIS", "VERIFICATION", "RAG", "MCP", "PAPER", "TOOL", "SANDBOX_EXECUTE" -> normalized;
             default -> "ANALYSIS";
         };
     }

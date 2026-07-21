@@ -2,14 +2,14 @@
 
 > 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
-> 最近同步：2026-07-20
-> 已审查工程基线：`a35a93d`（Worker 14 Docker Sandboxes 受治理执行与真实本地用户旅程验收收口）
+> 最近同步：2026-07-22
+> 已审查工程基线：`db36b82`（Worker 15、E2B Provider、一键部署与 HTTP 沙箱确认进入 GitHub `main`）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
-> 当前工程基线：`a35a93d`（Worker 14 已完成工程、真实 Provider E2E 与本地完整用户旅程验收）
+> 当前工程基线：GitHub `origin/main` 最新提交（Worker 16 已验收并进入发布流程）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`WORKER_10_14_LOCAL_ACCEPTED / WORKER_15_READY_TO_START`
+> 当前发布状态：`WORKER_16_ACCEPTED / STAGE_9_READY`
 > 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
 > 当前进度：Worker 1 至 Worker 7 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome、canonical answer 与 PARTIAL/取消/失败语义。Worker 5 基线 `1c40159` 在该投影上增加 L0 Task Workspace，保存目标、成功条件、计划引用、观测步骤摘要、剩余工作和有界短期记忆；任意 JSON 快照中的记忆只能降级为明确标记的非权威审计摘要，不能伪造 Evidence、Candidate、Artifact、失败结果或工具观察。`823a820` 在不扩权的前提下完成 Worker 5 后本地回归闭环。Worker 6 基线 `956ce42` 以服务端 manifest 的 portable relative path、文件大小和 SHA-256 内容哈希确定性派生 ProjectVersion，并将 Project Evidence、Plan 持久化 Evidence、Candidate 与 Artifact 绑定到同一版本；旧 Evidence 缺少完整版本、范围或 parser provenance 时保持 fail-closed，不能伪造 VERIFIED。Worker 7A 至 7D 完成长短期记忆治理、受信只读接入、用户确认/拒绝/纠正/删除和双语治理界面。Worker 8A 基线 `d4970cd` 冻结受信 ProjectVersion 沙箱快照、不可变 UTF-8 全文替换 Candidate、base/result hash、EvidenceRefs、审查 diff、预算和 `NOT_APPLIED` 验证契约。Worker 8B 基线 `83c6b56` 将该契约接入服务端受信工作副本：只读取 Candidate 与 Evidence 涉及的文本文件，读取前后对完整 manifest 二次校验，任意未请求文件并发变化也返回 409；Candidate 只能由显式结构化 intent 和当前受信 Evidence ledger 生成，公共 artifact API 不能伪造保留类型，持久化后每次读取都重新物化、证明和验证，始终保持 `NOT_APPLIED`。Worker 8C 基线 `8ff3339` 新增受治理的 `project_propose_candidate` 生产入口，并通过当前轮真实工具结果和服务端 artifact 再认证投影 Candidate；Project 页从真实 API 展示多文件变更、ProjectVersion、指纹、验证状态、review diff 与 Evidence provenance，始终保持 `NOT_APPLIED`。主对话独立验证 Worker 8C 定向后端 66/66、完整 reactor 889 项零失败且 9 项既有条件跳过、前端 3/3、生产构建及 `git diff --check` 通过。Worker 8 不包含真实 Project 写入、命令、外部网络、migration 或自动应用；真实模型生成、多文件展示、409 STALE 和 422 INVALID 仍由用户进行本地 UI 验收。MVP 发布门脚本仍有基线遗留的绝对路径创建用例禁用治理项，发布前必须单独收口。该结论不表示用户本地科研验收完成，也不表示持久化 checkpoint/重启恢复、多版本历史与导出或安全应用已经完成。
@@ -27,6 +27,8 @@
 > Worker 12B 工程进度（2026-07-18）：`e9998f4` 已接入一个由服务器 AUTO 策略触发的论文/LaTeX 与代码/配置双 Worker 只读跨材料场景。它复用既有持久化 Plan 生命周期、run identity、事件、Evidence 与 canonical answer，不创建第二套生命周期；显式相对路径优先，并与当前 manifest、ProjectVersion、原始 `allowedTools` 和任务预算求交。Worker 结果作为 `UNTRUSTED_WORKER_DATA` 交给父 Agent，不能通过提示文本提升权限或伪造 applied/VERIFIED；只有父 Agent 生成 canonical answer，Candidate 继续为 `NOT_APPLIED`。受控 dispatch 使用现有 `AgentPlan.rawPlanJson` 持久化非敏感 envelope，使 execute/retry/restart/async 路径在重新校验用户、Project、版本、哈希、工具和预算后恢复；缺失、篡改、STALE 或工具撤销均 fail-closed。主对话两轮 P1 复审修正了 Plan 持久化绕过、Worker 摘要信任边界和仅内存 dispatch 恢复问题；独立完整 reactor 共 1046 项，零失败、零错误、9 项条件跳过，前端生产构建与 `git diff --check` 通过。该状态是工程验收，不表示用户真实模型或本地 UI 验收完成，也不表示已开放通用自由多 Agent、写入、命令、网络、沙箱或 Pro 权限。
 
 > Worker 12 本地验收收口（2026-07-18）：用户已确认 Worker 12 验收完成，收口提交为 `78a6d0b`。真实 Project 会话 107、Plan 60 以 `COMPLETED / PARTIAL` 完成；AUTO 只调度 `paper_injection.tex` 的 `project_latex_outline` 与 `implementation.py` 的 `project_code_symbols`，未访问明确禁止的第三个文件。父合成保持 `allowedTools=[]`、`maxToolCalls=0`、`maxSteps=1`，语义一致性维持 `UNRESOLVED/PARTIAL`，Candidate 为 0，ProjectVersion 未改变，6 条 Evidence 均为 CURRENT；刷新后会话、Plan、Evidence 与 canonical answer 从后端恢复。验收修复还补齐服务器 token 预算、受控 Plan 精确工具持久化、父 Agent canonical answer 文案、Project 会话 URL 恢复和 Project 文件名 Markdown 误链接。主对话独立复跑后端定向 21/21、前端 15/15、完整 reactor 1048 项零失败零错误且 9 项条件跳过、前端生产构建与 `git diff --check`，均通过。该结论仅表示 Worker 12 的受控只读场景完成本地验收，不等于自由多 Agent、完整科研 Project 或 Pro 模式验收完成。
+
+> Worker 15 与 E2B 部署收口（2026-07-21）：Candidate 沙箱验证、显式接受后生成新 ProjectVersion 的闭环已进入 GitHub `main`；E2B 作为新增 Provider 接入，原有 `docker-sbx` 保留。远端基线 `db36b82` 包含 Candidate E2B 验证、一键服务器部署和 HTTP 沙箱确认修复。下一轮不继续扩 Provider，而是按阶段 8 至阶段 11 收口统一入口、LLM 路由、记忆、界面、Evidence 分层、工具自修复及后续复杂执行范式。
 
 ## 1. 目标与边界
 
@@ -81,20 +83,20 @@ Pro 模式仍必须具备：
 
 | 能力 | 当前状态 | 第一版要求 |
 |---|---|---|
-| Runtime Coordinator | 已完成基础统一 | 增加复杂度驱动的自动策略选择 |
-| ReAct | 已有 `SINGLE_STEP_REACT` | 扩展科研语义工具与停止条件 |
-| Plan-and-Execute | 已有受信 Plan API | 支持科研任务自动建计划与步骤验证 |
-| Reflection | 已有最多一次不扩权修复 | 增加论文、代码和跨材料领域 Verifier |
+| Runtime Coordinator | 已完成基础统一与确定性 AUTO 选择 | 改为 LLM 提出策略、Runtime 校验能力并执行 |
+| ReAct | 已有 `SINGLE_STEP_REACT`、科研语义工具与停止条件 | 在统一入口中复用并补齐跨轮错误自修复 |
+| Plan-and-Execute | 已有受信 Plan、步骤验证和持久化恢复 | 先统一入口与记忆，后续再升级步骤内 ReAct |
+| Reflection | 已有最多一次不扩权修复 | 后续改为失败、结果不足或冲突时事件触发 |
 | 多 Agent | 一个受控双 Worker 只读跨材料场景已接入 | 先完成真实模型与本地 UI 验收，再决定是否扩展更多受控场景 |
-| Project 工具 | manifest/read/search | 增加 LaTeX、BibTeX、代码和实验语义工具 |
-| Project 索引 | manifest 与文本检索 | 增加章节、符号、引用和实验结构索引 |
-| Project 输入 | 浏览器文件夹上传与托管存储已接入 | 增加不可变 ProjectVersion、多版本历史、导出和回滚 |
-| 文件修改 | 仅 Candidate、NOT_APPLIED | 增加沙箱、diff、确认、应用和回滚 |
-| 生命周期 | L1、进程内任务为主 | 建立持久化托管、checkpoint 和恢复 |
-| 短期记忆 | 会话、摘要、ContextPackage | 增加任务工作记忆和结构化发现 |
-| 长期记忆 | 设施存在，主链路保守关闭 | 增加来源、范围、版本和用户确认 |
-| 沙箱 | 尚未实现完整执行沙箱 | 在开放写入和命令前完成 |
-| 评测 | 确定性安全门已完成 | 增加真实科研 Project 端到端评测 |
+| Project 工具 | manifest/read/search 与首批科研语义工具已接入 | 根据真实任务补充检索质量，不继续盲目扩工具 |
+| Project 索引 | manifest、版本证据和科研结构索引已有基础 | 后续按真实检索缺口增强 |
+| Project 输入 | 浏览器文件夹上传、托管存储和不可变 ProjectVersion 已接入 | 保持多版本历史、导出和回滚回归 |
+| 文件修改 | Candidate、沙箱验证、显式应用和回滚已完成闭环 | 保持默认 `NOT_APPLIED`，优化用户审查体验 |
+| 生命周期 | L2 Task Run、lease、checkpoint 与重启恢复已接入 | 在统一入口下保持状态与 canonical answer 一致 |
+| 短期记忆 | Task Workspace、摘要和 ContextPackage 已接入 | 与统一入口及 Plan 展示保持一致 |
+| 长期记忆 | 已有治理与普通 Chat 只读接入，Plan 注入不一致 | 贯通全局偏好、Planner、步骤与最终总结 |
+| 沙箱 | Docker 与 E2B Provider 已接入，Candidate 验证闭环已部署 | 保持 Provider 抽象并以真实用户旅程持续验收 |
+| 评测 | 确定性回归与 Worker 14/15 用户旅程已有基础 | 为阶段 8 至阶段 11 增加真实用户旅程 |
 
 ## 4. 冻结安全原则
 
@@ -116,14 +118,15 @@ Pro 模式仍必须具备：
 ### 5.1 策略选择
 
 ```text
-信息充分且无工具需求 -> DIRECT
-单文件或探索性任务 -> REACT
-跨文件且有明确交付物 -> PLAN_EXECUTE
+LLM Router 判断无需工具且上下文充分 -> DIRECT
+Project 需要文件、工具、执行或 Candidate -> PLAN_EXECUTE
+Project 存在多目标、依赖步骤或跨材料交付 -> PLAN_EXECUTE
+普通非 Project Chat -> 保留现有 REACT 兼容路径
 高价值产物 -> 确定性验证 + 最多一次 Reflection
 独立、可验证且资源隔离的子目标 -> 后续受控 Worker
 ```
 
-Coordinator 应综合文件数量、领域数量、风险、预计时间、成功条件和是否需要写入，不能因为存在工具就永远进入 ReAct。
+LLM Router 负责理解任务结构并为 Project 提出 `DIRECT / PLAN_EXECUTE`，不能只根据“难度”或用户使用了“计划”“分析”等词分类。普通非 Project Chat 继续保留现有 ReAct 兼容路径；Project 的步骤内 ReAct 延后到阶段 11。Runtime 不再承担主要语义分类，但必须校验 Project capability、工具权限、沙箱确认、预算和策略可用性；模型选择不可执行策略时只能明确降级或失败，不能扩大权限。策略选择与修改权限相互独立。
 
 ### 5.2 完成定义
 
@@ -339,15 +342,65 @@ Plan：
 
 ### 阶段 5：统一策略选择与跨材料科研编排
 
-实现自动 ReAct/Plan 选择、论文代码实验文献联合分析、领域 Verifier 和受限 Reflection。
+已完成确定性 AUTO ReAct/Plan 选择、论文代码实验文献联合分析、领域 Verifier 和受限 Reflection 基础。该确定性选择器是历史交付，不代表后续继续以关键词承担主要语义分类；阶段 8 将改为 LLM Router 提出策略、Runtime 校验执行。
 
 ### 阶段 6：受控 Worker 验证
 
 实现只读 WorkerTaskPacket、单写者父 Agent、结构化 WorkerResult 和跨材料差异报告。
 
-### 阶段 7：Pro 模式研究
+### 阶段 7：Pro 模式研究（历史编号，顺序后移）
 
-只有第一版通过真实科研 Project 验收后才能开始。
+该阶段保留历史编号，但实际顺序后移到阶段 11 之后。只有第一版体验、可靠性和复杂执行范式通过真实科研 Project 验收后才能开始。
+
+### 阶段 8：统一入口、LLM Router 与记忆贯通
+
+状态：`COMPLETED`
+
+- Project 页面只保留一个用户输入入口，不再要求用户在 Chat 与 Plan 之间手动选择。
+- LLM Router 根据任务结构、工具依赖、步骤依赖和交付目标为 Project 提出 `DIRECT / PLAN_EXECUTE`；后端只校验候选策略是否符合当前 capability、权限、工具、沙箱确认和预算。普通非 Project Chat 的 ReAct 兼容路径保持不变。
+- 已确认的语言、格式等全局用户偏好不经过相似度召回，必须进入 DIRECT、Planner、Plan 步骤和最终总结；其他长期记忆继续按 scope 与相关性检索。
+- 两种 Project 顶层策略共享同一 session、run、ContextPackage、事件语义和 canonical answer；一次用户请求只能发布一条正式最终回答。
+- 本阶段复用现有 Plan 执行器，不引入新的 Plan-and-Execute、ReAct 或 Reflection 循环。
+
+完成记录：Worker 16 已完成 Project 单输入入口、结构化 LLM Router、全局确认偏好贯通、Plan 确认/恢复不重复消息、自然语言 Candidate 与沙箱执行意图路由，以及外部 E2B 环境下的测试隔离。真实用户旅程覆盖无工具 DIRECT、单文件读取、多文件比较、E2B 确认后执行和沙箱关闭时普通问答；后端完整测试 1197 项零失败，前端定向测试 2/2 与生产构建通过，根目录完整 Maven 回归通过。
+
+退出条件：已满足。默认中文偏好在两种 Project 顶层策略中一致生效；简单知识问题进入 DIRECT，Project 文件、执行和 Candidate 工具任务进入 PLAN_EXECUTE；策略越权被 Runtime 拒绝或确定性降级；刷新后无重复消息、重复计划或重复最终回答。
+
+### 阶段 9：Project 页面与执行过程展示整理
+
+状态：`READY_TO_START`
+
+- 保留项目、会话、文件三个区域平均分配页面高度的现有结构，禁止修改三区域的 flex 比例、最小高度和总体布局算法。
+- 标题栏高度与内边距保持稳定，展开/收起只改变区域内容可见性；文字箭头替换为标准图标按钮。
+- 移除用户层面的 Chat/Plan 双标签和 Plan 独立输入框，Plan 作为同一会话中的可折叠执行卡展示。
+- 默认只展示状态、步骤进度、耗时、等待确认和失败原因；工具参数、原始输出与内部过程进入运行详情，不作为普通聊天气泡刷屏。
+- “预览 / 证据 / 改动 / Versions”只保留一组标签，修复选中态、文字包裹和点击区域，不保留重复导航。
+
+退出条件：桌面与窄屏下标题不跳动、文字不溢出、三区域比例不变；Project 的 DIRECT/PLAN 均从同一输入框完成；Plan 过程可展开查看但默认不污染会话；检查器不存在重复标签。
+
+### 阶段 10：Evidence 分层、工具自修复与状态语义
+
+状态：`PENDING_AFTER_STAGE_9`
+
+- 普通知识问答、产品说明和操作咨询不因缺少 Project Evidence 被阻断；只有引用当前 Project 事实、Candidate 验证/应用和其他外部影响操作进入对应硬校验。
+- 工具失败后向模型提供结构化、脱敏的工具名、参数、错误码、错误消息和剩余尝试次数，使下一次调用能够修正参数或改变方法。
+- 参数或输入校验错误允许有界重试；完全相同的失败调用不得循环；权限拒绝、用户取消、Provider 关闭和不可恢复错误不得自动重试。
+- 对齐后端、Event、前端与 canonical answer 的 `PARTIAL / FAILED / CANCELLED / TIMED_OUT` 语义。
+- 原始 stdout/stderr 可查看；只读总结必须标明“基于输出、未独立验证”，且不能覆盖执行事实。
+
+退出条件：普通问答不再被 Evidence 闸门误伤；可恢复工具错误能够通过修改参数恢复；重复失败有确定终止条件；相同终态在 API、事件、界面和最终回答中含义一致。
+
+### 阶段 11：Plan-and-Execute、步骤内 ReAct 与事件触发 Reflection
+
+状态：`DEFERRED_UNTIL_STAGE_8_10_ACCEPTED`
+
+- Planner 生成目标、依赖步骤、成功条件和预算；每个可执行步骤内部使用受预算约束的 ReAct 获取真实结果。
+- 仅在步骤失败、结果不足、结果冲突或确定性验证不通过时触发 Reflection；不得每一步固定反思。
+- Reflection 只能修改尚未执行的步骤和剩余工作，不能改写已确认执行事实、扩大工具权限或绕过用户确认。
+- 设置总工具预算、最大步骤数、最大重规划次数和无进展终止条件；权限拒绝、用户取消、Provider 不可用等外部阻断不触发模型反思循环。
+- 本阶段开始前必须根据阶段 8 至阶段 10 的真实运行数据重新审查方案，不提前冻结复杂实现细节。
+
+退出条件：中间结果不足时能够调整剩余计划；无关步骤可被取消；已完成步骤不重复；失败不会形成 Reflection 循环；复杂任务仍只发布一个 canonical answer。
 
 ## 14. 串行 Worker 开发协议
 
@@ -582,7 +635,7 @@ Worker 开发
 
 ### Worker 15：Candidate 沙箱验证与显式应用闭环
 
-状态：`READY_TO_START`
+状态：`DEPLOYED_ON_GITHUB_MAIN / POST_MVP_OPTIMIZATION_READY`
 
 - 目标是连接已经交付的 Candidate、Worker 14 沙箱和 Worker 9 revision：Agent 生成的 Candidate 始终先保持 `NOT_APPLIED`，在受信 ProjectVersion 的沙箱工作副本中运行必要验证，向用户展示 diff、原始 stdout/stderr、执行事实与只读分析摘要；只有用户显式接受后，才沿 Worker 9 既有流程生成新的不可变 ProjectVersion。
 - 第一版仅实现最短闭环：选择一个现有 Candidate、物化原始 ProjectVersion 与 Candidate 到隔离工作副本、执行服务端允许的编译/测试 profile、保存与 Candidate 绑定的验证 receipt、展示验证结果、接受或拒绝、接受后应用并保留历史/回滚/导出。不得自动应用，不得绕过用户确认，不得直接修改当前 ProjectVersion。
@@ -592,6 +645,41 @@ Worker 开发
 - 所有权限定为 Candidate 验证编排、验证结果投影、Project 页面审查/确认交互及必要的向后兼容迁移和测试。不得修改 Worker 10-14 的工具权限、Evidence 语义、持久化恢复、Broker 隔离、Candidate `NOT_APPLIED` 默认状态和 Worker 9 revision/rollback/export 契约。
 - 必测最小矩阵：验证成功、编译/测试失败、超时、取消、重复请求幂等、刷新/重启后结果可见、Candidate 或 ProjectVersion 变化使旧验证失效、拒绝不写 Project、接受后恰好生成一个新 ProjectVersion、回滚/导出不回归、沙箱关闭或不可用时普通问答与 Candidate 审查仍可用且验证明确不可用。
 - 停止条件：需要任意宿主机命令、开放网络或密钥、真实模型/MCP 扩权、自动应用、跨 Worker 大范围重构、删除/覆盖用户文件、不可逆迁移或产品方向取舍。遇到这些情况必须回主对话确认。
+
+- 完成记录：Candidate 沙箱验证与显式应用闭环已进入 `afafe73`；E2B Provider 由 `c751a42` 接入并通过 PR #101 合并，一键部署与 HTTP 确认修复分别进入 `8f680d1`、`db36b82`。E2B 是新增 Provider，原有 `docker-sbx` 保留；后续不得把业务层绑定到单一 Provider。
+
+### Worker 16：统一入口、LLM Router 与长期记忆贯通
+
+状态：`COMPLETED`
+
+- 对应阶段 8。已合并 Project Chat 与 Plan 的用户入口，由 LLM Router 输出 `DIRECT / PLAN_EXECUTE` 结构化策略建议，Runtime 校验 capability、工具、预算与确认边界后执行；普通非 Project Chat 保留 ReAct。
+- 全局用户偏好已贯通 DIRECT、Planner、步骤和最终总结；一次请求只能生成一条正式最终回答。
+- 复用现有 Runtime、Plan、Task Run 和 ContextPackage，不创建第二套路由、会话、状态或 canonical answer 生命周期。
+- 验收完成：Project 两种顶层策略路由、中文偏好、非法/不可用 Router 降级、普通问答不调用工具、Plan 沙箱确认与恢复、刷新后不重复；真实 E2B 执行与沙箱关闭边界均已覆盖。
+
+### Worker 17：Project 页面与执行过程展示整理
+
+状态：`READY_TO_START`
+
+- 对应阶段 9。只整理 Project 页面入口、标题栏、展开图标、Plan 执行卡和检查器标签。
+- 冻结项目、会话、文件三区域平均分配页面高度的现有结构；禁止修改三区域 flex 比例、最小高度与总体布局算法。
+- 必测：桌面/窄屏视觉回归、标题位置稳定、单输入入口、Plan 详情折叠、无重复标签、无文字溢出。
+
+### Worker 18：Evidence 分层、工具自修复与状态语义
+
+状态：`PENDING_AFTER_WORKER_17`
+
+- 对应阶段 10。普通问答不受 Project Evidence 硬闸门阻断；Project 事实声明和外部影响操作继续使用对应校验。
+- 工具错误以结构化、脱敏上下文反馈给模型，允许改变参数或方法的有界重试，禁止相同失败循环和不可恢复错误重试。
+- 对齐 `PARTIAL / FAILED / CANCELLED / TIMED_OUT`，保留原始输出和明确标注的只读总结。
+
+### Worker 19：Plan-and-Execute、步骤内 ReAct 与事件触发 Reflection
+
+状态：`DEFERRED_REVIEW_REQUIRED`
+
+- 对应阶段 11。只能在 Worker 16 至 Worker 18 验收并取得真实运行数据后启动，启动前由主对话重新冻结设计和预算。
+- Planner 负责目标、依赖和成功条件；步骤内部使用 ReAct；Reflection 只由失败、结果不足、冲突或验证不通过触发。
+- 必须有最大重规划次数、总预算、无进展检测和明确停止条件，不能宣称该范式保证所有任务成功。
 
 ## 16. 审查与停止条件
 
@@ -612,7 +700,7 @@ Worker 开发
 
 1. 能上传并版本化完整文件夹。
 2. 能结构化理解论文、代码、实验和文献。
-3. 能自动选择 ReAct 或 Plan 完成跨材料分析。
+3. 能由 LLM Router 在 DIRECT、REACT 与 PLAN_EXECUTE 中提出合适策略，并由 Runtime 在现有权限和预算内校验执行。
 4. 结论均带可追溯证据和文件版本。
 5. 能生成论文与代码 Candidate ChangeSet。
 6. 候选修改在沙箱中通过必要验证。
@@ -621,4 +709,4 @@ Worker 开发
 9. 长任务能够暂停、恢复、取消和明确失败。
 10. 不发生越权读取、未授权写入、虚假实验或虚假完成。
 
-满足这些条件后，才能规划 Pro 模式的自主研究循环。
+阶段 8 至阶段 10 完成后，第一版进入体验与可靠性收口；阶段 11 通过单独验收后，才能规划 Pro 模式的自主研究循环。

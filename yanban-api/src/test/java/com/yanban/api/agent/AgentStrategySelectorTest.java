@@ -38,20 +38,21 @@ class AgentStrategySelectorTest {
     }
 
     @Test
-    void explicitServerAllowedStrategyOverridesAutoSignals() {
+    void explicitDirectCannotBypassProjectPlanToolBoundary() {
         AgentRuntimeRequest request = projectRequest(AgentStrategy.DIRECT,
                 "Compare the LaTeX paper with code and experiment results, then verify BibTeX citations.",
                 RESEARCH_TOOLS, 8, 12);
 
         AgentStrategySelection decision = selector.decide(AgentCoordinationRequest.projectRead(request));
 
-        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
-        assertThat(decision.explicitOverride()).isTrue();
+        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(decision.explicitOverride()).isFalse();
         assertThat(decision.orchestration().selectionOrigin())
-                .isEqualTo(AgentStrategySelectionOrigin.EXPLICIT_OVERRIDE);
-        assertThat(decision.degraded()).isFalse();
+                .isEqualTo(AgentStrategySelectionOrigin.EXPLICIT_FALLBACK);
+        assertThat(decision.degraded()).isTrue();
         assertThat(decision.orchestration().reasonCodes())
-                .contains(AgentStrategyReasonCode.EXPLICIT_STRATEGY_SELECTED);
+                .contains(AgentStrategyReasonCode.EXPLICIT_STRATEGY_NOT_ALLOWED,
+                        AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
     }
 
     @Test
@@ -61,6 +62,40 @@ class AgentStrategySelectorTest {
 
         assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
         assertThat(decision.orchestration().signals()).contains(AgentStrategySignal.SIMPLE_QUESTION);
+    }
+
+    @Test
+    void naturalCandidateChangeIntentIsSharedAndAlwaysRequiresProjectPlan() {
+        List<String> requests = List.of(
+                "\u8bf7\u4fee\u6539 Runner.java\uff0c\u8ba9\u5b83\u589e\u52a0\u8d85\u65f6\u5904\u7406\uff1b\u4e0d\u8981\u81ea\u52a8\u5e94\u7528",
+                "fix this Java file");
+
+        assertThat(requests).allMatch(ProjectCandidateChangeIntent::requiresCandidateChange);
+        assertThat(requests).allSatisfy(message -> {
+            AgentStrategySelection selection = selector.decide(AgentCoordinationRequest.projectRead(
+                    projectRequest(AgentStrategy.AUTO, message, RESEARCH_TOOLS, 6, 8)));
+            assertThat(selection.selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+            assertThat(selection.serverCandidates())
+                    .containsExactly(AgentStrategy.DIRECT, AgentStrategy.PLAN_EXECUTE);
+            assertThat(selection.orchestration().reasonCodes())
+                    .contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
+        });
+    }
+
+    @Test
+    void candidateChangeIntentKeepsNegationAndNonCodeBoundaries() {
+        assertThat(List.of(
+                "\u8bf7\u5206\u6790\u5982\u4f55\u4fee\u6539 Runner.java\uff0c\u4f46\u4e0d\u8981\u751f\u6210\u6539\u52a8",
+                "\u8bfb\u53d6\u6587\u6863\u5e76\u6bd4\u8f83 Candidate \u548c patch \u7684\u6982\u5ff5\uff0c\u4e0d\u8981\u4fee\u6539\u9879\u76ee",
+                "\u4fee\u6539\u8bba\u6587\u7684\u5206\u6790\u65b9\u6cd5\u5e76\u7ed9\u51fa\u5efa\u8bae"))
+                .noneMatch(ProjectCandidateChangeIntent::requiresCandidateChange);
+
+        AgentStrategySelection readOnly = selector.decide(AgentCoordinationRequest.projectRead(projectRequest(
+                AgentStrategy.AUTO,
+                "\u8bf7\u5206\u6790\u5982\u4f55\u4fee\u6539 Runner.java\uff0c\u4f46\u4e0d\u8981\u751f\u6210\u6539\u52a8",
+                RESEARCH_TOOLS, 6, 8)));
+        assertThat(readOnly.selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(readOnly.serverCandidates()).doesNotContain(AgentStrategy.SINGLE_STEP_REACT);
     }
 
     @Test
@@ -139,18 +174,19 @@ class AgentStrategySelectorTest {
     }
 
     @Test
-    void insufficientPlanBudgetDegradesToReactWithoutChangingTools() {
+    void insufficientProjectPlanBudgetFailsClosedWithoutSelectingReact() {
         AgentRuntimeRequest request = projectRequest(AgentStrategy.AUTO,
                 "Compare the LaTeX paper with code and verify experiment results.", RESEARCH_TOOLS, 1, 1);
 
         AgentStrategySelection decision = selector.decide(AgentCoordinationRequest.projectRead(request));
 
-        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.SINGLE_STEP_REACT);
+        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
         assertThat(decision.degraded()).isTrue();
         assertThat(decision.degradedFrom()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
         assertThat(decision.orchestration().reasonCodes()).contains(
                 AgentStrategyReasonCode.PLAN_BUDGET_INSUFFICIENT,
-                AgentStrategyReasonCode.DEGRADED_TO_REACT);
+                AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN,
+                AgentStrategyReasonCode.DEGRADED_TO_DIRECT);
         assertThat(request.allowedToolNames()).containsExactlyElementsOf(RESEARCH_TOOLS);
     }
 
@@ -179,9 +215,11 @@ class AgentStrategySelectorTest {
 
         AgentStrategySelection decision = selector.decide(AgentCoordinationRequest.projectRead(request));
 
-        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.SINGLE_STEP_REACT);
+        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
         assertThat(decision.orchestration().reasonCodes())
-                .contains(AgentStrategyReasonCode.MATERIAL_COVERAGE_INCOMPLETE);
+                .contains(AgentStrategyReasonCode.MATERIAL_COVERAGE_INCOMPLETE,
+                        AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN)
+                .doesNotContain(AgentStrategyReasonCode.DEGRADED_TO_REACT);
         assertThat(decision.orchestration().materialRequirements())
                 .filteredOn(requirement -> requirement.material() == ResearchMaterialKind.CODE
                         || requirement.material() == ResearchMaterialKind.EXPERIMENT_CONFIG)
@@ -198,7 +236,7 @@ class AgentStrategySelectorTest {
 
         assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
         assertThat(decision.degraded()).isTrue();
-        assertThat(decision.degradedFrom()).isEqualTo(AgentStrategy.SINGLE_STEP_REACT);
+        assertThat(decision.degradedFrom()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
         assertThat(decision.orchestration().reasonCodes()).contains(
                 AgentStrategyReasonCode.EXPLICIT_STRATEGY_NOT_ALLOWED,
                 AgentStrategyReasonCode.NO_ALLOWED_TOOLS,
@@ -206,7 +244,7 @@ class AgentStrategySelectorTest {
     }
 
     @Test
-    void projectAutoDefaultsToReadOnlyReactWithoutMaterialKeywords() {
+    void projectAutoDefaultsToPlanForReadOnlyProjectObservations() {
         List<String> explorationTools = List.of("project_manifest", "project_read_file");
         AgentStrategySelection english = selector.decide(AgentCoordinationRequest.projectRead(projectRequest(
                 AgentStrategy.AUTO, "List this project's directory structure.", explorationTools, 4, 4)));
@@ -214,46 +252,79 @@ class AgentStrategySelectorTest {
                 AgentStrategy.AUTO, "README 里说明了什么？", explorationTools, 4, 4)));
 
         assertThat(List.of(english.selectedStrategy(), chinese.selectedStrategy()))
-                .containsOnly(AgentStrategy.SINGLE_STEP_REACT);
+                .containsOnly(AgentStrategy.PLAN_EXECUTE);
         assertThat(List.of(english, chinese)).allSatisfy(decision -> {
             assertThat(decision.orchestration().signals()).contains(
                     AgentStrategySignal.PROJECT_SCOPE, AgentStrategySignal.PROJECT_READ_REQUIRED);
             assertThat(decision.orchestration().reasonCodes())
-                    .contains(AgentStrategyReasonCode.AUTO_TOOL_TASK_REACT);
+                    .contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
             assertThat(decision.orchestration().selectionOrigin())
                     .isEqualTo(AgentStrategySelectionOrigin.SERVER_AUTO);
         });
     }
 
     @Test
-    void genericChineseCodeEvidenceCitationDoesNotInventBibtexMaterialOrPromoteAutoToPlan() {
+    void genericChineseCodeEvidenceCitationUsesPlanWithoutInventingBibtexMaterial() {
         AgentRuntimeRequest request = projectRequest(AgentStrategy.AUTO,
                 "\u8bf7\u8bfb\u53d6\u5e76\u6982\u62ec\u4ee3\u7801\u6587\u4ef6 good_code/s2/main.py \u4e2d main()\uff0c\u5e76\u5f15\u7528\u5177\u4f53\u4ee3\u7801\u884c\u3002",
                 RESEARCH_TOOLS, 8, 12);
 
         AgentStrategySelection decision = selector.decide(AgentCoordinationRequest.projectRead(request));
 
-        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.SINGLE_STEP_REACT);
+        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
         assertThat(decision.orchestration().materialRequirements())
                 .extracting(ResearchMaterialRequirement::material)
                 .containsExactly(ResearchMaterialKind.CODE);
         assertThat(decision.orchestration().signals()).doesNotContain(
                 AgentStrategySignal.MATERIAL_BIBTEX,
-                AgentStrategySignal.CROSS_MATERIAL_TASK,
-                AgentStrategySignal.PLAN_BUDGET_AVAILABLE);
+                AgentStrategySignal.CROSS_MATERIAL_TASK);
         assertThat(decision.orchestration().reasonCodes())
-                .contains(AgentStrategyReasonCode.AUTO_TOOL_TASK_REACT);
+                .contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
     }
 
     @Test
-    void projectExplorationWithoutToolBudgetDegradesFromReactToDirect() {
+    void explicitSingleFileRunRequiresPlanWithoutInventingExperimentConfigMaterial() {
+        AgentStrategySelection decision = selector.decide(AgentCoordinationRequest.projectRead(projectRequest(
+                AgentStrategy.AUTO, "src/main/java/xhs_1111.java，运行这个程序，结果是什么？",
+                RESEARCH_TOOLS, 8, 12)));
+
+        assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(decision.orchestration().signals()).contains(
+                AgentStrategySignal.MATERIAL_CODE,
+                AgentStrategySignal.SANDBOX_EXECUTION_REQUIRED,
+                AgentStrategySignal.PLAN_BUDGET_AVAILABLE);
+        assertThat(decision.orchestration().reasonCodes())
+                .contains(AgentStrategyReasonCode.SANDBOX_EXECUTION_REQUIRES_PLAN);
+        assertThat(decision.orchestration().materialRequirements())
+                .extracting(ResearchMaterialRequirement::material)
+                .containsExactly(ResearchMaterialKind.CODE)
+                .doesNotContain(ResearchMaterialKind.EXPERIMENT_CONFIG);
+    }
+
+    @Test
+    void explicitExperimentResultCsvStillRequiresExperimentConfigMaterial() {
+        AgentStrategySelection decision = selector.decide(AgentCoordinationRequest.projectRead(projectRequest(
+                AgentStrategy.AUTO, "请总结实验结果 CSV 并解释指标。", RESEARCH_TOOLS, 8, 12)));
+
+        assertThat(decision.orchestration().materialRequirements())
+                .extracting(ResearchMaterialRequirement::material)
+                .containsExactly(ResearchMaterialKind.EXPERIMENT_CONFIG);
+        assertThat(decision.orchestration().signals())
+                .contains(AgentStrategySignal.MATERIAL_EXPERIMENT_CONFIG)
+                .doesNotContain(AgentStrategySignal.SANDBOX_EXECUTION_REQUIRED);
+    }
+
+    @Test
+    void projectExplorationWithoutToolBudgetFailsClosedFromRequiredPlan() {
         AgentStrategySelection decision = selector.decide(AgentCoordinationRequest.projectRead(projectRequest(
                 AgentStrategy.AUTO, "README 里说明了什么？", List.of("project_read_file"), 4, 0)));
 
         assertThat(decision.selectedStrategy()).isEqualTo(AgentStrategy.DIRECT);
         assertThat(decision.degraded()).isTrue();
-        assertThat(decision.degradedFrom()).isEqualTo(AgentStrategy.SINGLE_STEP_REACT);
+        assertThat(decision.degradedFrom()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
         assertThat(decision.orchestration().reasonCodes()).contains(
+                AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN,
+                AgentStrategyReasonCode.PLAN_BUDGET_INSUFFICIENT,
                 AgentStrategyReasonCode.TOOL_BUDGET_INSUFFICIENT,
                 AgentStrategyReasonCode.DEGRADED_TO_DIRECT);
     }

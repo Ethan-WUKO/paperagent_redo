@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -17,11 +19,24 @@ public class AgentStrategySelector {
 
     private static final int AUTO_PLAN_MIN_STEPS = 2;
     private static final int AUTO_PLAN_MIN_TOOL_CALLS = 2;
+    private static final Pattern NAMED_FILE_REFERENCE = Pattern.compile(
+            "(?iu)(?:[\\p{L}\\p{N}_-]+\\.)+[\\p{L}\\p{N}_-]+");
     private static final List<AgentStrategy> CHAT_CANDIDATES = List.of(
             AgentStrategy.DIRECT, AgentStrategy.SINGLE_STEP_REACT);
     private static final List<AgentStrategy> PROJECT_CANDIDATES = List.of(
-            AgentStrategy.DIRECT, AgentStrategy.SINGLE_STEP_REACT, AgentStrategy.PLAN_EXECUTE);
+            AgentStrategy.DIRECT, AgentStrategy.PLAN_EXECUTE);
     private static final Map<ResearchMaterialKind, List<String>> MATERIAL_TOOLS = materialTools();
+    private final AgentLlmRouter llmRouter;
+
+    /** Compatibility constructor for narrow unit tests and legacy reflection helpers. */
+    public AgentStrategySelector() {
+        this.llmRouter = null;
+    }
+
+    @Autowired
+    public AgentStrategySelector(AgentLlmRouter llmRouter) {
+        this.llmRouter = llmRouter;
+    }
 
     public AgentStrategy select(String userMessage, AgentToolPolicyEngine.Decision toolPolicy) {
         return select(userMessage, toolPolicy == null ? null : toolPolicy.resolved(), isPlanReflectIntent(userMessage));
@@ -65,7 +80,104 @@ public class AgentStrategySelector {
                 return explicit;
             }
         }
+        // The unified semantic router is the Project input contract. Ordinary/non-Project Chat keeps its
+        // established deterministic selection and model-call shape for backwards compatibility.
+        if (requested == AgentStrategy.AUTO && llmRouter != null
+                && request.capability() == AgentRequestCapability.PROJECT_READ) {
+            AgentLlmRouter.RoutingResult routed = llmRouter.route(runtime, candidates);
+            if (!routed.successful()) {
+                return routerFallback(requested, candidates, analysis, routed.failure());
+            }
+            return modelSelection(requested, candidates, analysis, routed.suggestion());
+        }
         return autoSelection(requested, candidates, analysis, requested != AgentStrategy.AUTO);
+    }
+
+    private AgentStrategySelection modelSelection(AgentStrategy requested,
+                                                   List<AgentStrategy> candidates,
+                                                   Analysis analysis,
+        AgentLlmRouter.Suggestion suggestion) {
+        AgentStrategy proposed = suggestion.strategy();
+        boolean projectToolSuggestionConflict = proposed != AgentStrategy.PLAN_EXECUTE
+                && analysis.requiresProjectObservations();
+        if (proposed == AgentStrategy.DIRECT && candidates.contains(AgentStrategy.DIRECT)
+                && !projectToolSuggestionConflict) {
+            return selection(requested, AgentStrategy.DIRECT, false, false, null, candidates, analysis,
+                    List.of(AgentStrategyReasonCode.LLM_ROUTER_DIRECT), "llm_router_direct");
+        }
+        if (proposed == AgentStrategy.SINGLE_STEP_REACT
+                && candidates.contains(AgentStrategy.SINGLE_STEP_REACT) && analysis.reactExecutable()) {
+            return selection(requested, AgentStrategy.SINGLE_STEP_REACT, false, false, null, candidates, analysis,
+                    List.of(AgentStrategyReasonCode.LLM_ROUTER_REACT), "llm_router_react");
+        }
+        if (proposed == AgentStrategy.PLAN_EXECUTE
+                && candidates.contains(AgentStrategy.PLAN_EXECUTE) && analysis.planExecutable()) {
+            return selection(requested, AgentStrategy.PLAN_EXECUTE, false, false, null, candidates, analysis,
+                    List.of(AgentStrategyReasonCode.LLM_ROUTER_PLAN), "llm_router_plan");
+        }
+
+        List<AgentStrategyReasonCode> reasons = new ArrayList<>();
+        reasons.add(AgentStrategyReasonCode.LLM_ROUTER_SUGGESTION_NOT_ALLOWED);
+        if (projectToolSuggestionConflict || analysis.requiresProjectObservations()) {
+            reasons.add(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
+        }
+        if (analysis.sandboxExecutionRequired()) {
+            reasons.add(AgentStrategyReasonCode.SANDBOX_EXECUTION_REQUIRES_PLAN);
+        }
+        if (!analysis.toolsAvailable()) reasons.add(AgentStrategyReasonCode.NO_ALLOWED_TOOLS);
+        if (analysis.toolsAvailable() && !analysis.toolBudgetAvailable()) {
+            reasons.add(AgentStrategyReasonCode.TOOL_BUDGET_INSUFFICIENT);
+        }
+        if (proposed == AgentStrategy.PLAN_EXECUTE && !analysis.planBudgetAvailable()) {
+            reasons.add(AgentStrategyReasonCode.PLAN_BUDGET_INSUFFICIENT);
+        }
+        if (proposed == AgentStrategy.PLAN_EXECUTE && !analysis.materialCoverageComplete()) {
+            reasons.add(AgentStrategyReasonCode.MATERIAL_COVERAGE_INCOMPLETE);
+        }
+        if (projectToolSuggestionConflict
+                && candidates.contains(AgentStrategy.PLAN_EXECUTE) && analysis.planExecutable()) {
+            return selection(requested, AgentStrategy.PLAN_EXECUTE, false, true, proposed,
+                    candidates, analysis, reasons, "llm_router_project_tools_recovered_to_plan");
+        }
+        if (!analysis.sandboxExecutionRequired() && proposed == AgentStrategy.PLAN_EXECUTE
+                && candidates.contains(AgentStrategy.SINGLE_STEP_REACT) && analysis.reactExecutable()) {
+            reasons.add(AgentStrategyReasonCode.DEGRADED_TO_REACT);
+            return selection(requested, AgentStrategy.SINGLE_STEP_REACT, false, true, proposed,
+                    candidates, analysis, reasons, "llm_router_plan_degraded_to_react");
+        }
+        reasons.add(AgentStrategyReasonCode.DEGRADED_TO_DIRECT);
+        return selection(requested, AgentStrategy.DIRECT, false, true, proposed,
+                candidates, analysis, reasons, "llm_router_suggestion_degraded_to_direct");
+    }
+
+    private AgentStrategySelection routerFallback(AgentStrategy requested,
+                                                   List<AgentStrategy> candidates,
+                                                   Analysis analysis,
+                                                   AgentLlmRouter.Failure failure) {
+        AgentStrategyReasonCode failureCode = failure == AgentLlmRouter.Failure.MODEL_UNAVAILABLE
+                ? AgentStrategyReasonCode.LLM_ROUTER_MODEL_UNAVAILABLE
+                : AgentStrategyReasonCode.LLM_ROUTER_INVALID_RESPONSE;
+        // Reuse the existing bounded deterministic analysis when the semantic router is unavailable.
+        // This fallback can select only a server candidate that already passed the same tool/material/budget checks.
+        AgentStrategySelection fallback = autoSelection(requested, candidates, analysis, false);
+        AgentStrategyReasonCode fallbackCode = switch (fallback.selectedStrategy()) {
+            case PLAN_EXECUTE -> AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_PLAN;
+            case SINGLE_STEP_REACT -> AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_REACT;
+            default -> AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_DIRECT;
+        };
+        LinkedHashSet<AgentStrategyReasonCode> reasons = new LinkedHashSet<>(
+                fallback.orchestration().reasonCodes());
+        reasons.add(failureCode);
+        reasons.add(fallbackCode);
+        AgentOrchestrationRequirements fallbackAudit = new AgentOrchestrationRequirements(
+                fallback.orchestration().signals(), List.copyOf(reasons),
+                fallback.orchestration().materialRequirements(), AgentStrategySelectionOrigin.ROUTER_FALLBACK,
+                fallback.orchestration().consistencyChecks());
+        String failureReason = failure == AgentLlmRouter.Failure.MODEL_UNAVAILABLE
+                ? "llm_router_model_unavailable" : "llm_router_invalid_response";
+        return new AgentStrategySelection(requested, fallback.selectedStrategy(), false,
+                fallback.degraded(), fallback.degradedFrom(), candidates, fallbackAudit,
+                failureReason + "_fallback_" + fallback.selectedStrategy().name().toLowerCase(Locale.ROOT));
     }
 
     private AgentStrategySelection explicitSelection(AgentStrategy requested,
@@ -74,7 +186,7 @@ public class AgentStrategySelector {
         if (!candidates.contains(requested)) {
             return null;
         }
-        if (requested == AgentStrategy.DIRECT) {
+        if (requested == AgentStrategy.DIRECT && !analysis.requiresProjectObservations()) {
             return selection(requested, AgentStrategy.DIRECT, true, false, null, candidates, analysis,
                     List.of(AgentStrategyReasonCode.EXPLICIT_STRATEGY_SELECTED), "explicit_strategy_direct");
         }
@@ -99,11 +211,25 @@ public class AgentStrategySelector {
         }
         boolean wantedPlan = candidates.contains(AgentStrategy.PLAN_EXECUTE) && analysis.planTask();
         if (wantedPlan && analysis.planExecutable()) {
-            reasons.add(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN);
-            return selection(requested, AgentStrategy.PLAN_EXECUTE, false, false, null, candidates, analysis,
-                    reasons, "auto_cross_material_plan");
+            if (analysis.signals().contains(AgentStrategySignal.CROSS_MATERIAL_TASK)) {
+                reasons.add(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN);
+            }
+            if (analysis.requiresProjectObservations()) {
+                reasons.add(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
+            }
+            if (analysis.sandboxExecutionRequired()) {
+                reasons.add(AgentStrategyReasonCode.SANDBOX_EXECUTION_REQUIRES_PLAN);
+            }
+            return selection(requested, AgentStrategy.PLAN_EXECUTE, false, rejectedExplicit,
+                    rejectedExplicit ? requested : null, candidates, analysis,
+                    reasons, analysis.sandboxExecutionRequired()
+                            ? "sandbox_execution_requires_plan"
+                            : "project_tools_require_plan");
         }
         if (wantedPlan) {
+            if (analysis.requiresProjectObservations()) {
+                reasons.add(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
+            }
             if (!analysis.planBudgetAvailable()) {
                 reasons.add(AgentStrategyReasonCode.PLAN_BUDGET_INSUFFICIENT);
             }
@@ -111,7 +237,7 @@ public class AgentStrategySelector {
                 reasons.add(AgentStrategyReasonCode.MATERIAL_COVERAGE_INCOMPLETE);
             }
         }
-        if (analysis.toolTask() && analysis.reactExecutable()) {
+        if (!analysis.requiresProjectObservations() && analysis.toolTask() && analysis.reactExecutable()) {
             reasons.add(wantedPlan ? AgentStrategyReasonCode.DEGRADED_TO_REACT
                     : AgentStrategyReasonCode.AUTO_TOOL_TASK_REACT);
             return selection(requested, AgentStrategy.SINGLE_STEP_REACT, false, wantedPlan || rejectedExplicit,
@@ -175,8 +301,8 @@ public class AgentStrategySelector {
                 "代码", "源码", "实现", "仓库", "脚本")) {
             materials.add(ResearchMaterialKind.CODE);
         }
-        if (containsAny(normalized, "experiment", "experiments", "result", "results", "metric", "metrics", "configuration", "config", "csv", "yaml", "json",
-                "实验", "结果", "指标", "配置", "日志", "数据")) {
+        if (containsAny(normalized, "experiment", "experiments", "metric", "metrics", "configuration", "config", "csv", "yaml", "log", "logs",
+                "实验", "指标", "配置", "日志")) {
             materials.add(ResearchMaterialKind.EXPERIMENT_CONFIG);
         }
         if (containsAny(normalized, "bibtex", "bib", "citation", "citations", "bibliography", "reference", "references", "参考文献", "文献")) {
@@ -196,10 +322,23 @@ public class AgentStrategySelector {
         boolean multiStage = containsAny(normalized, "compare", "synthesize", "then", "multi-stage", "across", "correlate",
                 "比较", "对比", "结合", "综合", "然后", "多阶段", "跨材料", "关联", "先", "再");
         boolean toolUseRequested = containsAny(normalized, "search", "find", "look up", "look it up", "inspect", "read", "summarize",
-                "analyze", "audit", "查找", "搜索", "检索", "读取", "检查", "分析", "总结", "审计");
+                "analyze", "audit", "list files", "directory structure",
+                "查找", "搜索", "检索", "读取", "检查", "分析", "总结", "审计", "列出", "目录结构");
         boolean simpleQuestion = containsAny(normalized, "what is", "why", "how does", "explain", "是什么", "为什么", "解释")
                 && !toolUseRequested && materials.isEmpty();
+        boolean positiveNamedFileObservation = (NAMED_FILE_REFERENCE
+                .matcher(userMessage == null ? "" : userMessage).find()
+                || containsAny(normalized, "readme", "makefile", "license"))
+                && !declinesProjectObservation(normalized);
         boolean crossMaterial = materials.size() >= 2;
+        boolean sandboxExecutionRequired = project
+                && ProjectSandboxExecutionIntent.requiresGovernedExecution(userMessage);
+        boolean candidateChangeRequired = project
+                && ProjectCandidateChangeIntent.requiresCandidateChange(userMessage);
+        boolean projectToolRequired = project && (positiveNamedFileObservation
+                || (toolUseRequested && !declinesProjectObservation(normalized))
+                || sandboxExecutionRequired
+                || candidateChangeRequired);
         List<DomainConsistencyCheck> consistencyChecks = crossMaterial && fileHashEquality
                 ? List.of(DomainConsistencyCheck.EVIDENCE_FILE_HASH_EQUALITY) : List.of();
 
@@ -212,8 +351,9 @@ public class AgentStrategySelector {
         boolean materialCoverageComplete = requirements.stream().allMatch(ResearchMaterialRequirement::covered);
         boolean planBudgetAvailable = maxSteps >= AUTO_PLAN_MIN_STEPS
                 && policy != null && policy.maxToolCalls() >= Math.max(AUTO_PLAN_MIN_TOOL_CALLS, requirements.size());
-        boolean planTask = project && crossMaterial && (multiStage || verification);
-        boolean toolTask = project || toolUseRequested;
+        boolean planTask = project && ((crossMaterial && (multiStage || verification))
+                || projectToolRequired);
+        boolean toolTask = (project && !simpleQuestion) || toolUseRequested;
 
         LinkedHashSet<AgentStrategySignal> signals = new LinkedHashSet<>();
         if (project) {
@@ -227,12 +367,25 @@ public class AgentStrategySelector {
         if (verification) signals.add(AgentStrategySignal.VERIFICATION_REQUIRED);
         for (ResearchMaterialKind material : materials) signals.add(materialSignal(material));
         if (crossMaterial) signals.add(AgentStrategySignal.CROSS_MATERIAL_TASK);
+        if (sandboxExecutionRequired) signals.add(AgentStrategySignal.SANDBOX_EXECUTION_REQUIRED);
         if (planTask) signals.add(planBudgetAvailable ? AgentStrategySignal.PLAN_BUDGET_AVAILABLE
                 : AgentStrategySignal.PLAN_BUDGET_INSUFFICIENT);
         if (isPlanReflectIntent(userMessage)) signals.add(AgentStrategySignal.REFLECTION_COMMAND);
 
         return new Analysis(List.copyOf(signals), List.of(), List.copyOf(requirements), consistencyChecks, toolsAvailable,
-                toolBudgetAvailable, planBudgetAvailable, materialCoverageComplete, planTask, toolTask);
+                toolBudgetAvailable, planBudgetAvailable, materialCoverageComplete, planTask, toolTask,
+                positiveNamedFileObservation, sandboxExecutionRequired, projectToolRequired);
+    }
+
+    private boolean declinesProjectObservation(String normalized) {
+        return normalized.contains("\u4e0d\u8981\u8bfb\u53d6")
+                || normalized.contains("\u65e0\u9700\u8bfb\u53d6")
+                || normalized.contains("\u4e0d\u9700\u8981\u8bfb\u53d6")
+                || normalized.contains("\u4e0d\u7528\u8bfb\u53d6")
+                || normalized.contains("do not read")
+                || normalized.contains("don't read")
+                || normalized.contains("without reading")
+                || normalized.contains("no need to read");
     }
 
     private AgentStrategySignal materialSignal(ResearchMaterialKind material) {
@@ -250,6 +403,17 @@ public class AgentStrategySelector {
         if (reasons.contains(AgentStrategyReasonCode.TRUSTED_PLAN_CAPABILITY)
                 || reasons.contains(AgentStrategyReasonCode.LEGACY_REFLECTION_CAPABILITY)) {
             return AgentStrategySelectionOrigin.TRUSTED_CAPABILITY;
+        }
+        if (reasons.contains(AgentStrategyReasonCode.LLM_ROUTER_DIRECT)
+                || reasons.contains(AgentStrategyReasonCode.LLM_ROUTER_REACT)
+                || reasons.contains(AgentStrategyReasonCode.LLM_ROUTER_PLAN)
+                || reasons.contains(AgentStrategyReasonCode.LLM_ROUTER_SUGGESTION_NOT_ALLOWED)) {
+            return AgentStrategySelectionOrigin.LLM_ROUTER;
+        }
+        if (reasons.contains(AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_DIRECT)
+                || reasons.contains(AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_REACT)
+                || reasons.contains(AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_PLAN)) {
+            return AgentStrategySelectionOrigin.ROUTER_FALLBACK;
         }
         if (explicit) return AgentStrategySelectionOrigin.EXPLICIT_OVERRIDE;
         if (requested != AgentStrategy.AUTO) return AgentStrategySelectionOrigin.EXPLICIT_FALLBACK;
@@ -320,7 +484,10 @@ public class AgentStrategySelector {
             boolean planBudgetAvailable,
             boolean materialCoverageComplete,
             boolean planTask,
-            boolean toolTask
+            boolean toolTask,
+            boolean positiveNamedFileObservation,
+            boolean sandboxExecutionRequired,
+            boolean projectToolRequired
     ) {
         boolean reactExecutable() {
             return toolsAvailable && toolBudgetAvailable;
@@ -328,6 +495,10 @@ public class AgentStrategySelector {
 
         boolean planExecutable() {
             return planBudgetAvailable && materialCoverageComplete;
+        }
+
+        boolean requiresProjectObservations() {
+            return planTask || projectToolRequired || positiveNamedFileObservation;
         }
     }
 }

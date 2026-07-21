@@ -181,10 +181,11 @@ class PlanRuntimeAdapterTest {
         assertThat(result.outcome()).isEqualTo("SUCCESS");
         assertThat(result.planId()).isEqualTo(19L);
         assertThat(result.assistantContent())
-                .contains("execution lifecycle status: COMPLETED", "Cross-material analysis result",
+                .contains("Cross-material analysis result",
                         "Q1: semantic consistency remains unresolved.", "Inline  marker removed.")
-                .doesNotContain("outcome SUCCESS", "projectEvidenceRefs=");
-        verify(service).createPlanWithinAdapter(org.mockito.ArgumentMatchers.any());
+                .doesNotContain("execution lifecycle status", "outcome SUCCESS", "projectEvidenceRefs=");
+        verify(service).createPlanWithinAdapter(org.mockito.ArgumentMatchers.argThat(
+                request -> !request.shouldPersistPlanConversationSummary(true)));
         verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", false);
         verify(service, never()).executePlanResultWithinAdapter(7L, 19L, "trace", true);
     }
@@ -207,10 +208,8 @@ class PlanRuntimeAdapterTest {
         assertThat(result.degraded()).isTrue();
         assertThat(result.planId()).isEqualTo(19L);
         assertThat(result.assistantContent())
-                .contains("execution lifecycle status: COMPLETED")
-                .contains("Plan execution outcome: PARTIAL")
                 .contains("Partial governed result")
-                .doesNotContain("finished with status COMPLETED");
+                .doesNotContain("execution lifecycle status", "Plan execution outcome", "finished with status COMPLETED");
     }
 
     @Test
@@ -238,7 +237,7 @@ class PlanRuntimeAdapterTest {
     @Test
     void serverAutoProjectPlanWithHistoryPersistsOneCanonicalAssistantForSuccessAndPartial() {
         List<ChatMessage> history = List.of(
-                ChatMessage.user("Earlier request"),
+                ChatMessage.user("Compare the paper and implementation."),
                 ChatMessage.assistant("Earlier answer"));
 
         for (String stepStatus : List.of("COMPLETED", "DEGRADED")) {
@@ -260,6 +259,12 @@ class PlanRuntimeAdapterTest {
                         assertThat(message.role()).isEqualTo("assistant");
                         assertThat(message.content()).isEqualTo(result.assistantContent());
                     });
+            assertThat(result.messages().stream().filter(message -> "user".equals(message.role())))
+                    .extracting(ChatMessage::content)
+                    .containsExactly("Compare the paper and implementation.")
+                    .noneMatch(content -> content.startsWith("/plan"));
+            verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", false);
+            verify(service, never()).executePlanResultWithinAdapter(7L, 19L, "trace", true);
         }
     }
 
@@ -329,6 +334,58 @@ class PlanRuntimeAdapterTest {
         AgentRuntimeResult verified = runtime.run(projectRequest());
 
         assertThat(verified.completionVerification().status()).isEqualTo(CompletionStatus.VERIFIED);
+    }
+
+    @Test
+    void llmRoutedProjectPlanUsesSameCreateAndExecutePath() {
+        AgentOrchestrationRequirements audit = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE),
+                List.of(AgentStrategyReasonCode.LLM_ROUTER_PLAN), List.of(),
+                AgentStrategySelectionOrigin.LLM_ROUTER);
+        AgentRuntimeRequest request = autoProjectRequest(List.of()).withOrchestrationRequirements(audit);
+
+        assertThat(PlanRuntimeAdapter.isServerAutoProjectPlan(request)).isTrue();
+    }
+
+    @Test
+    void deterministicRouterFallbackPlanUsesSameCreateAndExecutePath() {
+        AgentOrchestrationRequirements audit = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE, AgentStrategySignal.CROSS_MATERIAL_TASK),
+                List.of(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN,
+                        AgentStrategyReasonCode.LLM_ROUTER_INVALID_RESPONSE,
+                        AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_PLAN),
+                List.of(), AgentStrategySelectionOrigin.ROUTER_FALLBACK);
+        AgentRuntimeRequest request = autoProjectRequest(List.of()).withOrchestrationRequirements(audit);
+
+        assertThat(PlanRuntimeAdapter.isServerAutoProjectPlan(request)).isTrue();
+    }
+
+    @Test
+    void runtimeForcedSandboxPlanUsesCreateAndExecutePathToSurfaceConfirmation() {
+        PlanAgentService service = mock(PlanAgentService.class);
+        when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(plan("REVIEWING", null, List.of(new AgentPlanStepResponse(
+                        1L, "run", 1, "Run", "Run src/main/java/xhs_1111.java", "SANDBOX_EXECUTE",
+                        List.of(), List.of("sandbox_execute"), "receipt", "PENDING", 0,
+                        null, null, null, null))));
+        when(service.executePlanResultWithinAdapter(7L, 19L, "trace", false))
+                .thenThrow(new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.CONFLICT,
+                        "SANDBOX_CONFIRMATION_REQUIRED: current ProjectVersion and sandbox step set must be confirmed"));
+        AgentOrchestrationRequirements audit = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE, AgentStrategySignal.SANDBOX_EXECUTION_REQUIRED),
+                List.of(AgentStrategyReasonCode.LLM_ROUTER_SUGGESTION_NOT_ALLOWED,
+                        AgentStrategyReasonCode.SANDBOX_EXECUTION_REQUIRES_PLAN),
+                List.of(), AgentStrategySelectionOrigin.LLM_ROUTER);
+        AgentRuntimeRequest request = autoProjectRequest(List.of()).withOrchestrationRequirements(audit);
+
+        AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(request);
+
+        assertThat(PlanRuntimeAdapter.isServerAutoProjectPlan(request)).isTrue();
+        assertThat(result.success()).isFalse();
+        assertThat(result.planId()).isEqualTo(19L);
+        assertThat(result.errorMessage()).contains("SANDBOX_CONFIRMATION_REQUIRED");
+        verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", false);
     }
 
     private static AgentRuntimeRequest requestWithoutPlanId() {

@@ -111,6 +111,16 @@ public class AgentRuntimeCoordinator {
 
         AgentStrategySelection selection = strategySelector.decide(request);
         AgentStrategy selected = selection.selectedStrategy();
+        if (request.capability() == AgentRequestCapability.PROJECT_READ
+                && selected != AgentStrategy.PLAN_EXECUTE
+                && selection.orchestration().reasonCodes()
+                .contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN)) {
+            AgentCoordinationDecision unavailable = new AgentCoordinationDecision(
+                    selected, false, true, AgentStrategy.PLAN_EXECUTE,
+                    "project_plan_required_but_unavailable", selection);
+            return coordination(resolved, unavailable, failed(unavailable, AgentStopReason.POLICY_REJECTED,
+                    "PROJECT_PLAN_UNAVAILABLE: Project tools require PLAN_EXECUTE and current policy/budget cannot execute it."));
+        }
         boolean explicitPlanSelection = selection.explicitOverride()
                 && (selected == AgentStrategy.PLAN_EXECUTE
                 || selected == AgentStrategy.PLAN_EXECUTE_WITH_REFLECTION);
@@ -130,6 +140,9 @@ public class AgentRuntimeCoordinator {
             AgentRuntimeRequest executable = resolved.withStrategy(selected)
                     .withPlanId(request.planId())
                     .withOrchestrationRequirements(selection.orchestration());
+            if (selected == AgentStrategy.DIRECT && request.capability() == AgentRequestCapability.PROJECT_READ) {
+                executable = executable.withoutToolAuthority("direct_strategy_deny_all");
+            }
             if (controlledWorkerDispatchPlanner != null) {
                 executable = controlledWorkerDispatchPlanner.plan(executable, request.capability())
                         .map(executable::withControlledWorkerDispatch).orElse(executable);

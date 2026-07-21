@@ -525,7 +525,7 @@ public class AgentService {
                     runtimeRequest, projectContext, request.content());
             AgentCoordinationResult coordination = agentRuntimeCoordinator.coordinate(coordinationRequest);
             AgentRuntimeResult result = enforceProjectEvidenceRequirement(projectContext, request.content(),
-                    coordination.runtimeResult(), effectiveHistory.size());
+                    coordination.decision().strategySelection(), coordination.runtimeResult(), effectiveHistory.size());
             AgentRunProjection finalProjection = finalRunProjection(result, turn, projectContext);
             if (finalProjection.state().outcome() == null) {
                 return failTurn(session, userId, turn, saved,
@@ -538,12 +538,12 @@ public class AgentService {
             if (processMessage != null) {
                 saved.add(processMessage);
             }
-            List<AgentMessage> runtimeMessages = saveRuntimeMessages(
-                    session.getId(),
-                    userId,
-                    result.messages(),
-                    effectiveHistory.size()
-            );
+            boolean runtimeAnswerIsCanonical = finalProjection.state().outcome() == AgentTaskOutcome.SUCCEEDED
+                    || (finalProjection.state().outcome() == AgentTaskOutcome.PARTIAL
+                    && finalProjection.canonicalAnswer() != null);
+            List<AgentMessage> runtimeMessages = runtimeAnswerIsCanonical
+                    ? saveRuntimeMessages(session.getId(), userId, result.messages(), effectiveHistory.size())
+                    : List.of();
             saved.addAll(runtimeMessages);
             log.info("Agent runtime completed sessionId={} userId={} success={} strategy={} stopReason={} outcome={} degraded={} steps={} assistantPreview={} toolTrace={} fallbacks={} promptTokens={} completionTokens={} totalTokens={}",
                     session.getId(),
@@ -743,7 +743,14 @@ public class AgentService {
 
     static AgentRuntimeResult enforceProjectEvidenceRequirement(ProjectRuntimeContext context, String userMessage,
                                                                 AgentRuntimeResult result, int historySize) {
+        return enforceProjectEvidenceRequirement(context, userMessage, null, result, historySize);
+    }
+
+    static AgentRuntimeResult enforceProjectEvidenceRequirement(ProjectRuntimeContext context, String userMessage,
+                                                                AgentStrategySelection selection,
+                                                                AgentRuntimeResult result, int historySize) {
         if (context != null && result != null && result.success()
+                && !CompletionVerifier.isVerifiedRouterDirectKnowledgeSelection(selection, result)
                 && CompletionVerifier.requiresProjectFileEvidence(userMessage)
                 && !hasProjectFileEvidence(result.trustedEvidenceLedger())) {
             // Defense in depth: content claims are never projected without the verifier's current,

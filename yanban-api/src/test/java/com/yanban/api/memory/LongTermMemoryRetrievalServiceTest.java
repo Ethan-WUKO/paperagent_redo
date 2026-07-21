@@ -57,6 +57,23 @@ class LongTermMemoryRetrievalServiceTest {
     }
 
     @Test
+    void alwaysInjectsConfirmedGlobalLanguagePreferenceButNotUnrelatedOrdinaryMemory() {
+        when(memories.findGovernedUserCandidates(eq(USER_ID), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(
+                        memory("PREFERENCE", "\u9ed8\u8ba4\u4f7f\u7528\u4e2d\u6587\u56de\u7b54\u3002", "[\"answer-language\"]", "0.95"),
+                        memory("FACT", "User once studied an unrelated compiler course.", "[\"compiler\"]", "0.90"),
+                        memory("FACT", "User is evaluating GraphRAG retrieval.", "[\"GraphRAG\"]", "0.90")
+                ));
+
+        AgentLongTermMemoryContext context = service.retrieve(USER_ID, "Please assess GraphRAG recall.");
+
+        assertThat(context.hitCount()).isEqualTo(2);
+        assertThat(context.content())
+                .contains("\u9ed8\u8ba4\u4f7f\u7528\u4e2d\u6587\u56de\u7b54", "GraphRAG retrieval")
+                .doesNotContain("compiler course");
+    }
+
+    @Test
     void retrievesChineseMemoryWhenRelatedPhrasesUseDifferentSuffixes() {
         when(memories.findGovernedUserCandidates(eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(

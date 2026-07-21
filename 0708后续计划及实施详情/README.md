@@ -1,8 +1,8 @@
 # 0708 后续计划及实施详情文档索引
 
-> 更新日期：2026-07-15
+> 更新日期：2026-07-22
 >
-> 当前工程基线：`56e6b5c`
+> 当前工程基线：GitHub `origin/main` 最新提交（Worker 16 已验收并进入发布流程）
 >
 > 规则：先读“当前有效”，需要追溯证据时再读“历史归档”。历史文档不得覆盖当前权威设计和执行计划。
 
@@ -11,11 +11,13 @@
 1. [通用 Agent Runtime 设计](./当前有效/通用%20Agent%20Runtime%20设计.md)
    - 长期架构、统一 Runtime、安全边界和第一版原则的权威来源。
 2. [科研 Project Agent 第一版实施计划](./当前有效/科研%20Project%20Agent%20第一版实施计划.md)
-   - 当前阶段、串行任务队列、基线、退出条件和下一步工作的唯一执行来源。
+   - 当前阶段、串行任务队列、基线、退出条件和下一步工作的唯一执行来源；阶段 8 至阶段 11 是当前后续路线。
 3. [科研工具与结构化索引契约](./当前有效/科研工具与结构化索引契约.md)
    - 五个第一批只读科研工具、结构化索引、Evidence 和预算的冻结契约。
 4. [Agent 对比分析与后续改造建议](./当前有效/架构决策/Agent%20对比分析与后续改造建议.md)
    - 2026-07-14 架构决策依据：先收口统一单 Agent 主链，再扩多 Agent。
+5. [MVP 后续优化与云沙箱选型](./当前有效/架构决策/MVP后续优化与云沙箱选型.md)
+   - LLM Router、统一入口、界面冻结、普通问答与 Evidence 分层、工具自修复、事件触发 Reflection，以及云沙箱选型的架构决策。
 
 发生冲突时，优先级为：
 
@@ -29,17 +31,16 @@
 
 ## 当前下一步
 
-当前不继续扩科研工具，也不启动自由多 Agent。下一项生产开发任务是：
+Worker 16 已完成 Project 单输入入口、`DIRECT / PLAN_EXECUTE` LLM Router、长期记忆贯通和真实 E2B 用户旅程验收。普通非 Project Chat 保留现有 ReAct，Project 步骤内 ReAct 延后到阶段 11。当前不继续扩科研工具、沙箱 Provider 或自由多 Agent。下一项生产开发任务是：
 
-> 统一 Task Run、持久化生命周期和事件语义。
+> 阶段 9 / Worker 17：整理 Project 页面与执行过程展示，并保持项目、会话、文件三区域现有高度比例。
 
 随后依次实施：
 
-1. Task Workspace 与短期工作记忆。
-2. ProjectVersion、版本化 manifest 和 Evidence 版本绑定。
-3. 长期记忆治理与受控只读接入。
-4. 自动 DIRECT / REACT / PLAN 策略选择与统一 Completion Gate。
-5. 沙箱、Candidate ChangeSet、用户确认、应用和回滚。
+1. 阶段 10 / Worker 18：Evidence 分层、工具自修复和状态语义统一。
+2. 阶段 11 / Worker 19：在前三阶段验收后，实现 Plan-and-Execute、步骤内 ReAct 与事件触发 Reflection。
+
+执行原则：Project 的 LLM Router 提出 `DIRECT / PLAN_EXECUTE`，Runtime 只校验 capability、权限、工具、沙箱确认与预算并执行；普通非 Project Chat 暂时保留 ReAct。每个阶段串行开发、独立审查、真实用户旅程验收后再进入下一阶段。
 
 ## 历史归档
 

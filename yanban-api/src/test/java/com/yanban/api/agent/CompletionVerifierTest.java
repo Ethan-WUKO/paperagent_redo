@@ -56,6 +56,90 @@ class CompletionVerifierTest {
     }
 
     @Test
+    void serverVerifiedRouterDirectKnowledgeAnswerDoesNotRequireProjectFileEvidence() {
+        AgentOrchestrationRequirements routerKnowledge = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE),
+                List.of(AgentStrategyReasonCode.LLM_ROUTER_DIRECT), List.of(),
+                AgentStrategySelectionOrigin.LLM_ROUTER);
+        AgentRuntimeRequest request = projectRequest(AgentStrategy.DIRECT, "1+1等于多少？不要读取项目文件。")
+                .withOrchestrationRequirements(routerKnowledge)
+                .withoutToolAuthority("direct_strategy_deny_all");
+
+        AgentRuntimeResult result = verifier.verify(request, success("2", List.of()));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).isEqualTo("2");
+        assertThat(result.completionVerification().status()).isEqualTo(CompletionStatus.VERIFIED);
+        assertThat(request.toolPolicy().allowedTools()).isEmpty();
+        assertThat(request.toolPolicy().maxToolCalls()).isZero();
+    }
+
+    @Test
+    void serverVerifiedRouterFallbackDirectKnowledgeAnswerDoesNotRequireProjectFileEvidence() {
+        AgentOrchestrationRequirements routerFallback = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE),
+                List.of(AgentStrategyReasonCode.LLM_ROUTER_INVALID_RESPONSE,
+                        AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_DIRECT),
+                List.of(), AgentStrategySelectionOrigin.ROUTER_FALLBACK);
+        AgentRuntimeRequest request = projectRequest(AgentStrategy.DIRECT, "1+1等于多少？")
+                .withOrchestrationRequirements(routerFallback)
+                .withoutToolAuthority("direct_strategy_deny_all");
+
+        AgentRuntimeResult result = verifier.verify(request, success("2", List.of()));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.completionVerification().status()).isEqualTo(CompletionStatus.VERIFIED);
+        assertThat(request.toolPolicy().allowedTools()).isEmpty();
+        assertThat(request.toolPolicy().maxToolCalls()).isZero();
+    }
+
+    @Test
+    void directWithoutTheVerifiedRouterKnowledgeAuditStillRequiresProjectEvidence() {
+        AgentRuntimeRequest request = projectRequest(AgentStrategy.DIRECT,
+                "State what README says about this Project.")
+                .withoutToolAuthority("direct_strategy_deny_all");
+
+        AgentRuntimeResult result = verifier.verify(request,
+                success("README says the Project uses Java.", List.of()));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.completionVerification().status())
+                .isEqualTo(CompletionStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = AgentStrategy.class, names = {"SINGLE_STEP_REACT", "PLAN_EXECUTE"})
+    void reactAndPlanProjectClaimsWithoutEvidenceRemainRejected(AgentStrategy strategy) {
+        AgentRuntimeResult result = verifier.verify(projectRequest(strategy,
+                "State what README says about this Project."),
+                success("README says the Project uses Java.", List.of()));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.completionVerification().status())
+                .isEqualTo(CompletionStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = AgentStrategy.class, names = {"SINGLE_STEP_REACT", "PLAN_EXECUTE"})
+    void routerFallbackReactAndPlanNeverReceiveTheDirectEvidenceExemption(AgentStrategy strategy) {
+        AgentStrategyReasonCode reason = strategy == AgentStrategy.PLAN_EXECUTE
+                ? AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_PLAN
+                : AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_REACT;
+        AgentOrchestrationRequirements fallback = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE), List.of(reason), List.of(),
+                AgentStrategySelectionOrigin.ROUTER_FALLBACK);
+        AgentRuntimeRequest request = projectRequest(strategy, "State what README says about this Project.")
+                .withOrchestrationRequirements(fallback);
+
+        AgentRuntimeResult result = verifier.verify(request,
+                success("README says the Project uses Java.", List.of()));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.completionVerification().status())
+                .isEqualTo(CompletionStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
     void naturalLanguageModificationAnswerDoesNotBecomeCandidate() {
         AgentRuntimeResult result = verifier.verify(projectRequest(AgentStrategy.SINGLE_STEP_REACT), success("建议修复空指针", List.of(tool(42, "src/Main.java", "h1"))));
 

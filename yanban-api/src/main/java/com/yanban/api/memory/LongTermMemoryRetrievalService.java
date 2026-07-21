@@ -27,6 +27,7 @@ public class LongTermMemoryRetrievalService {
     private static final int MAX_SCANNED_ROWS = 400;
     private static final int MAX_CANDIDATES = 100;
     private static final int MAX_HITS = 5;
+    private static final int MAX_STABLE_PREFERENCES = 3;
     private static final int MAX_CONTEXT_CHARACTERS = 1_600;
     private static final int MAX_ITEM_CHARACTERS = 280;
     private static final int MAX_TAGS = 12;
@@ -129,11 +130,22 @@ public class LongTermMemoryRetrievalService {
                                                                List<GovernedCandidate> candidates,
                                                                Instant now) {
         Set<String> queryTokens = tokenize(query);
-        if (queryTokens.isEmpty()) {
+        List<ScoredMemory> stablePreferences = candidates.stream()
+                .filter(this::isStableGlobalPreference)
+                .sorted(Comparator
+                        .comparing((GovernedCandidate item) -> safeUpdatedAt(item.memory())).reversed()
+                        .thenComparing(item -> stableId(item.memory())))
+                .limit(MAX_STABLE_PREFERENCES)
+                .map(item -> new ScoredMemory(item.memory(), item.tags(), 1_000.0))
+                .toList();
+        if (queryTokens.isEmpty() && stablePreferences.isEmpty()) {
             return AgentLongTermMemoryContext.empty();
         }
         List<ScoredMemory> scored = new ArrayList<>();
         for (GovernedCandidate candidate : candidates) {
+            if (stablePreferences.stream().anyMatch(item -> item.memory() == candidate.memory())) {
+                continue;
+            }
             AgentLongTermMemory memory = candidate.memory();
             List<String> tags = candidate.tags();
             double score = score(memory, tags, queryTokens, now);
@@ -141,7 +153,7 @@ public class LongTermMemoryRetrievalService {
                 scored.add(new ScoredMemory(memory, tags, score));
             }
         }
-        if (scored.isEmpty()) {
+        if (scored.isEmpty() && stablePreferences.isEmpty()) {
             return new AgentLongTermMemoryContext(null, 0, candidates.size(), 0,
                     "No relevant long-term memory matched the current user message.");
         }
@@ -152,14 +164,15 @@ public class LongTermMemoryRetrievalService {
                 .thenComparing(item -> stableId(item.memory()))
                 .thenComparing(item -> normalizeForDedup(item.memory().getContent())));
 
-        List<ScoredMemory> uniqueRanked = new ArrayList<>();
+        List<ScoredMemory> uniqueRanked = new ArrayList<>(stablePreferences);
         Set<String> seenContent = new LinkedHashSet<>();
+        stablePreferences.forEach(item -> seenContent.add(normalizeForDedup(item.memory().getContent())));
         for (ScoredMemory item : scored) {
             if (seenContent.add(normalizeForDedup(item.memory().getContent()))) {
                 uniqueRanked.add(item);
             }
         }
-        int omittedDuplicates = scored.size() - uniqueRanked.size();
+        int omittedDuplicates = scored.size() + stablePreferences.size() - uniqueRanked.size();
         List<ScoredMemory> selected = uniqueRanked.stream().limit(MAX_HITS).toList();
         StringBuilder content = new StringBuilder(CONTEXT_HEADER);
         List<String> debugItems = new ArrayList<>();
@@ -184,6 +197,32 @@ public class LongTermMemoryRetrievalService {
         String note = "Injected long-term memories: hits=%d, candidates=%d, omitted=%d, minConfidence=%s, items=%s"
                 .formatted(debugItems.size(), candidates.size(), omitted, MIN_CONFIDENCE, String.join(" | ", debugItems));
         return new AgentLongTermMemoryContext(content.toString(), debugItems.size(), candidates.size(), omitted, note);
+    }
+
+    /**
+     * Confirmed global defaults are stable context, not similarity hits. Narrow language/default markers keep
+     * topic-specific preferences governed by the ordinary relevance scorer.
+     */
+    private boolean isStableGlobalPreference(GovernedCandidate candidate) {
+        AgentLongTermMemory memory = candidate.memory();
+        String type = memory.getMemoryType() == null ? "" : memory.getMemoryType().trim().toUpperCase(Locale.ROOT);
+        if (!"PREFERENCE".equals(type) && !"STYLE".equals(type)) return false;
+        String content = memory.getContent().toLowerCase(Locale.ROOT);
+        boolean taggedGlobal = candidate.tags().stream()
+                .map(tag -> tag.toLowerCase(Locale.ROOT))
+                .anyMatch(tag -> Set.of("global", "default", "language", "response-language", "answer-language")
+                        .contains(tag));
+        return taggedGlobal
+                || content.contains("default")
+                || content.contains("always respond")
+                || content.contains("always answer")
+                || content.contains("reply in")
+                || content.contains("respond in")
+                || content.contains("answer language")
+                || content.contains("\u9ed8\u8ba4")
+                || content.contains("\u59cb\u7ec8")
+                || content.contains("\u4e00\u5f8b")
+                || content.contains("\u56de\u7b54\u8bed\u8a00");
     }
 
     private boolean eligible(AgentLongTermMemory memory,

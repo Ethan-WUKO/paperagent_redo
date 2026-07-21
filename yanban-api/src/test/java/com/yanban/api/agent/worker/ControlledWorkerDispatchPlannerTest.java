@@ -71,6 +71,52 @@ class ControlledWorkerDispatchPlannerTest {
     }
 
     @Test
+    void llmRoutedCrossMaterialPlanKeepsTheExistingControlledTwoWorkerPathReachable() {
+        ProjectService projects = mock(ProjectService.class);
+        when(projects.manifest(7L, 21L)).thenReturn(manifest(List.of(
+                file("paper/main.tex", 1200, PAPER_HASH), file("src/Main.java", 900, CODE_HASH))));
+        ControlledWorkerDispatchPlanner planner = new ControlledWorkerDispatchPlanner(projects);
+        AgentRuntimeRequest serverAuto = request(AgentStrategy.PLAN_EXECUTE,
+                List.of(paperRequirement(), codeRequirement()));
+        AgentOrchestrationRequirements llmRouted = new AgentOrchestrationRequirements(
+                serverAuto.orchestrationRequirements().signals(),
+                List.of(AgentStrategyReasonCode.LLM_ROUTER_PLAN),
+                serverAuto.orchestrationRequirements().materialRequirements(),
+                AgentStrategySelectionOrigin.LLM_ROUTER,
+                serverAuto.orchestrationRequirements().consistencyChecks());
+
+        ControlledWorkerDispatch dispatch = planner.plan(
+                serverAuto.withOrchestrationRequirements(llmRouted),
+                AgentRequestCapability.PROJECT_READ).orElseThrow();
+
+        assertThat(dispatch.tasks()).hasSize(2);
+        assertThat(dispatch.tasks()).flatExtracting(task -> task.attestation().packet().allowedReadTools())
+                .containsExactlyInAnyOrder(ResearchToolContracts.PROJECT_LATEX_OUTLINE,
+                        ResearchToolContracts.PROJECT_CODE_SYMBOLS);
+    }
+
+    @Test
+    void deterministicRouterFallbackPlanUsesTheSameControlledEligibilityChecks() {
+        ProjectService projects = mock(ProjectService.class);
+        when(projects.manifest(7L, 21L)).thenReturn(manifest(List.of(
+                file("paper/main.tex", 1200, PAPER_HASH), file("src/Main.java", 900, CODE_HASH))));
+        ControlledWorkerDispatchPlanner planner = new ControlledWorkerDispatchPlanner(projects);
+        AgentRuntimeRequest serverAuto = request(AgentStrategy.PLAN_EXECUTE,
+                List.of(paperRequirement(), codeRequirement()));
+        AgentOrchestrationRequirements fallback = new AgentOrchestrationRequirements(
+                serverAuto.orchestrationRequirements().signals(),
+                List.of(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN,
+                        AgentStrategyReasonCode.LLM_ROUTER_MODEL_UNAVAILABLE,
+                        AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_PLAN),
+                serverAuto.orchestrationRequirements().materialRequirements(),
+                AgentStrategySelectionOrigin.ROUTER_FALLBACK,
+                serverAuto.orchestrationRequirements().consistencyChecks());
+
+        assertThat(planner.plan(serverAuto.withOrchestrationRequirements(fallback),
+                AgentRequestCapability.PROJECT_READ)).isPresent();
+    }
+
+    @Test
     void explicitManifestBackedPathsNarrowBothWorkerAssignmentsWithoutGuessingAdditionalFiles() {
         ProjectService projects = mock(ProjectService.class);
         when(projects.manifest(7L, 21L)).thenReturn(manifest(List.of(

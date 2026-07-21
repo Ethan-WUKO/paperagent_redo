@@ -119,8 +119,8 @@
         <section class="project-panel project-panel--main">
           <div class="project-tabs">
             <div>
-              <button :class="{ active: centerTab === 'chat' }" @click="centerTab = 'chat'">Chat</button>
-              <button :class="{ active: centerTab === 'plan' }" @click="centerTab = 'plan'">Plan <span v-if="plans.length">{{ plans.length }}</span></button>
+              <button :class="{ active: centerTab === 'chat' }" @click="centerTab = 'chat'">Conversation</button>
+              <button :class="{ active: centerTab === 'plan' }" @click="centerTab = 'plan'">Execution details <span v-if="plans.length">{{ plans.length }}</span></button>
             </div>
             <div class="project-tabs__actions">
               <button class="project-utility-chip" :class="{ active: inspectorOpen && inspectorTab === 'preview' }" @click="toggleInspector('preview')">Preview</button>
@@ -544,10 +544,6 @@
                 </nav>
               </div>
             </div>
-            <div class="project-plan-compose">
-              <NInput v-model:value="planInput" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="Create a governed Project plan..." />
-              <NButton type="primary" :loading="loading.plan" :disabled="!planInput.trim() || !activeProject" @click="createPlan">Create plan</NButton>
-            </div>
           </template>
         </section>
       </section>
@@ -667,7 +663,7 @@ import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, listMessages, listPlans, updateSession as updateAgentSession, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse } from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectPlan, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
 import {
@@ -771,7 +767,6 @@ const centerTab = ref<'chat' | 'plan'>('chat');
 const inspectorTab = ref<ProjectInspectorTab>('preview');
 const inspectorOpen = ref(true);
 const chatInput = ref('');
-const planInput = ref('');
 const error = ref('');
 const createModalOpen = ref(false);
 const deleteModalOpen = ref(false);
@@ -800,7 +795,6 @@ const loading = reactive({
   messages: false,
   send: false,
   plans: false,
-  plan: false,
   evidence: false,
   candidates: false,
   revisions: false,
@@ -2056,29 +2050,6 @@ async function sendChat() {
   }
 }
 
-async function createPlan() {
-  const projectId = activeProjectId.value;
-  if (!projectId || !planInput.value.trim()) return;
-  const epoch = projectEpoch;
-  loading.plan = true;
-  try {
-    const sessionId = await ensureSession();
-    if (!sessionId || epoch !== projectEpoch) return;
-    const response = await createProjectPlan(projectId, sessionId, { content: planInput.value.trim(), ragDisabled: true, autoExecute: true });
-    if (epoch !== projectEpoch) return;
-    planInput.value = '';
-    selectedPlan.value = response.data;
-    await loadPlans(sessionId, epoch);
-    await selectPlan(response.data);
-    centerTab.value = 'plan';
-    pollPlanUntilTerminal(sessionId, response.data.id, epoch, 0);
-  } catch (cause) {
-    if (epoch === projectEpoch) error.value = apiError(cause);
-  } finally {
-    if (epoch === projectEpoch) loading.plan = false;
-  }
-}
-
 async function selectPlan(plan: AgentPlanResponse, epoch = projectEpoch) {
   const projectId = activeProjectId.value;
   selectedPlan.value = plan;
@@ -2593,8 +2564,7 @@ onUnmounted(() => {
 .project-sandbox-confirmation p { margin: 0 0 8px; line-height: 1.55; }
 .project-sandbox-confirmation ul { margin: 0 0 12px; padding-left: 20px; line-height: 1.6; }
 
-.project-composer, .project-plan-compose { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; padding-top: 10px; border-top: 1px solid var(--yb-border); background: var(--yb-bg-elevated); position: relative; z-index: 1; }
-.project-plan-compose { margin-top: 2px; }
+.project-composer { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; padding-top: 10px; border-top: 1px solid var(--yb-border); background: var(--yb-bg-elevated); position: relative; z-index: 1; }
 
 .project-plans { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 7px; overflow: hidden; }
 .project-plan-thread { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: auto; padding-right: 4px; scrollbar-gutter: stable; }

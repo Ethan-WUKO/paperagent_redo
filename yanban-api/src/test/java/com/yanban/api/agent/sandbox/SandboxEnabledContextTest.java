@@ -64,6 +64,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 @SpringBootTest(properties = {
         "yanban.sandbox.enabled=true",
+        "yanban.sandbox.provider=docker-sbx",
         "yanban.sandbox.required-at-startup=false",
         "yanban.sandbox.broker-url=https://127.0.0.1:9443",
         "yanban.sandbox.broker-token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",

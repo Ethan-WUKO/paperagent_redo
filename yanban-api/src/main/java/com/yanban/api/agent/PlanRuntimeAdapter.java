@@ -36,13 +36,16 @@ public class PlanRuntimeAdapter implements RuntimeAdapter {
         if (request.planId() == null) {
             Long createdPlanId = null;
             try {
-                AgentPlanResponse created = planAgentService.createPlanWithinAdapter(request);
+                boolean unifiedProjectPlan = isServerAutoProjectPlan(request);
+                AgentRuntimeRequest persistedRequest = unifiedProjectPlan
+                        ? request.withPlanConversationSummaryPersistence(false) : request;
+                AgentPlanResponse created = planAgentService.createPlanWithinAdapter(persistedRequest);
                 createdPlanId = created.id();
-                if (isServerAutoProjectPlan(request)) {
-                    AgentRuntimeRequest persistedParent = request.withPlanId(createdPlanId);
-                    if (request.controlledWorkerDispatch() != null) {
+                if (unifiedProjectPlan) {
+                    AgentRuntimeRequest persistedParent = persistedRequest.withPlanId(createdPlanId);
+                    if (persistedRequest.controlledWorkerDispatch() != null) {
                         persistedParent = persistedParent.withControlledWorkerDispatch(
-                                request.controlledWorkerDispatch().bindToParentPlan(createdPlanId));
+                                persistedRequest.controlledWorkerDispatch().bindToParentPlan(createdPlanId));
                     }
                     return execute(persistedParent, createdPlanId, false);
                 }
@@ -100,21 +103,36 @@ public class PlanRuntimeAdapter implements RuntimeAdapter {
             return false;
         }
         AgentOrchestrationRequirements audit = request.orchestrationRequirements();
-        return audit.selectionOrigin() == AgentStrategySelectionOrigin.SERVER_AUTO
-                && audit.reasonCodes().contains(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN);
+        return (audit.selectionOrigin() == AgentStrategySelectionOrigin.SERVER_AUTO
+                && (audit.reasonCodes().contains(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN)
+                || audit.reasonCodes().contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN)
+                || audit.reasonCodes().contains(AgentStrategyReasonCode.SANDBOX_EXECUTION_REQUIRES_PLAN)))
+                || (audit.selectionOrigin() == AgentStrategySelectionOrigin.LLM_ROUTER
+                && (audit.reasonCodes().contains(AgentStrategyReasonCode.LLM_ROUTER_PLAN)
+                || audit.reasonCodes().contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN)
+                || audit.reasonCodes().contains(AgentStrategyReasonCode.SANDBOX_EXECUTION_REQUIRES_PLAN)))
+                || (audit.selectionOrigin() == AgentStrategySelectionOrigin.ROUTER_FALLBACK
+                && audit.reasonCodes().contains(AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_PLAN)
+                && (audit.reasonCodes().contains(AgentStrategyReasonCode.AUTO_CROSS_MATERIAL_PLAN)
+                || audit.reasonCodes().contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN)
+                || audit.reasonCodes().contains(AgentStrategyReasonCode.SANDBOX_EXECUTION_REQUIRES_PLAN)));
     }
 
     private String buildExecutionContent(AgentPlanResponse plan, PlanTerminal terminal) {
+        String finalAnswer = withoutInternalPresentationMetadata(
+                SandboxTrustedResultBoundary.trustedPlanFinalAnswer(plan));
+        if (StringUtils.hasText(finalAnswer)) {
+            // Lifecycle/outcome remain typed response fields and Plan events. The canonical chat answer is the
+            // single model-produced synthesis so confirmed language/style preferences are not prefixed by a
+            // second, hard-coded English assistant answer.
+            return finalAnswer;
+        }
         StringBuilder content = new StringBuilder("Plan ").append(plan.id())
                 .append(" execution lifecycle status: ").append(plan.status()).append(".");
         if (!"SUCCESS".equals(terminal.outcome())) {
             content.append("\nPlan execution outcome: ").append(terminal.outcome()).append(".");
         }
-        String finalAnswer = withoutInternalPresentationMetadata(
-                SandboxTrustedResultBoundary.trustedPlanFinalAnswer(plan));
-        if (StringUtils.hasText(finalAnswer)) {
-            content.append("\n\n").append(finalAnswer);
-        } else if (StringUtils.hasText(plan.errorMessage())) {
+        if (StringUtils.hasText(plan.errorMessage())) {
             content.append("\n\n").append(plan.errorMessage());
         } else {
             content.append("\n\nNo final synthesis was produced. Inspect the Plan steps for details.");

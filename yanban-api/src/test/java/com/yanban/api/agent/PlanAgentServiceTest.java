@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -172,6 +173,48 @@ class PlanAgentServiceTest {
                 .contains("project_search")
                 .contains("Do not repeat successful or zero-result searches");
         verify(stepVerifier, times(2)).verify(any(PlanStepVerifier.VerificationRequest.class));
+    }
+
+    @Test
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    void controlledPlanStepAndFinalSynthesisReceivePersistedGovernedLanguagePreference() {
+        AgentPlanStep analysis = newStep("analysis", 1, List.of());
+        AgentPlanStep synthesis = newStep("final_synthesis", 2, List.of("analysis"));
+        String preference = "Governed memory: 默认使用中文回答";
+        ReflectionTestUtils.setField(plan, "rawPlanJson", ProjectPlanEnvelope.wrapControlled(
+                objectMapper, "{}", new ProjectRuntimeContext(USER_ID, 42L),
+                objectMapper.createObjectNode().put("schemaVersion", "controlled-test"), preference));
+
+        String prompt = ReflectionTestUtils.invokeMethod(service, "buildStepSystemPrompt",
+                plan, List.of(analysis, synthesis), synthesis, null, null, null,
+                java.util.Map.of(), List.of("project_read_file"));
+
+        assertThat(prompt)
+                .contains(preference)
+                .contains("Follow confirmed language/style preferences")
+                .contains("This is the final synthesis step")
+                .contains("exact server-authorized tools: [project_read_file]")
+                .doesNotContain("sandbox_execute");
+    }
+
+    @Test
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    void projectCodeExecutionFailsClearlyWhenSandboxIsDisabledBeforePlannerCall() {
+        when(toolPolicyEngine.decideProject(any(), any())).thenReturn(
+                new AgentToolPolicyEngine.Decision(List.of("project_read_file"), 8, 1, "project"));
+        AgentRuntimeRequest request = new AgentRuntimeRequest(
+                AgentStrategy.PLAN_EXECUTE, SESSION_ID, List.of(), USER_ID,
+                "src/main/java/xhs_1111.java，运行这个程序，结果是什么？",
+                "test", "model", null, null, 6, true, null, "key", null, null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_read_file"), 8, 1, "project"),
+                8, 1, "trace", null, null)
+                .withProjectContext(new ProjectRuntimeContext(USER_ID, 42L));
+
+        assertThatThrownBy(() -> service.createPlanWithinAdapter(request))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("SANDBOX_DISABLED");
+        verify(planner, never()).createPlan(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -398,6 +441,44 @@ class PlanAgentServiceTest {
         verify(events, atLeast(1)).save(recorded.capture());
         assertThat(recorded.getAllValues()).anyMatch(value ->
                 "step_dependency_evidence_reused".equals(value.getEventType()));
+    }
+
+    @Test
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    void governedNotAppliedCandidateCompletesWithoutRetryingForAReadObservation() {
+        ReflectionTestUtils.setField(plan, "rawPlanJson", ProjectPlanEnvelope.wrap(
+                objectMapper, "{}", new ProjectRuntimeContext(USER_ID, 42L)));
+        AgentPlanStep candidateStep = newStep("candidate", 1, List.of(),
+                "[\"project_propose_candidate\"]");
+        ReflectionTestUtils.setField(candidateStep, "description",
+                "Propose Runner.java as an explicit modification Candidate and keep it NOT_APPLIED.");
+        when(steps.findByPlanIdOrderBySortOrderAsc(PLAN_ID)).thenReturn(List.of(candidateStep));
+        when(projectService.manifest(USER_ID, 42L)).thenReturn(new ProjectManifestResponse(
+                42L, "a".repeat(64), List.of()));
+        when(toolPolicyEngine.decideProject(any(), any())).thenReturn(new AgentToolPolicyEngine.Decision(
+                List.of("project_propose_candidate"), 4, 1, "project"));
+        com.yanban.api.agent.sandbox.CandidateArtifactResponse artifact =
+                org.mockito.Mockito.mock(com.yanban.api.agent.sandbox.CandidateArtifactResponse.class);
+        when(artifact.artifactId()).thenReturn(23L);
+        when(artifact.projectId()).thenReturn(42L);
+        when(artifact.applicationStatus()).thenReturn(
+                com.yanban.core.agent.sandbox.CandidateChangeSet.ApplicationStatus.NOT_APPLIED);
+        when(agentRuntimeService.run(any())).thenReturn(
+                success("Candidate artifact #23 created and remains NOT_APPLIED.")
+                        .withCandidateArtifact(artifact));
+        when(stepVerifier.verify(any())).thenReturn(PlanStepVerifier.VerificationResult.passed("ok"));
+
+        AgentPlanResponse response = service.executePlan(USER_ID, PLAN_ID);
+
+        assertThat(response.status()).isEqualTo(AgentPlanStatus.COMPLETED.name());
+        assertThat(candidateStep.getStatus()).isEqualTo(AgentPlanStepStatus.COMPLETED.name());
+        assertThat(candidateStep.getAttemptCount()).isEqualTo(1);
+        verify(agentRuntimeService).run(any(AgentRuntimeRequest.class));
+        ArgumentCaptor<AgentPlanEvent> recorded = ArgumentCaptor.forClass(AgentPlanEvent.class);
+        verify(events, atLeast(1)).save(recorded.capture());
+        assertThat(recorded.getAllValues()).extracting(AgentPlanEvent::getEventType)
+                .contains("step_governed_candidate_proposed")
+                .doesNotContain("step_evidence_insufficient");
     }
 
     @Test

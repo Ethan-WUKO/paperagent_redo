@@ -74,6 +74,56 @@ class AgentServiceResearchEvidenceTest {
         assertThat(AgentRunStateMappings.fromTurn(turn.getStatus(), true)).isEqualTo(projection.state());
     }
 
+    @Test
+    void finalProjectionTrustsOnlyTheCoordinatorRouterDirectKnowledgeDecision() {
+        ProjectRuntimeContext context = new ProjectRuntimeContext(7L, 42L);
+        AgentOrchestrationRequirements audit = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE),
+                List.of(AgentStrategyReasonCode.LLM_ROUTER_DIRECT), List.of(),
+                AgentStrategySelectionOrigin.LLM_ROUTER);
+        AgentStrategySelection selection = new AgentStrategySelection(
+                AgentStrategy.AUTO, AgentStrategy.DIRECT, false, false, null,
+                List.of(AgentStrategy.DIRECT, AgentStrategy.SINGLE_STEP_REACT, AgentStrategy.PLAN_EXECUTE),
+                audit, "llm_router_direct");
+        CompletionVerification verified = new CompletionVerification(
+                CompletionStatus.VERIFIED, List.of(), List.of(), false, 0);
+        AgentRuntimeResult result = runtime(List.of())
+                .withCoordination(AgentStrategy.DIRECT, AgentStopReason.COMPLETED, "VERIFIED", false, null)
+                .withCompletionVerification(verified);
+
+        AgentRuntimeResult projected = AgentService.enforceProjectEvidenceRequirement(
+                context, "1+1等于多少？不要读取项目文件。", selection, result, 0);
+        AgentRuntimeResult untrusted = AgentService.enforceProjectEvidenceRequirement(
+                context, "1+1等于多少？不要读取项目文件。", null, result, 0);
+
+        assertThat(projected.success()).isTrue();
+        assertThat(untrusted.success()).isFalse();
+        assertThat(untrusted.outcome()).isEqualTo("INSUFFICIENT_EVIDENCE");
+    }
+
+    @Test
+    void finalProjectionAcceptsTheCoordinatorRouterFallbackDirectDecision() {
+        ProjectRuntimeContext context = new ProjectRuntimeContext(7L, 42L);
+        AgentOrchestrationRequirements audit = new AgentOrchestrationRequirements(
+                List.of(AgentStrategySignal.PROJECT_SCOPE),
+                List.of(AgentStrategyReasonCode.LLM_ROUTER_INVALID_RESPONSE,
+                        AgentStrategyReasonCode.LLM_ROUTER_FALLBACK_DIRECT),
+                List.of(), AgentStrategySelectionOrigin.ROUTER_FALLBACK);
+        AgentStrategySelection selection = new AgentStrategySelection(
+                AgentStrategy.AUTO, AgentStrategy.DIRECT, false, false, null,
+                List.of(AgentStrategy.DIRECT, AgentStrategy.SINGLE_STEP_REACT, AgentStrategy.PLAN_EXECUTE),
+                audit, "llm_router_invalid_response_fallback_direct");
+        AgentRuntimeResult result = runtime(List.of())
+                .withCoordination(AgentStrategy.DIRECT, AgentStopReason.COMPLETED, "VERIFIED", false, null)
+                .withCompletionVerification(new CompletionVerification(
+                        CompletionStatus.VERIFIED, List.of(), List.of(), false, 0));
+
+        AgentRuntimeResult projected = AgentService.enforceProjectEvidenceRequirement(
+                context, "1+1等于多少？", selection, result, 0);
+
+        assertThat(projected.success()).isTrue();
+    }
+
     private AgentRuntimeResult runtime(List<ChatMessage> messages) { return new AgentRuntimeResult(true,"ok",messages,1,null,List.of(),List.of(),null,null,null); }
     private ChatMessage request(String id) { return new ChatMessage("assistant", null, List.of(new ToolCall(id,"function",new ToolCall.FunctionCall("project_latex_outline","{}"))),null); }
     private String envelope(String projectVersion, String hash, String trust) { return "{\"status\":\"COMPLETE\",\"items\":[],\"evidenceRefs\":[{\"projectVersion\":\""+projectVersion+"\",\"relativePath\":\"paper.tex\",\"fileHash\":\""+hash+"\",\"range\":{\"startLine\":1,\"endLine\":1},\"parserVersion\":\"latex-outline@1\",\"trustLabel\":\""+trust+"\"}]}"; }

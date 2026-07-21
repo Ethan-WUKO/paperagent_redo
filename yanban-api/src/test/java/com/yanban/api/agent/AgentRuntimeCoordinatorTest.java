@@ -18,6 +18,145 @@ import org.junit.jupiter.api.Test;
 class AgentRuntimeCoordinatorTest {
 
     @Test
+    void routerReactForExplicitProjectCodeRunIsExecutedOnlyAsPlan() {
+        AgentRuntimeService runtime = mock(AgentRuntimeService.class);
+        when(runtime.run(org.mockito.ArgumentMatchers.any())).thenReturn(new AgentRuntimeResult(
+                false, null, List.of(), 0, "SANDBOX_CONFIRMATION_REQUIRED", List.of(), List.of(),
+                null, null, null).withPlanId(27L));
+        AgentLlmRouter router = mock(AgentLlmRouter.class);
+        when(router.route(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(AgentLlmRouter.RoutingResult.success(new AgentLlmRouter.Suggestion(
+                        AgentStrategy.SINGLE_STEP_REACT, AgentLlmRouter.TaskStructure.SINGLE_TOOL_LOOP,
+                        true, false)));
+        AgentRuntimeCoordinator coordinator = new AgentRuntimeCoordinator(
+                runtime, new AgentStrategySelector(router));
+        AgentRuntimeRequest request = new AgentRuntimeRequest(
+                AgentStrategy.AUTO, 3L, List.of(), 7L,
+                "src/main/java/xhs_1111.java，运行这个程序，结果是什么？",
+                "test", "model", null, null, 6, true, null, "secret", "local-model", null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_read_file", "project_search"), 8, 1, "project"),
+                8, 1, "router-react-execution-conflict", null, null)
+                .withProjectContext(new ProjectRuntimeContext(7L, 42L));
+
+        AgentCoordinationResult result = coordinator.coordinate(AgentCoordinationRequest.projectRead(request));
+
+        assertThat(result.decision().selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(result.decision().strategySelection().serverCandidates())
+                .containsExactly(AgentStrategy.DIRECT, AgentStrategy.PLAN_EXECUTE);
+        assertThat(result.decision().strategySelection().orchestration().materialRequirements())
+                .extracting(ResearchMaterialRequirement::material)
+                .containsExactly(ResearchMaterialKind.CODE);
+        org.mockito.ArgumentCaptor<AgentRuntimeRequest> executed =
+                org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
+        verify(runtime).run(executed.capture());
+        assertThat(executed.getValue().strategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(executed.getValue().orchestrationRequirements().signals())
+                .contains(AgentStrategySignal.SANDBOX_EXECUTION_REQUIRED)
+                .doesNotContain(AgentStrategySignal.MATERIAL_EXPERIMENT_CONFIG);
+    }
+
+    @Test
+    void routerDirectConflictingWithCodeRequirementsIsNotExecutedAsDenyAllDirect() {
+        AgentRuntimeService runtime = mock(AgentRuntimeService.class);
+        when(runtime.run(org.mockito.ArgumentMatchers.any())).thenReturn(new AgentRuntimeResult(
+                true, "observed", List.of(ChatMessage.assistant("observed")), 1,
+                null, List.of(), List.of(), null, null, null));
+        AgentLlmRouter router = mock(AgentLlmRouter.class);
+        when(router.route(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(AgentLlmRouter.RoutingResult.success(new AgentLlmRouter.Suggestion(
+                        AgentStrategy.DIRECT, AgentLlmRouter.TaskStructure.KNOWLEDGE_ANSWER, false, false)));
+        AgentRuntimeCoordinator coordinator = new AgentRuntimeCoordinator(
+                runtime, new AgentStrategySelector(router));
+        AgentRuntimeRequest request = new AgentRuntimeRequest(
+                AgentStrategy.AUTO, 3L, List.of(), 7L,
+                "请按依赖顺序完成三个步骤：先分别读取 Success.java、Failure.java、Infinite.java；"
+                        + "再比较它们的正常、失败和超时行为；最后生成一张测试矩阵并给出结论。",
+                "test", "model", null, null, 6, true, null, "secret", "local-model", null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_read_file", "project_search"), 8, 1, "project"),
+                8, 1, "router-direct-code-conflict", null, null)
+                .withProjectContext(new ProjectRuntimeContext(7L, 42L));
+
+        AgentCoordinationResult result = coordinator.coordinate(AgentCoordinationRequest.projectRead(request));
+
+        assertThat(result.decision().selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(result.decision().strategySelection().orchestration().reasonCodes()).contains(
+                AgentStrategyReasonCode.LLM_ROUTER_SUGGESTION_NOT_ALLOWED,
+                AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
+        org.mockito.ArgumentCaptor<AgentRuntimeRequest> executed =
+                org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
+        verify(runtime).run(executed.capture());
+        assertThat(executed.getValue().strategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(executed.getValue().allowedToolNames())
+                .containsExactly("project_read_file", "project_search");
+        assertThat(executed.getValue().toolPolicy().maxToolCalls()).isEqualTo(8);
+    }
+
+    @Test
+    void routerDirectNaturalCandidateRequestIsCoordinatedAsPlanWithOriginalAuthority() {
+        AgentRuntimeService runtime = mock(AgentRuntimeService.class);
+        when(runtime.run(org.mockito.ArgumentMatchers.any())).thenReturn(new AgentRuntimeResult(
+                true, "candidate created", List.of(ChatMessage.assistant("candidate created")), 1,
+                null, List.of(), List.of(), null, null, null));
+        AgentLlmRouter router = mock(AgentLlmRouter.class);
+        when(router.route(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(AgentLlmRouter.RoutingResult.success(new AgentLlmRouter.Suggestion(
+                        AgentStrategy.DIRECT, AgentLlmRouter.TaskStructure.KNOWLEDGE_ANSWER, false, false)));
+        AgentRuntimeCoordinator coordinator = new AgentRuntimeCoordinator(
+                runtime, new AgentStrategySelector(router));
+        AgentRuntimeRequest request = new AgentRuntimeRequest(
+                AgentStrategy.AUTO, 3L, List.of(), 7L,
+                "\u8bf7\u4fee\u6539 Runner.java\uff0c\u8ba9\u5b83\u589e\u52a0\u8d85\u65f6\u5904\u7406\uff1b\u4e0d\u8981\u81ea\u52a8\u5e94\u7528",
+                "test", "model", null, null, 6, true, null, "secret", "local-model", null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_read_file", "project_propose_candidate"),
+                        8, 1, "project"),
+                8, 1, "router-direct-candidate-conflict", null, null)
+                .withProjectContext(new ProjectRuntimeContext(7L, 42L));
+
+        AgentCoordinationResult result = coordinator.coordinate(AgentCoordinationRequest.projectRead(request));
+
+        assertThat(result.decision().selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(result.decision().strategySelection().serverCandidates())
+                .containsExactly(AgentStrategy.DIRECT, AgentStrategy.PLAN_EXECUTE);
+        assertThat(result.decision().strategySelection().orchestration().reasonCodes()).contains(
+                AgentStrategyReasonCode.LLM_ROUTER_SUGGESTION_NOT_ALLOWED,
+                AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
+        org.mockito.ArgumentCaptor<AgentRuntimeRequest> executed =
+                org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
+        verify(runtime).run(executed.capture());
+        assertThat(executed.getValue().strategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(executed.getValue().allowedToolNames())
+                .containsExactly("project_read_file", "project_propose_candidate");
+    }
+
+    @Test
+    void directExecutionReceivesNoToolAuthorityEvenWhenAutoRequestHadProjectTools() {
+        AgentRuntimeService runtime = mock(AgentRuntimeService.class);
+        when(runtime.run(org.mockito.ArgumentMatchers.any())).thenReturn(new AgentRuntimeResult(
+                true, "knowledge answer", List.of(ChatMessage.assistant("knowledge answer")), 1,
+                null, List.of(), List.of(), null, null, null));
+        AgentRuntimeRequest original = new AgentRuntimeRequest(AgentStrategy.DIRECT, 3L, List.of(), 7L,
+                "What is RAG?", "test", "model", null, null, 4, true, null, "secret", "url", null,
+                AgentRuntimeMode.LANGCHAIN4J, AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING,
+                new ResolvedToolPolicy(List.of("project_read_file", "project_search"), 4, 1, "project"),
+                4, 1, "direct-trace", null, null)
+                .withProjectContext(new ProjectRuntimeContext(7L, 42L));
+
+        new AgentRuntimeCoordinator(runtime, new AgentStrategySelector())
+                .coordinate(AgentCoordinationRequest.projectRead(original));
+
+        org.mockito.ArgumentCaptor<AgentRuntimeRequest> captured =
+                org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
+        verify(runtime).run(captured.capture());
+        assertThat(captured.getValue().strategy()).isEqualTo(AgentStrategy.DIRECT);
+        assertThat(captured.getValue().allowedToolNames()).isEmpty();
+        assertThat(captured.getValue().toolPolicy().maxToolCalls()).isZero();
+        assertThat(original.allowedToolNames()).containsExactly("project_read_file", "project_search");
+    }
+
+    @Test
     void projectAutoPlanCarriesAuditRequirementsWithoutExpandingRuntimeAuthority() {
         AgentRuntimeService runtime = mock(AgentRuntimeService.class);
         when(runtime.run(org.mockito.ArgumentMatchers.any())).thenReturn(new AgentRuntimeResult(
@@ -132,7 +271,7 @@ class AgentRuntimeCoordinatorTest {
         assertThat(result.runtimeResult().outcome()).isEqualTo("SUCCESS");
         assertThat(result.runProjection().state().outcome()).isEqualTo(AgentTaskOutcome.SUCCEEDED);
         assertThat(result.runProjection().canonicalAnswer())
-                .contains("execution lifecycle status: COMPLETED", "Verified paper/code/experiment synthesis");
+                .isEqualTo("Verified paper/code/experiment synthesis");
         assertThat(result.runProjection().identity().source()).isEqualTo("AGENT_PLAN");
         verify(plans).createPlanWithinAdapter(org.mockito.ArgumentMatchers.any());
         verify(plans).executePlanResultWithinAdapter(7L, 19L, "auto-terminal", false);
@@ -171,7 +310,8 @@ class AgentRuntimeCoordinatorTest {
         assertThat(results.get(3).taskWorkspace().restartResumable()).isFalse();
         org.mockito.ArgumentCaptor<AgentRuntimeRequest> captured = org.mockito.ArgumentCaptor.forClass(AgentRuntimeRequest.class);
         verify(runtime, org.mockito.Mockito.times(4)).run(captured.capture());
-        assertThat(captured.getAllValues()).allSatisfy(r -> assertThat(r.allowedToolNames()).containsExactly("read"));
+        assertThat(captured.getAllValues())
+                .allSatisfy(r -> assertThat(r.allowedToolNames()).containsExactly("read"));
     }
 
     @Test
