@@ -13,4 +13,56 @@ TAIL=300 bash /opt/paperagent/scripts/server/logs.sh api
 FOLLOW=1 bash /opt/paperagent/scripts/server/logs.sh api
 ```
 
-`update.sh` pulls the `main` branch using Git HTTP/1.1, rebuilds the Docker images, and starts the updated services. It deliberately does not run `docker compose down -v`, so persistent data volumes are retained.
+`update.sh` pulls the `main` branch using Git HTTP/1.1, reloads itself when the
+management scripts changed, rebuilds the Docker images, starts the updated
+services, and waits for the API and enabled infrastructure to become ready. It
+deliberately does not run `docker compose down -v`, so persistent data volumes
+are retained.
+
+## E2B sandbox deployment
+
+The server only needs the repository-root `.env`; do not copy the Windows
+`.env.sandbox.local` file. To enable E2B, set:
+
+```dotenv
+COMPOSE_PROFILES=sandbox
+YANBAN_SANDBOX_ENABLED=true
+YANBAN_SANDBOX_REQUIRED_AT_STARTUP=false
+YANBAN_SANDBOX_PROVIDER=e2b
+YANBAN_SANDBOX_BROKER_URL=http://sandbox-broker:8091
+YANBAN_SANDBOX_BROKER_TOKEN=<at-least-32-random-characters>
+YANBAN_SANDBOX_DB_NAME=yanban_sandbox
+YANBAN_SANDBOX_DB_USER=yanban_sandbox_broker
+YANBAN_SANDBOX_DB_PASSWORD=<16-to-128-safe-random-characters>
+E2B_API_KEY=<server-side-e2b-key>
+YANBAN_E2B_TEMPLATE=yanban-research-v1
+```
+
+`YANBAN_SANDBOX_DB_PASSWORD` may contain letters, digits, `.`, `_`, `~`, and
+`-`. The `sandbox-db-init` one-shot Compose service creates or reconciles the
+least-privilege Broker database account before the Broker starts. It never
+deletes application data or volumes. The E2B API key is passed only to the
+private Broker container, not to the API, frontend, database initializer, or
+executed Candidate.
+
+The named E2B template must already exist in the account that owns
+`E2B_API_KEY`. Building `yanban-research-v1` once from
+`deploy/sandbox/e2b/e2b.Dockerfile` is sufficient for both local and server
+deployments that use the same E2B account. Java, Python, gcc/g++, and the E2B
+SDK do not need to be installed on the cloud host: the Broker image contains
+its client runtime and the compilers/interpreters live in the remote template.
+
+`COMPOSE_PROFILES=sandbox` is important for the first upgrade from an older
+`update.sh`: the old script will still activate the new profiled services after
+pulling the repository. Future versions also select the profile automatically
+when `YANBAN_SANDBOX_ENABLED=true`.
+
+After editing `.env`, deployment remains one command:
+
+```bash
+bash /opt/paperagent/scripts/server/update.sh
+```
+
+Use `bash /opt/paperagent/scripts/server/status.sh` to verify the application
+and the private Broker, and `SERVICE=sandbox-broker FOLLOW=1 bash
+/opt/paperagent/scripts/server/logs.sh` for Broker logs.

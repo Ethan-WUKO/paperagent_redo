@@ -24,6 +24,22 @@ services:
       timeout: 5s
       retries: 20
 
+  sandbox-db-init:
+    profiles: ["sandbox"]
+    image: mysql:8.0
+    restart: "no"
+    environment:
+      MYSQL_PWD: ${MYSQL_ROOT_PASSWORD}
+      SANDBOX_DB_NAME: ${YANBAN_SANDBOX_DB_NAME:-yanban_sandbox}
+      SANDBOX_DB_USER: ${YANBAN_SANDBOX_DB_USER:-yanban_sandbox_broker}
+      SANDBOX_DB_PASSWORD: ${YANBAN_SANDBOX_DB_PASSWORD:-}
+    entrypoint: ["/bin/sh", "/opt/yanban/init-e2b-database.sh"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./deploy/sandbox/init-e2b-database.sh:/opt/yanban/init-e2b-database.sh:ro
+
   redis:
     image: redis:7
     restart: unless-stopped
@@ -153,8 +169,6 @@ services:
       context: .
       dockerfile: Dockerfile.sandbox-broker
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       YANBAN_SANDBOX_BROKER_ENABLED: "true"
       YANBAN_SANDBOX_BROKER_PROVIDER: E2B
@@ -163,12 +177,19 @@ services:
       YANBAN_SANDBOX_BROKER_USER: yanban-sandbox
       YANBAN_SANDBOX_BROKER_REMOTE: "false"
       YANBAN_SANDBOX_WORKSPACE_ROOT: /var/lib/yanban-sandbox/work
+      YANBAN_SANDBOX_BROKER_TOKEN: ${YANBAN_SANDBOX_BROKER_TOKEN:-}
+      YANBAN_SANDBOX_DB_USER: ${YANBAN_SANDBOX_DB_USER:-yanban_sandbox_broker}
+      YANBAN_SANDBOX_DB_PASSWORD: ${YANBAN_SANDBOX_DB_PASSWORD:-}
       YANBAN_E2B_PYTHON_EXECUTABLE: /opt/e2b-venv/bin/python
       YANBAN_E2B_HELPER: /app/e2b_provider.py
+      E2B_API_KEY: ${E2B_API_KEY:-}
+      YANBAN_E2B_TEMPLATE: ${YANBAN_E2B_TEMPLATE:-yanban-research-v1}
       YANBAN_SANDBOX_DB_URL: jdbc:mysql://mysql:3306/${YANBAN_SANDBOX_DB_NAME:-yanban_sandbox}?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
     depends_on:
       mysql:
         condition: service_healthy
+      sandbox-db-init:
+        condition: service_completed_successfully
     volumes:
       - sandbox_broker_data:/var/lib/yanban-sandbox
     healthcheck:
