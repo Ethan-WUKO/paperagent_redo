@@ -2110,7 +2110,7 @@ async function confirmSandboxExecution(plan: AgentPlanResponse) {
   executingSandboxPlanId.value = plan.id;
   error.value = '';
   try {
-    const response = await confirmAndQueueSandboxPlan(plan.id, crypto.randomUUID());
+    const response = await confirmAndQueueSandboxPlan(plan.id, newClientRequestId());
     if (epoch !== projectEpoch) return;
     selectedPlan.value = response.data;
     await loadPlans(sessionId, epoch);
