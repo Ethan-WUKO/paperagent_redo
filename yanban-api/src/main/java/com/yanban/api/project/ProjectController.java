@@ -28,6 +28,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/v1/projects")
@@ -37,29 +38,38 @@ public class ProjectController {
     private final ProjectAgentRuntimeService projectAgentRuntimeService;
     private final ProjectUploadService projectUploadService;
     private final ProjectRevisionWorkflowService revisionWorkflow;
+    private final CandidateSandboxValidationService candidateValidations;
 
     /** Compatibility constructor for focused existing controller tests. */
     public ProjectController(ProjectService projectService) {
-        this(projectService, null, null, null);
+        this(projectService, null, null, null, java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService) {
-        this(projectService, projectAgentRuntimeService, null, null);
+        this(projectService, projectAgentRuntimeService, null, null, java.util.Optional.empty());
     }
 
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
                              ProjectUploadService projectUploadService) {
-        this(projectService, projectAgentRuntimeService, projectUploadService, null);
+        this(projectService, projectAgentRuntimeService, projectUploadService, null, java.util.Optional.empty());
+    }
+
+    public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
+                             ProjectUploadService projectUploadService,
+                             ProjectRevisionWorkflowService revisionWorkflow) {
+        this(projectService, projectAgentRuntimeService, projectUploadService, revisionWorkflow, java.util.Optional.empty());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectController(ProjectService projectService, ProjectAgentRuntimeService projectAgentRuntimeService,
                              ProjectUploadService projectUploadService,
-                             ProjectRevisionWorkflowService revisionWorkflow) {
+                             ProjectRevisionWorkflowService revisionWorkflow,
+                             java.util.Optional<CandidateSandboxValidationService> candidateValidations) {
         this.projectService = projectService;
         this.projectAgentRuntimeService = projectAgentRuntimeService;
         this.projectUploadService = projectUploadService;
         this.revisionWorkflow = revisionWorkflow;
+        this.candidateValidations = candidateValidations.orElse(null);
     }
 
     @GetMapping
@@ -106,6 +116,42 @@ public class ProjectController {
             @RequestBody ApplyCandidateRequest request) {
         requireRevisionWorkflow();
         return revisionWorkflow.applyCandidate(userId, projectId, artifactId, idempotencyKey, ifMatch, request);
+    }
+
+    @PostMapping("/{projectId}/candidates/{artifactId}/validations")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public CandidateValidationResponse validateCandidate(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @PathVariable Long artifactId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("If-Match") String ifMatch,
+            @RequestBody CreateCandidateValidationRequest request) {
+        return requireCandidateValidations().create(userId, projectId, artifactId, idempotencyKey, ifMatch, request);
+    }
+
+    @GetMapping("/{projectId}/candidates/{artifactId}/validations")
+    public List<CandidateValidationResponse> candidateValidations(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @PathVariable Long artifactId) {
+        return requireCandidateValidations().list(userId, projectId, artifactId);
+    }
+
+    @PostMapping("/{projectId}/candidate-validations/{validationId}/cancel")
+    public CandidateValidationResponse cancelCandidateValidation(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @PathVariable String validationId) {
+        return requireCandidateValidations().cancel(userId, projectId, validationId);
+    }
+
+    @PostMapping("/{projectId}/candidate-validations/{validationId}/reject")
+    public CandidateValidationResponse rejectCandidateValidation(
+            @AuthenticationPrincipal(expression = "id") Long userId,
+            @PathVariable Long projectId,
+            @PathVariable String validationId) {
+        return requireCandidateValidations().reject(userId, projectId, validationId);
     }
 
     @GetMapping("/{projectId}/revisions")
@@ -203,5 +249,13 @@ public class ProjectController {
 
     private void requireRevisionWorkflow() {
         if (revisionWorkflow == null) throw new IllegalStateException("Project revision workflow is not configured");
+    }
+
+    private CandidateSandboxValidationService requireCandidateValidations() {
+        if (candidateValidations == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Candidate sandbox validation is disabled or unavailable");
+        }
+        return candidateValidations;
     }
 }

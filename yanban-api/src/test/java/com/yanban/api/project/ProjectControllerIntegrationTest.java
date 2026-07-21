@@ -37,6 +37,19 @@ import com.yanban.core.agent.AgentSessionScope;
 
 class ProjectControllerIntegrationTest {
 
+    @org.junit.jupiter.api.Test
+    void candidateReviewRoutesRemainSeparateWhenSandboxValidationIsDisabled() {
+        ProjectService service = org.mockito.Mockito.mock(ProjectService.class);
+        ProjectController controller = new ProjectController(service);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.validateCandidate(7L, 9L, 11L,
+                "validation-key", "a".repeat(64),
+                new CreateCandidateValidationRequest(CandidateValidationProfile.MAVEN_TEST, java.util.List.of(0), true)))
+                .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class,
+                        error -> org.assertj.core.api.Assertions.assertThat(error.getStatusCode())
+                                .isEqualTo(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE));
+        org.mockito.Mockito.verifyNoInteractions(service);
+    }
+
     private MockMvc mockMvc;
     private final ProjectRepository projects = mock(ProjectRepository.class);
     private final ProjectStorageProperties properties = new ProjectStorageProperties();

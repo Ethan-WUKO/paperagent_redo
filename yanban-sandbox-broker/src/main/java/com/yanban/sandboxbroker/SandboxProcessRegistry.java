@@ -1,7 +1,11 @@
 package com.yanban.sandboxbroker;
 import java.util.concurrent.ConcurrentHashMap; import org.springframework.stereotype.Component;
 @Component class SandboxProcessRegistry {
- private final ConcurrentHashMap<String,Process> active=new ConcurrentHashMap<>();
- void register(String id,Process process){active.put(id,process);} void clear(String id,Process process){active.remove(id,process);}
- void terminate(String id){Process p=active.get(id);if(p!=null){p.destroy();try{if(!p.waitFor(2,java.util.concurrent.TimeUnit.SECONDS))p.destroyForcibly();}catch(InterruptedException e){Thread.currentThread().interrupt();p.destroyForcibly();}}}
+ private final ConcurrentHashMap<String,ActiveProcess> active=new ConcurrentHashMap<>();
+ void register(String id,Process process,boolean cancellable){active.put(id,new ActiveProcess(process,cancellable));}
+ void clear(String id,Process process){active.computeIfPresent(id,(key,current)->current.process()==process?null:current);}
+ void cancel(String id){ActiveProcess current=active.get(id);if(current!=null&&current.cancellable())terminate(current.process());}
+ void terminate(String id){ActiveProcess current=active.get(id);if(current!=null)terminate(current.process());}
+ private void terminate(Process process){process.destroy();try{if(!process.waitFor(2,java.util.concurrent.TimeUnit.SECONDS))process.destroyForcibly();}catch(InterruptedException e){Thread.currentThread().interrupt();process.destroyForcibly();}}
+ private record ActiveProcess(Process process,boolean cancellable){}
 }

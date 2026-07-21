@@ -60,6 +60,35 @@ export interface ProjectRevisionOperationResponse {
   completedAt: string;
 }
 
+export type CandidateValidationProfile = 'MAVEN_TEST' | 'MAVEN_VERIFY' | 'JAVA_SOURCE_RUN';
+
+export interface CandidateValidationResponse {
+  validationId: string;
+  projectId: number;
+  artifactId: number;
+  projectVersion: string;
+  candidateFingerprint: string;
+  acceptedChangeIndexes: number[];
+  profile: CandidateValidationProfile;
+  status: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  provider: string | null;
+  stdout: string;
+  stderr: string;
+  outputTruncated: boolean;
+  requestDigest: string;
+  receiptDigest: string | null;
+  errorCode: string | null;
+  analysisSummary: string | null;
+  analysisDisclaimer: string | null;
+  decisionStatus: 'PENDING' | 'REJECTED' | 'APPLIED';
+  applicationOperationId: number | null;
+  appliedRevisionId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UploadProjectPayload {
   name: string;
   includeRules: string[];
@@ -143,9 +172,27 @@ export function listProjectEvidence(projectId: number, planId: number) {
   return http.get<ProjectEvidenceResponse[]>(`/projects/${projectId}/agent/plans/${planId}/evidence`);
 }
 export function applyProjectCandidate(projectId: number, artifactId: number, projectVersion: string,
-                                      acceptedChangeIndexes: number[], idempotencyKey: string) {
+                                      acceptedChangeIndexes: number[], validationId: string,
+                                      idempotencyKey: string) {
   return http.post<ProjectRevisionOperationResponse>(`/projects/${projectId}/candidates/${artifactId}/applications`,
-    { acceptedChangeIndexes }, { headers: { 'Idempotency-Key': idempotencyKey, 'If-Match': projectVersion } });
+    { acceptedChangeIndexes, validationId },
+    { headers: { 'Idempotency-Key': idempotencyKey, 'If-Match': projectVersion } });
+}
+export function createCandidateValidation(projectId: number, artifactId: number, projectVersion: string,
+                                          profile: CandidateValidationProfile,
+                                          acceptedChangeIndexes: number[], idempotencyKey: string) {
+  return http.post<CandidateValidationResponse>(`/projects/${projectId}/candidates/${artifactId}/validations`,
+    { profile, acceptedChangeIndexes, confirmed: true },
+    { headers: { 'Idempotency-Key': idempotencyKey, 'If-Match': projectVersion } });
+}
+export function listCandidateValidations(projectId: number, artifactId: number) {
+  return http.get<CandidateValidationResponse[]>(`/projects/${projectId}/candidates/${artifactId}/validations`);
+}
+export function cancelCandidateValidation(projectId: number, validationId: string) {
+  return http.post<CandidateValidationResponse>(`/projects/${projectId}/candidate-validations/${validationId}/cancel`, {});
+}
+export function rejectCandidateValidation(projectId: number, validationId: string) {
+  return http.post<CandidateValidationResponse>(`/projects/${projectId}/candidate-validations/${validationId}/reject`, {});
 }
 export function listProjectRevisions(projectId: number) {
   return http.get<ProjectRevisionResponse[]>(`/projects/${projectId}/revisions`);

@@ -39,8 +39,13 @@ class SandboxWorker {
         }
         Instant startedAt=leases.now(lease); ExecResult result=null; SandboxExecutionStatus desired=SandboxExecutionStatus.FAILED; SandboxErrorCode error=null;
         try{
+            throwIfCancelled(lease);
             materialize(root,request.files()); leases.transition(lease,"MATERIALIZING",checkpoint("MATERIALIZED",entity.sandboxName()));
-            requireOk(execute(lease,commands.create(entity.sandboxName(),root,request.cpus(),request.memoryBytes()),CREATE_TIMEOUT_MILLIS,65536),"create");
+            throwIfCancelled(lease);
+            // Interrupting sbx create can leave the provider holding the workspace before the sandbox is listable.
+            // Let the bounded create finish, then honor cancellation before policy or user code can run.
+            requireOk(execute(lease,commands.create(entity.sandboxName(),root,request.cpus(),request.memoryBytes()),CREATE_TIMEOUT_MILLIS,65536,false),"create");
+            throwIfCancelled(lease);
             leases.transition(lease,"CREATED",checkpoint("CREATED",entity.sandboxName()));
             requireOk(execute(lease,commands.denyAllNetwork(entity.sandboxName()),30000,65536),"network policy");
             ExecResult policy=execute(lease,commands.verifyNetworkPolicy(entity.sandboxName()),30000,262144);
@@ -112,7 +117,7 @@ class SandboxWorker {
     }
     private ExecResult execute(SandboxLeaseService.Lease lease,List<String> argv,long timeout,long limit,boolean observeCancellation)throws Exception{
         ProcessBuilder builder=new ProcessBuilder(argv).directory(Path.of(properties.getWorkspaceRoot()).toFile());providerEnvironment.apply(builder);
-        Process process=builder.start();processes.register(lease.executionId(),process);AtomicLong budget=new AtomicLong(limit);AtomicReference<Throwable> failure=new AtomicReference<>();
+        Process process=builder.start();processes.register(lease.executionId(),process,observeCancellation);AtomicLong budget=new AtomicLong(limit);AtomicReference<Throwable> failure=new AtomicReference<>();
         ByteArrayOutputStream stdout=new ByteArrayOutputStream(),stderr=new ByteArrayOutputStream();
         Thread out=reader(process.getInputStream(),stdout,budget,failure),err=reader(process.getErrorStream(),stderr,budget,failure);out.start();err.start();
         try{long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(timeout);long heartbeat=System.nanoTime();
@@ -131,6 +136,7 @@ class SandboxWorker {
         }finally{processes.clear(lease.executionId(),process);}
     }
     private Exception failureException(Throwable failure){return failure instanceof OutputLimitException limit?limit:new IOException("sandbox output reader failed",failure);}
+    private void throwIfCancelled(SandboxLeaseService.Lease lease)throws CancelledException{if(leases.cancellationRequested(lease))throw new CancelledException();}
     private Thread reader(InputStream input,ByteArrayOutputStream output,AtomicLong budget,AtomicReference<Throwable> failure){return new Thread(()->{try(input){byte[] b=new byte[8192];int n;while((n=input.read(b))>=0){long left=budget.addAndGet(-n);if(left<0){failure.compareAndSet(null,new OutputLimitException());return;}output.write(b,0,n);}}catch(Throwable ex){failure.compareAndSet(null,ex);}},"sandbox-output-reader");}
     private String decode(ByteArrayOutputStream bytes)throws CharacterCodingException{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString();}
     private void requireDenyAll(String value)throws Exception{JsonNode root=json.readTree(value);if(!containsRule(root))throw new IllegalStateException("active scoped deny-all rule missing");}

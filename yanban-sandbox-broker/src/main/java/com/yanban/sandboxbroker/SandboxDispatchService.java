@@ -43,7 +43,7 @@ class SandboxDispatchService {
                 .orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND));
         try{entity.requestCancel(fence,executions.databaseNow(executionId));}catch(IllegalStateException ex){throw new ResponseStatusException(HttpStatus.CONFLICT,"stale fence");}
         executions.saveAndFlush(entity);
-        processes.terminate(executionId);
+        processes.cancel(executionId);
     }
 
     private SandboxDispatchResponse response(SandboxExecutionEntity entity,String digest){

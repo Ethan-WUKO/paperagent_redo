@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.reset;
@@ -94,6 +96,7 @@ class SandboxEnabledContextTest {
     @MockBean ProjectService projects;
     @MockBean AgentToolPolicyEngine toolPolicies;
     @MockBean SandboxBrokerClient broker;
+    @MockBean SandboxOutputAnalysisService outputAnalysis;
 
     private static final long USER = 7301L;
     private static final long PROJECT = 7302L;
@@ -127,6 +130,8 @@ class SandboxEnabledContextTest {
                 new ProjectService.SandboxWorkspaceMaterialization(snapshot, Map.of(PATH, CONTENT)));
         when(toolPolicies.decideProject(any(), any())).thenReturn(
                 new AgentToolPolicyEngine.Decision(List.of(), 2, 1, "test-project-policy"));
+        when(outputAnalysis.analyze(anyLong(), any(), any(), anyString()))
+                .thenReturn("Program output reports a successful build.");
     }
 
     @Test void enabledProjectionServiceIsARealTransactionalAopProxy() {

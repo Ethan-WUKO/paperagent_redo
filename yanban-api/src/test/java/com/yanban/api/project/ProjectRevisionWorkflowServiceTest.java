@@ -6,6 +6,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import com.yanban.api.agent.CandidateChangeArtifactService;
 import com.yanban.api.agent.sandbox.CandidateArtifactResponse;
@@ -61,6 +63,7 @@ class ProjectRevisionWorkflowServiceTest {
     @Autowired ProjectRevisionOperationRepository operations;
     @Autowired SysUserRepository users;
     @MockBean CandidateChangeArtifactService candidates;
+    @MockBean CandidateValidationApplicationGate validationGate;
     @MockBean ProjectObjectStorage storage;
 
     private final Map<String, Map<String, byte[]>> objects = new HashMap<>();
@@ -68,6 +71,7 @@ class ProjectRevisionWorkflowServiceTest {
     private SysUser owner;
     private Project project;
     private String baseVersion;
+    private CandidateArtifactResponse candidateResponse;
 
     @BeforeEach
     void setUp() {
@@ -82,14 +86,14 @@ class ProjectRevisionWorkflowServiceTest {
         putSnapshot(prefix, Map.of("a.txt", bytes("A"), "delete.txt", bytes("DELETE"), "keep.txt", bytes("KEEP")));
         project = projects.saveAndFlush(Project.minioUpload(owner.getId(), "Study", prefix, "[\"**\"]", "[]"));
         baseVersion = version(manifests.get(prefix));
-        CandidateArtifactResponse response = candidate(project.getId(), baseVersion);
-        when(candidates.getCurrent(owner.getId(), 55L)).thenReturn(response);
+        candidateResponse = candidate(project.getId(), baseVersion);
+        when(candidates.getCurrent(owner.getId(), 55L)).thenReturn(candidateResponse);
     }
 
     @Test
     void partialSelectionCreatesNewImmutableRevisionAndIdempotentlyReplays() throws Exception {
         ProjectRevisionOperationResponse applied = service.applyCandidate(owner.getId(), project.getId(), 55L,
-                "apply-key-0001", baseVersion, new ApplyCandidateRequest(List.of(0, 1)));
+                "apply-key-0001", baseVersion, new ApplyCandidateRequest(List.of(0, 1), "validation-1"));
 
         assertThat(applied.outcome()).isEqualTo(ProjectRevisionOperation.Outcome.SUCCEEDED);
         assertThat(applied.acceptedChangeIndexes()).containsExactly(0, 1);
@@ -102,9 +106,12 @@ class ProjectRevisionWorkflowServiceTest {
         assertThat(revisions.findByProjectIdAndUserIdOrderByCreatedAtDescIdDesc(project.getId(), owner.getId())).hasSize(2);
 
         ProjectRevisionOperationResponse replay = service.applyCandidate(owner.getId(), project.getId(), 55L,
-                "apply-key-0001", "\"" + baseVersion + "\"", new ApplyCandidateRequest(List.of(0, 1)));
+                "apply-key-0001", "\"" + baseVersion + "\"", new ApplyCandidateRequest(List.of(0, 1), "validation-1"));
         assertThat(replay.operationId()).isEqualTo(applied.operationId());
         assertThat(revisions.findByProjectIdAndUserIdOrderByCreatedAtDescIdDesc(project.getId(), owner.getId())).hasSize(2);
+        verify(validationGate, times(1)).requireSuccessful(owner.getId(), project.getId(), 55L,
+                "validation-1", baseVersion, candidateResponse, List.of(0, 1));
+        verify(validationGate, times(1)).markApplied("validation-1", applied.operationId(), applied.resultRevisionId());
 
         assertThatThrownBy(() -> service.applyCandidate(owner.getId(), project.getId(), 55L,
                 "apply-key-0001", "f".repeat(64), new ApplyCandidateRequest(List.of(0, 1))))

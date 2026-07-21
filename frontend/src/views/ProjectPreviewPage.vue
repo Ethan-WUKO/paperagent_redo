@@ -225,12 +225,68 @@
                       </dl>
                     </section>
 
+                    <section class="project-candidate-sandbox">
+                      <div class="project-panel__title">
+                        <strong>Sandbox verification</strong>
+                        <span>Candidate remains NOT_APPLIED</span>
+                      </div>
+                      <div class="project-candidate-sandbox__controls">
+                        <NSelect v-model:value="validationProfile" size="small" :options="validationProfileOptions" :disabled="loading.candidateValidation" />
+                        <NButton size="small" secondary :loading="loading.candidateValidation"
+                          :disabled="!candidateCanSelect(selectedCandidate) || selectedChangeIndexes.size === 0"
+                          @click="validationModalOpen = true">Validate selected changes</NButton>
+                      </div>
+                      <NAlert v-if="validationMessage" :type="validationMessageType" :show-icon="false">{{ validationMessage }}</NAlert>
+                      <div v-if="candidateValidations.length" class="project-candidate-validation-history">
+                        <button v-for="validation in candidateValidations" :key="validation.validationId"
+                          :class="{ active: selectedValidation?.validationId === validation.validationId }"
+                          @click="selectedValidation = validation">
+                          <span>{{ validation.profile }}</span>
+                          <NTag size="tiny" :type="candidateValidationStatusType(validation.status)">{{ validation.status }}</NTag>
+                          <small>{{ formatDateTime(validation.createdAt) }}</small>
+                        </button>
+                      </div>
+                      <article v-if="selectedValidation" class="project-candidate-validation-receipt">
+                        <dl>
+                          <dt>validation</dt><dd :title="selectedValidation.validationId">{{ selectedValidation.validationId }}</dd>
+                          <dt>binding</dt><dd>{{ shortHash(selectedValidation.candidateFingerprint) }} / {{ shortHash(selectedValidation.projectVersion) }}</dd>
+                          <dt>profile</dt><dd>{{ selectedValidation.profile }}</dd>
+                          <dt>status</dt><dd>{{ selectedValidation.status }}</dd>
+                          <dt>exit code</dt><dd>{{ selectedValidation.exitCode ?? '-' }}</dd>
+                          <dt>timed out</dt><dd>{{ selectedValidation.timedOut ? 'true' : 'false' }}</dd>
+                          <dt>output truncated</dt><dd>{{ selectedValidation.outputTruncated ? 'true' : 'false' }}</dd>
+                          <dt>provider</dt><dd>{{ selectedValidation.provider || '-' }}</dd>
+                          <dt>request digest</dt><dd :title="selectedValidation.requestDigest">{{ selectedValidation.requestDigest }}</dd>
+                          <dt>receipt digest</dt><dd :title="selectedValidation.receiptDigest || '-'">{{ selectedValidation.receiptDigest || '-' }}</dd>
+                          <dt>decision</dt><dd>{{ selectedValidation.decisionStatus }}</dd>
+                        </dl>
+                        <NAlert v-if="selectedValidation.errorCode" type="warning" :show-icon="false">{{ selectedValidation.errorCode }}</NAlert>
+                        <NAlert v-if="selectedValidation.outputTruncated" type="warning" :show-icon="false">
+                          Output reached the configured limit and was truncated. Review the bounded stdout/stderr below.
+                        </NAlert>
+                        <details open><summary>Raw stdout</summary><pre>{{ selectedValidation.stdout || '(empty)' }}</pre></details>
+                        <details open><summary>Raw stderr</summary><pre>{{ selectedValidation.stderr || '(empty)' }}</pre></details>
+                        <div class="project-candidate-output-analysis">
+                          <strong>Read-only analysis summary</strong>
+                          <p>{{ selectedValidation.analysisDisclaimer || '基于输出、未独立验证。' }}</p>
+                          <pre>{{ selectedValidation.analysisSummary || 'No analysis summary was generated; review the raw Broker output above.' }}</pre>
+                        </div>
+                        <NSpace justify="end">
+                          <NButton v-if="!candidateValidationTerminal(selectedValidation.status)" size="tiny" secondary
+                            :loading="loading.cancelCandidateValidation" @click="cancelSelectedValidation">Cancel run</NButton>
+                          <NButton v-if="selectedValidation.decisionStatus === 'PENDING'" size="tiny" type="warning" secondary
+                            :loading="loading.rejectCandidateValidation" @click="rejectSelectedValidation">Reject Candidate</NButton>
+                        </NSpace>
+                      </article>
+                      <NEmpty v-else size="small" description="No sandbox verification receipt for this Candidate yet." />
+                    </section>
+
                     <section class="project-candidate-files">
                       <article v-for="(entry, changeIndex) in selectedCandidate.candidate.reviewDiff.entries" :key="`${entry.type}:${entry.relativePath}`">
                         <header>
                           <NCheckbox
                             :checked="selectedChangeIndexes.has(changeIndex)"
-                            :disabled="!candidateCanApply(selectedCandidate) || loading.applyCandidate"
+                            :disabled="!candidateCanSelect(selectedCandidate) || loading.applyCandidate || loading.candidateValidation"
                             :aria-label="`Accept ${entry.relativePath}`"
                             @update:checked="(checked) => setChangeSelected(changeIndex, checked)"
                           />
@@ -579,6 +635,17 @@
       </NSpace>
     </NModal>
 
+    <NModal v-model:show="validationModalOpen" preset="card" title="Run Candidate verification in sandbox" :mask-closable="!loading.candidateValidation" :closable="!loading.candidateValidation" :style="{ width: 'min(560px, calc(100vw - 32px))' }">
+      <p class="project-delete-copy">
+        This materializes the trusted ProjectVersion plus {{ selectedChangeIndexes.size }} selected Candidate change{{ selectedChangeIndexes.size === 1 ? '' : 's' }} into an isolated work copy and runs {{ validationProfile }}.
+        Networking and sensitive environment injection remain disabled. This does not apply or modify the Project.
+      </p>
+      <NSpace justify="end">
+        <NButton :disabled="loading.candidateValidation" @click="validationModalOpen = false">Cancel</NButton>
+        <NButton type="primary" :loading="loading.candidateValidation" @click="confirmCandidateValidation">Confirm and run</NButton>
+      </NSpace>
+    </NModal>
+
     <NModal v-model:show="rollbackModalOpen" preset="card" title="Rollback Project version" :mask-closable="!loading.rollback" :closable="!loading.rollback" :style="{ width: 'min(520px, calc(100vw - 32px))' }">
       <p class="project-delete-copy">
         Switch the current Project to revision {{ rollbackTarget?.id }} ({{ rollbackTarget ? shortHash(rollbackTarget.projectVersion) : '' }}).
@@ -595,12 +662,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NInput, NModal, NSpace, NSpin, NTag } from 'naive-ui';
+import { NAlert, NButton, NCheckbox, NDropdown, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import { cancelPlan, confirmAndQueueSandboxPlan, deleteSession as deleteAgentSession, listMessages, listPlans, updateSession as updateAgentSession, type AgentMessageResponse, type AgentPlanResponse, type AgentSessionResponse } from '@/api/agent';
 import { candidateReviewFailure, getCandidateChange, isCandidateArtifactV1, listArtifacts, type ArtifactResponse, type CandidateArtifactResponse, type CandidateChangeType, type CandidateEvidenceRef, type CandidateReviewState } from '@/api/artifact';
-import { applyProjectCandidate, createProjectPlan, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rollbackProjectRevision, searchProject, sendProjectMessage, uploadProject, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
+import { applyProjectCandidate, cancelCandidateValidation, createCandidateValidation, createProjectPlan, createProjectSession, deleteProject, exportProjectRevision, filterProjectUploadFiles, getProjectManifest, listCandidateValidations, listProjectEvidence, listProjectRevisions, listProjectSessions, listProjects, readProjectFile, rejectCandidateValidation, rollbackProjectRevision, searchProject, sendProjectMessage, uploadProject, type CandidateValidationProfile, type CandidateValidationResponse, type ProjectEvidenceResponse, type ProjectFileResponse, type ProjectManifestResponse, type ProjectRevisionResponse, type ProjectSearchHit, type ProjectSummaryResponse } from '@/api/project';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
 import {
@@ -611,6 +678,7 @@ import {
   withoutInternalProjectEvidenceRefs,
 } from '@/utils/projectCompletion';
 import { requiresSandboxConfirmation, sandboxConfirmationStepCount } from '@/utils/projectSandboxConfirmation';
+import { candidateValidationCanApply } from '@/utils/candidateValidationCanApply';
 
 type ProjectChatRole = 'user' | 'assistant' | 'process';
 type ProjectInspectorTab = 'preview' | 'evidence' | 'changes' | 'versions';
@@ -676,13 +744,24 @@ const evidence = ref<ProjectEvidenceResponse[]>([]);
 const candidates = ref<CandidateReviewItem[]>([]);
 const selectedCandidate = ref<CandidateReviewItem | null>(null);
 const selectedChangeIndexes = ref<Set<number>>(new Set());
+const candidateValidations = ref<CandidateValidationResponse[]>([]);
+const selectedValidation = ref<CandidateValidationResponse | null>(null);
+const validationProfile = ref<CandidateValidationProfile>('MAVEN_TEST');
+const validationProfileOptions = [
+  { label: 'Maven offline test', value: 'MAVEN_TEST' },
+  { label: 'Maven offline verify', value: 'MAVEN_VERIFY' },
+  { label: 'Java source compile and run', value: 'JAVA_SOURCE_RUN' },
+];
 const revisions = ref<ProjectRevisionResponse[]>([]);
 const applyModalOpen = ref(false);
+const validationModalOpen = ref(false);
 const rollbackModalOpen = ref(false);
 const rollbackTarget = ref<ProjectRevisionResponse | null>(null);
 const exportingRevisionId = ref<number | null>(null);
 const applicationMessage = ref('');
 const applicationMessageType = ref<'success' | 'warning' | 'error'>('success');
+const validationMessage = ref('');
+const validationMessageType = ref<'success' | 'warning' | 'error'>('success');
 const revisionMessage = ref('');
 const revisionMessageType = ref<'success' | 'warning' | 'error'>('success');
 const centerTab = ref<'chat' | 'plan'>('chat');
@@ -703,6 +782,7 @@ const projectContentRefs: Record<string, HTMLElement | null> = {};
 let projectEpoch = 0;
 let sessionFlight: Promise<number | null> | null = null;
 let planPoll: number | null = null;
+let candidateValidationPoll: number | null = null;
 let currentSocket: WebSocket | null = null;
 let activeClientRequestId: string | null = null;
 let currentAssistantMessageId: string | null = null;
@@ -722,6 +802,9 @@ const loading = reactive({
   candidates: false,
   revisions: false,
   applyCandidate: false,
+  candidateValidation: false,
+  cancelCandidateValidation: false,
+  rejectCandidateValidation: false,
   rollback: false,
   create: false,
   deleteProject: false,
@@ -1140,20 +1223,42 @@ function showInspector(tab: ProjectInspectorTab) {
 
 function selectCandidate(candidate: CandidateReviewItem) {
   selectedCandidate.value = candidate;
-  selectedChangeIndexes.value = candidateCanApply(candidate) && candidate.candidate
+  selectedChangeIndexes.value = candidateCanSelect(candidate) && candidate.candidate
     ? new Set(candidate.candidate.changes.map((_, index) => index))
     : new Set();
   applicationMessage.value = '';
+  validationMessage.value = '';
+  candidateValidations.value = [];
+  selectedValidation.value = null;
   showInspector('changes');
+  void loadCandidateValidations(candidate);
 }
 
-function candidateCanApply(item: CandidateReviewItem | null) {
+function candidateCanSelect(item: CandidateReviewItem | null) {
   return !!item?.candidate
     && item.state === 'VALIDATED'
     && item.candidate.governanceStatus === 'VALIDATED'
     && item.candidate.applicationStatus === 'NOT_APPLIED'
     && item.candidate.validation.issues.length === 0
     && item.candidate.validation.checks.every((check) => check.status === 'PASSED');
+}
+
+function selectedIndexes() {
+  return [...selectedChangeIndexes.value].sort((left, right) => left - right);
+}
+
+function applicableValidation(item: CandidateReviewItem | null) {
+  if (!candidateCanSelect(item) || !item?.candidate) return null;
+  const accepted = selectedIndexes();
+  return candidateValidations.value.find((validation) => candidateValidationCanApply(validation, {
+    projectVersion: item.candidate!.projectVersion,
+    candidateFingerprint: item.candidate!.fingerprint,
+    acceptedChangeIndexes: accepted,
+  })) || null;
+}
+
+function candidateCanApply(item: CandidateReviewItem | null) {
+  return applicableValidation(item) !== null;
 }
 
 function setChangeSelected(index: number, checked: boolean) {
@@ -1172,13 +1277,14 @@ async function confirmApplyCandidate() {
   const projectId = activeProjectId.value;
   const item = selectedCandidate.value;
   const epoch = projectEpoch;
-  if (!projectId || !item?.candidate || !candidateCanApply(item) || selectedChangeIndexes.value.size === 0) return;
+  const validation = applicableValidation(item);
+  if (!projectId || !item?.candidate || !validation || selectedChangeIndexes.value.size === 0) return;
   loading.applyCandidate = true;
   applicationMessage.value = '';
   try {
-    const accepted = [...selectedChangeIndexes.value].sort((left, right) => left - right);
+    const accepted = selectedIndexes();
     const { data } = await applyProjectCandidate(projectId, item.artifact.id,
-      item.candidate.projectVersion, accepted, newClientRequestId());
+      item.candidate.projectVersion, accepted, validation.validationId, newClientRequestId());
     applyModalOpen.value = false;
     applicationMessageType.value = 'success';
     applicationMessage.value = `New Project version ${shortHash(data.resultVersion)} was published. Candidate ${item.artifact.id} remains NOT_APPLIED.`;
@@ -1201,6 +1307,108 @@ async function confirmApplyCandidate() {
   } finally {
     loading.applyCandidate = false;
   }
+}
+
+function candidateValidationTerminal(status: string) {
+  return ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT', 'CLEANUP_FAILED'].includes(status.toUpperCase());
+}
+
+function candidateValidationStatusType(status: string): 'success' | 'warning' | 'error' | 'info' {
+  if (status === 'SUCCEEDED') return 'success';
+  if (['FAILED', 'TIMED_OUT', 'CLEANUP_FAILED'].includes(status)) return 'error';
+  if (['CANCELLED', 'CANCEL_REQUESTED', 'RETRY'].includes(status)) return 'warning';
+  return 'info';
+}
+
+async function loadCandidateValidations(item = selectedCandidate.value, epoch = projectEpoch) {
+  const projectId = activeProjectId.value;
+  if (!projectId || !item?.candidate) return;
+  try {
+    const { data } = await listCandidateValidations(projectId, item.artifact.id);
+    if (epoch !== projectEpoch || selectedCandidate.value?.artifact.id !== item.artifact.id) return;
+    candidateValidations.value = data;
+    const selectedId = selectedValidation.value?.validationId;
+    selectedValidation.value = data.find((validation) => validation.validationId === selectedId) || data[0] || null;
+    validationMessage.value = '';
+  } catch (cause) {
+    if (epoch !== projectEpoch) return;
+    candidateValidations.value = [];
+    selectedValidation.value = null;
+    validationMessageType.value = apiStatus(cause) === 503 ? 'warning' : 'error';
+    validationMessage.value = apiStatus(cause) === 503
+      ? `Sandbox verification is unavailable. Candidate review and ordinary Project chat remain available. ${apiError(cause)}`
+      : apiError(cause);
+  }
+}
+
+async function confirmCandidateValidation() {
+  const projectId = activeProjectId.value;
+  const item = selectedCandidate.value;
+  const epoch = projectEpoch;
+  if (!projectId || !item?.candidate || !candidateCanSelect(item) || selectedChangeIndexes.value.size === 0) return;
+  loading.candidateValidation = true;
+  validationMessage.value = '';
+  try {
+    const { data } = await createCandidateValidation(projectId, item.artifact.id,
+      item.candidate.projectVersion, validationProfile.value, selectedIndexes(), newClientRequestId());
+    if (epoch !== projectEpoch) return;
+    validationModalOpen.value = false;
+    selectedValidation.value = data;
+    await loadCandidateValidations(item, epoch);
+    void pollCandidateValidation(item.artifact.id, data.validationId, epoch, 0);
+  } catch (cause) {
+    if (epoch !== projectEpoch) return;
+    validationMessageType.value = apiStatus(cause) === 503 ? 'warning' : 'error';
+    validationMessage.value = apiStatus(cause) === 503
+      ? `Sandbox verification is unavailable. The Candidate was not applied. ${apiError(cause)}`
+      : apiError(cause);
+  } finally {
+    if (epoch === projectEpoch) loading.candidateValidation = false;
+  }
+}
+
+async function pollCandidateValidation(artifactId: number, validationId: string, epoch: number, attempt: number) {
+  if (epoch !== projectEpoch || selectedCandidate.value?.artifact.id !== artifactId) return;
+  await loadCandidateValidations(selectedCandidate.value, epoch);
+  const current = candidateValidations.value.find((validation) => validation.validationId === validationId);
+  if (!current || candidateValidationTerminal(current.status) || current.decisionStatus !== 'PENDING') return;
+  if (attempt >= 450) {
+    validationMessageType.value = 'warning';
+    validationMessage.value = 'Sandbox verification is still pending. Refresh the Candidate to read its durable result.';
+    return;
+  }
+  candidateValidationPoll = window.setTimeout(() => {
+    void pollCandidateValidation(artifactId, validationId, epoch, attempt + 1);
+  }, 2000);
+}
+
+async function cancelSelectedValidation() {
+  const projectId = activeProjectId.value;
+  const validation = selectedValidation.value;
+  if (!projectId || !validation || candidateValidationTerminal(validation.status)) return;
+  loading.cancelCandidateValidation = true;
+  try {
+    selectedValidation.value = (await cancelCandidateValidation(projectId, validation.validationId)).data;
+    await loadCandidateValidations();
+    void pollCandidateValidation(validation.artifactId, validation.validationId, projectEpoch, 0);
+  } catch (cause) {
+    validationMessageType.value = 'error'; validationMessage.value = apiError(cause);
+  } finally { loading.cancelCandidateValidation = false; }
+}
+
+async function rejectSelectedValidation() {
+  const projectId = activeProjectId.value;
+  const validation = selectedValidation.value;
+  if (!projectId || !validation || validation.decisionStatus !== 'PENDING') return;
+  loading.rejectCandidateValidation = true;
+  try {
+    selectedValidation.value = (await rejectCandidateValidation(projectId, validation.validationId)).data;
+    validationMessageType.value = 'warning';
+    validationMessage.value = 'Candidate rejected. No Project version was created; the validation remains in history.';
+    await loadCandidateValidations();
+  } catch (cause) {
+    validationMessageType.value = 'error'; validationMessage.value = apiError(cause);
+  } finally { loading.rejectCandidateValidation = false; }
 }
 
 async function loadRevisions() {
@@ -1559,6 +1767,10 @@ async function selectProject(projectId: number) {
     window.clearTimeout(planPoll);
     planPoll = null;
   }
+  if (candidateValidationPoll != null) {
+    window.clearTimeout(candidateValidationPoll);
+    candidateValidationPoll = null;
+  }
   loading.file = false;
   loading.search = false;
   loading.send = false;
@@ -1577,7 +1789,10 @@ async function selectProject(projectId: number) {
   selectedPlan.value = null;
   selectedCandidate.value = null;
   selectedChangeIndexes.value = new Set();
+  candidateValidations.value = [];
+  selectedValidation.value = null;
   applicationMessage.value = '';
+  validationMessage.value = '';
   revisionMessage.value = '';
   inspectorTab.value = 'preview';
   inspectorOpen.value = true;
@@ -1952,11 +2167,12 @@ async function loadCandidates(sessionId: number, epoch = projectEpoch) {
     candidates.value = details;
     if (selectedCandidate.value) {
       selectedCandidate.value = candidates.value.find((item) => item.artifact.id === selectedCandidate.value?.artifact.id) || null;
-      if (!candidateCanApply(selectedCandidate.value)) selectedChangeIndexes.value = new Set();
+      if (!candidateCanSelect(selectedCandidate.value)) selectedChangeIndexes.value = new Set();
       else if (selectedCandidate.value?.candidate) {
         selectedChangeIndexes.value = new Set([...selectedChangeIndexes.value]
           .filter((index) => index < selectedCandidate.value!.candidate!.changes.length));
       }
+      if (selectedCandidate.value) await loadCandidateValidations(selectedCandidate.value, epoch);
     }
   } catch (cause) {
     if (epoch === projectEpoch) error.value = apiError(cause);
@@ -2001,6 +2217,10 @@ async function selectConversation(sessionId: number) {
   currentProcessMessageId = null;
   projectEpoch++;
   sessionFlight = null;
+  if (candidateValidationPoll != null) {
+    window.clearTimeout(candidateValidationPoll);
+    candidateValidationPoll = null;
+  }
   activeSessionId.value = sessionId;
   syncProjectLocation(activeProjectId.value, sessionId);
   messages.value = [];
@@ -2009,6 +2229,8 @@ async function selectConversation(sessionId: number) {
   candidates.value = [];
   selectedPlan.value = null;
   selectedCandidate.value = null;
+  candidateValidations.value = [];
+  selectedValidation.value = null;
   const epoch = projectEpoch;
   loading.messages = true;
   loading.plans = true;
@@ -2214,6 +2436,7 @@ onMounted(loadProjects);
 onUnmounted(() => {
   closeProjectSocket();
   if (planPoll != null) window.clearTimeout(planPoll);
+  if (candidateValidationPoll != null) window.clearTimeout(candidateValidationPoll);
   projectEpoch++;
 });
 </script>
@@ -2440,6 +2663,21 @@ onUnmounted(() => {
 .project-candidate-meta dt, .project-candidate-usage dt, .project-candidate-files dt, .project-candidate-evidence dt { color: var(--yb-text-muted); }
 .project-candidate-meta dd, .project-candidate-usage dd, .project-candidate-files dd, .project-candidate-evidence dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .project-candidate-validation { display: flex; flex-direction: column; gap: 8px; padding-block: 9px; border-block: 1px solid var(--yb-border); }
+.project-candidate-sandbox { display: flex; flex-direction: column; gap: 8px; padding-block: 9px; border-bottom: 1px solid var(--yb-border); }
+.project-candidate-sandbox__controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.project-candidate-validation-history { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px; }
+.project-candidate-validation-history button { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid var(--yb-border); border-radius: 7px; background: var(--yb-bg-elevated); color: var(--yb-text-secondary); cursor: pointer; }
+.project-candidate-validation-history button.active { border-color: var(--yb-primary); box-shadow: inset 2px 0 0 var(--yb-primary); }
+.project-candidate-validation-history small { color: var(--yb-text-muted); font-size: 8px; }
+.project-candidate-validation-receipt { display: flex; flex-direction: column; gap: 8px; padding: 9px; border: 1px solid var(--yb-border); border-radius: 7px; background: var(--yb-bg-elevated); }
+.project-candidate-validation-receipt > dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; margin: 0; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.project-candidate-validation-receipt dt { color: var(--yb-text-muted); }
+.project-candidate-validation-receipt dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.project-candidate-validation-receipt details { border-top: 1px solid var(--yb-border); }
+.project-candidate-validation-receipt summary { padding: 7px 0; cursor: pointer; color: var(--yb-text-secondary); font-size: 10px; font-weight: 650; }
+.project-candidate-validation-receipt pre { box-sizing: border-box; max-height: 240px; margin: 0; padding: 8px; overflow: auto; border-radius: 6px; background: var(--yb-bg-muted); white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.project-candidate-output-analysis { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1px dashed var(--yb-border); border-radius: 7px; }
+.project-candidate-output-analysis p { margin: 0; color: var(--yb-text-muted); font-size: 9px; }
 .project-validation-checks { display: flex; flex-wrap: wrap; gap: 4px; }
 .project-validation-issues { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 17px; }
 .project-validation-issues li { color: var(--yb-text-secondary); overflow-wrap: anywhere; }

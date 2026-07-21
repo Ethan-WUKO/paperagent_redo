@@ -17,7 +17,7 @@ import org.springframework.util.StringUtils;
 @Service
 @ConditionalOnProperty(prefix = "yanban.sandbox", name = "enabled", havingValue = "true")
 public class SandboxOutputAnalysisService {
-    public static final String DISCLAIMER = "AI interpretation based on program output; not independently verified.";
+    public static final String DISCLAIMER = "基于输出、未独立验证 / AI interpretation based on program output; not independently verified.";
     private static final int MAX_OUTPUT_CHARS = 16_000;
     private static final int MAX_SUMMARY_CHARS = 2_000;
 

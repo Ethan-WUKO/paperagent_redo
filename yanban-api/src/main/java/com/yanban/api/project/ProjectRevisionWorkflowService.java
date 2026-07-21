@@ -43,12 +43,14 @@ public class ProjectRevisionWorkflowService {
     private final ProjectStorageProperties properties;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactions;
+    private final CandidateValidationApplicationGate validationGate;
 
     public ProjectRevisionWorkflowService(ProjectRepository projects, ProjectRevisionRepository revisions,
                                           ProjectRevisionOperationRepository operations,
                                           CandidateChangeArtifactService candidates, ProjectObjectStorage storage,
                                           ProjectStorageProperties properties, ObjectMapper objectMapper,
-                                          org.springframework.transaction.PlatformTransactionManager transactionManager) {
+                                          org.springframework.transaction.PlatformTransactionManager transactionManager,
+                                          CandidateValidationApplicationGate validationGate) {
         this.projects = projects;
         this.revisions = revisions;
         this.operations = operations;
@@ -57,6 +59,7 @@ public class ProjectRevisionWorkflowService {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.transactions = new TransactionTemplate(transactionManager);
+        this.validationGate = validationGate;
     }
 
     public ProjectRevisionOperationResponse applyCandidate(Long userId, Long projectId, Long artifactId,
@@ -66,35 +69,38 @@ public class ProjectRevisionWorkflowService {
         String key = requireIdempotencyKey(idempotencyKey);
         List<Integer> accepted = sortedDistinctNonEmpty(request == null ? null : request.acceptedChangeIndexes());
         String expectedVersion = requireIfMatch(ifMatch);
-        String requestHash = requestHash("APPLICATION", artifactId, expectedVersion, accepted);
+        String validationId = request == null ? null : request.validationId();
+        String requestHash = requestHash("APPLICATION:" + validationId, artifactId, expectedVersion, accepted);
         ProjectRevisionOperation existing = findReplay(userId, projectId, key, requestHash);
         if (existing != null) return replay(existing);
 
         requireManagedProject(userId, projectId);
         CandidateArtifactResponse candidate = candidates.getCurrent(userId, artifactId);
-        List<Integer> rejected = complement(candidate.changes().size(), accepted);
         requireAcceptedIndexes(candidate.changes().size(), accepted);
+        List<Integer> rejected = complement(candidate.changes().size(), accepted);
         if (candidate.projectId() != projectId || !candidate.projectVersion().value().equals(expectedVersion)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Candidate does not match the current Project version");
         }
+
+        if (candidate.governanceStatus() != CandidateChangeSet.GovernanceStatus.VALIDATED
+                || !candidate.validation().valid()
+                || candidate.applicationStatus() != CandidateChangeSet.ApplicationStatus.NOT_APPLIED) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Candidate is stale or invalid and cannot be applied");
+        }
+        validationGate.requireSuccessful(userId, projectId, artifactId, validationId,
+                expectedVersion, candidate, accepted);
 
         ReservedOperation reserved = reserve(userId, projectId, key, requestHash,
                 ProjectRevisionOperation.Type.APPLICATION, expectedVersion, artifactId,
                 candidate.fingerprint().sha256(), accepted, rejected);
         if (reserved.replay() != null) return replay(reserved.replay());
-        if (candidate.governanceStatus() != CandidateChangeSet.GovernanceStatus.VALIDATED
-                || !candidate.validation().valid()
-                || candidate.applicationStatus() != CandidateChangeSet.ApplicationStatus.NOT_APPLIED) {
-            fail(reserved.operationId(), "HTTP_422");
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Candidate is stale or invalid and cannot be applied");
-        }
 
         String newPrefix = storage.createPrefix(userId);
         try {
             TrustedManifest finalManifest = createRevisionSnapshot(reserved.basePrefix(), newPrefix,
                     candidate.changes(), new HashSet<>(accepted));
-            return publishApplication(reserved, newPrefix, finalManifest);
+            return publishApplication(reserved, newPrefix, finalManifest, validationId);
         } catch (RuntimeException ex) {
             fail(reserved.operationId(), errorCode(ex));
             throw ex;
@@ -212,7 +218,7 @@ public class ProjectRevisionWorkflowService {
     }
 
     private ProjectRevisionOperationResponse publishApplication(ReservedOperation reserved, String prefix,
-                                                                TrustedManifest manifest) {
+                                                                TrustedManifest manifest, String validationId) {
         return transactions.execute(status -> {
             ProjectRevisionOperation operation = operations.findById(reserved.operationId()).orElseThrow();
             Project project = lockedManagedProject(operation.getUserId(), operation.getProjectId());
@@ -225,6 +231,7 @@ public class ProjectRevisionWorkflowService {
             projects.saveAndFlush(project);
             operation.succeed(revision.getId(), revision.getProjectVersion());
             operations.saveAndFlush(operation);
+            validationGate.markApplied(validationId, operation.getId(), revision.getId());
             return response(operation);
         });
     }
