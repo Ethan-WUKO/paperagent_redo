@@ -49,12 +49,13 @@ final class CandidateProposalEvidenceSelector {
             for (PortableEvidenceSelector selector : changeSelectors) {
                 List<EvidenceRef> matches = trusted.evidence().stream()
                         .filter(ref -> exact(ref, selector, currentVersion)).toList();
-                if (matches.size() != 1) {
-                    throw new IllegalArgumentException(matches.isEmpty()
-                            ? noExactMatchMessage(selector, trusted, currentVersion)
-                            : "Evidence selector is ambiguous across trusted observations");
+                if (matches.isEmpty()) {
+                    throw new IllegalArgumentException(noExactMatchMessage(selector, trusted, currentVersion));
                 }
-                ids.add(matches.get(0).id());
+                // Re-reading the same current file range creates a new trusted observation id, but not a
+                // different portable fact. Prefer the latest exact observation deterministically. Hash,
+                // ProjectVersion, range and parser mismatches are still excluded by exact().
+                ids.add(matches.get(matches.size() - 1).id());
             }
             if (ids.stream().distinct().count() != ids.size()) {
                 throw new IllegalArgumentException("a change contains duplicate Evidence selectors");

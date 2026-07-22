@@ -49,7 +49,7 @@ class CandidateProposalEvidenceSelectorTest {
     }
 
     @Test
-    void rejectsAmbiguousRepeatedPortableEvidenceEvenWhenBothCallsWereTrusted() throws Exception {
+    void repeatedExactTrustedReadsResolveToLatestEquivalentObservation() throws Exception {
         arrangeManifest(PROJECT_ID, VERSION, HASH);
         CandidateProposalExecutionScope.Context scope = scope(List.of(
                 assistantCall("read-1", "project_read_file"),
@@ -57,9 +57,11 @@ class CandidateProposalEvidenceSelectorTest {
                 assistantCall("read-2", "project_read_file"),
                 ChatMessage.tool("read-2", json.writeValueAsString(readResult(PROJECT_ID, VERSION, HASH)))));
 
-        assertThatThrownBy(() -> selector.select(scope, new ProjectVersionRef(VERSION),
-                List.of(List.of(portable(HASH)))))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("ambiguous");
+        CandidateProposalEvidenceSelector.Selection selected = selector.select(scope,
+                new ProjectVersionRef(VERSION), List.of(List.of(portable(HASH))));
+
+        assertThat(selected.evidenceIds()).singleElement().satisfies(ids ->
+                assertThat(ids).singleElement().asString().endsWith(":read-2"));
     }
 
     @Test

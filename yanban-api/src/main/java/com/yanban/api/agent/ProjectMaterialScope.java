@@ -14,7 +14,7 @@ public final class ProjectMaterialScope {
     private static final Pattern RELATIVE_FILE = Pattern.compile(
             "(?i)([A-Za-z0-9_.()\\-]+(?:[/\\\\][A-Za-z0-9_.()\\-]+)*\\."
                     + "(?:tex|bib|py|java|kt|kts|js|jsx|ts|tsx|json|ya?ml|toml|xml|csv|tsv|"
-                    + "md|rst|ipynb|mat|m|c|cc|cpp|cxx|h|hpp|sh|ps1))");
+                    + "md|rst|ipynb|mat|m|c|cc|cpp|cxx|h|hpp|sh|ps1))(?![A-Za-z0-9])");
 
     private ProjectMaterialScope() {
     }

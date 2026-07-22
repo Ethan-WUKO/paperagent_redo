@@ -326,17 +326,24 @@ public class AgentStrategySelector {
                 "查找", "搜索", "检索", "读取", "检查", "分析", "总结", "审计", "列出", "目录结构");
         boolean simpleQuestion = containsAny(normalized, "what is", "why", "how does", "explain", "是什么", "为什么", "解释")
                 && !toolUseRequested && materials.isEmpty();
-        boolean positiveNamedFileObservation = (NAMED_FILE_REFERENCE
-                .matcher(userMessage == null ? "" : userMessage).find()
-                || containsAny(normalized, "readme", "makefile", "license"))
-                && !declinesProjectObservation(normalized);
-        boolean crossMaterial = materials.size() >= 2;
+        boolean projectObservationDeclined = declinesProjectObservation(normalized);
         boolean sandboxExecutionRequired = project
                 && ProjectSandboxExecutionIntent.requiresGovernedExecution(userMessage);
         boolean candidateChangeRequired = project
                 && ProjectCandidateChangeIntent.requiresCandidateChange(userMessage);
+        if (projectObservationDeclined && !sandboxExecutionRequired && !candidateChangeRequired) {
+            // Material words such as "Java" may describe ordinary knowledge rather than current Project files.
+            // A pure no-read knowledge request must not create a Project Evidence requirement. Explicit execution
+            // or change intent still needs the current code/version material that its governed boundary consumes.
+            materials.clear();
+        }
+        boolean positiveNamedFileObservation = (NAMED_FILE_REFERENCE
+                .matcher(userMessage == null ? "" : userMessage).find()
+                || containsAny(normalized, "readme", "makefile", "license"))
+                && !projectObservationDeclined;
+        boolean crossMaterial = materials.size() >= 2;
         boolean projectToolRequired = project && (positiveNamedFileObservation
-                || (toolUseRequested && !declinesProjectObservation(normalized))
+                || (toolUseRequested && !projectObservationDeclined)
                 || sandboxExecutionRequired
                 || candidateChangeRequired);
         List<DomainConsistencyCheck> consistencyChecks = crossMaterial && fileHashEquality

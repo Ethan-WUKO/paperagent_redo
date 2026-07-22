@@ -1308,7 +1308,7 @@ public class PlanAgentService {
                 ResolvedToolPolicy sandboxAuthorityPolicy = sandboxDispatchAuthorityPolicy(
                         projectContext != null, authorityPolicy, projectAuthorityPolicy);
                 executeSandboxPlanStep(plan, step, sandboxAuthorityPolicy, checkpointCeiling,
-                        requiredSandboxMaterialPaths(step), traceId);
+                        requiredSandboxMaterialPaths(step, plan.getGoal()), traceId);
                 return;
             }
             ResolvedToolPolicy runtimeToolPolicy = constrainDurableToolPolicy(
@@ -2643,9 +2643,17 @@ public class PlanAgentService {
     }
 
     static Set<String> requiredSandboxMaterialPaths(AgentPlanStep step) {
+        return requiredSandboxMaterialPaths(step, null);
+    }
+
+    static Set<String> requiredSandboxMaterialPaths(AgentPlanStep step, String fallbackGoal) {
         if (step == null) return Set.of();
         List<String> paths = new ArrayList<>(ProjectMaterialScope.explicitRelativePathsPreservingCase(
                 step.getTitle(), step.getDescription(), step.getSuccessCriteria()));
+        if (paths.isEmpty()) {
+            Set<String> goalPaths = ProjectMaterialScope.explicitRelativePathsPreservingCase(fallbackGoal);
+            if (goalPaths.size() == 1) paths.addAll(goalPaths);
+        }
         paths.sort(Comparator.comparingInt(String::length).reversed());
         LinkedHashSet<String> selected = new LinkedHashSet<>();
         for (String path : paths) {

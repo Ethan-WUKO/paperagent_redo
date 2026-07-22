@@ -21,6 +21,7 @@ import org.springframework.util.StringUtils;
 
 @Component
 public class PlanningAgentPlanner {
+    private static final int CANDIDATE_PROPOSAL_MIN_TOOL_CALLS = 3;
 
     private static final int DEFAULT_MAX_PLAN_STEPS = 6;
     private static final int DEFAULT_MAX_RECOVERY_STEPS = 3;
@@ -264,7 +265,8 @@ public class PlanningAgentPlanner {
                 13. project_propose_candidate is allowed only when the original user explicitly requests a modification,
                     patch, Candidate, or code change. A read, comparison, summary, matrix, report, or conclusion task is
                     read-only: use FILE_READ plus ANALYSIS/VERIFICATION and finish by answering the original requested
-                    deliverable. Never invent a Candidate or code-generation step for a read-only task.
+                    deliverable. Never invent a Candidate or code-generation step for a read-only task. A Candidate step
+                    must reserve at least 3 tool calls so it can re-read exact evidence ranges before the final proposal.
                 14. Every step must include a budget. maxToolCalls is 0 for a tool-free step and 1-12 for a
                     tool-using step. maxRuntimeSteps is 1-20. These are per-step ceilings only; the Runtime will
                     intersect them with the existing authoritative Plan, tool, time, confirmation and sandbox budgets.
@@ -485,7 +487,10 @@ public class PlanningAgentPlanner {
                 ? node.path("maxToolCalls").intValue() : MAX_PLANNED_TOOL_CALLS_PER_STEP;
         int requestedRuntimeSteps = node.path("maxRuntimeSteps").canConvertToInt()
                 ? node.path("maxRuntimeSteps").intValue() : MAX_PLANNED_RUNTIME_STEPS_PER_STEP;
-        int toolCalls = toolFree ? 0 : Math.max(1,
+        int minimumToolCalls = allowedTools != null
+                && allowedTools.contains(ProjectCandidateProposalToolExecutor.TOOL_NAME)
+                ? CANDIDATE_PROPOSAL_MIN_TOOL_CALLS : 1;
+        int toolCalls = toolFree ? 0 : Math.max(minimumToolCalls,
                 Math.min(MAX_PLANNED_TOOL_CALLS_PER_STEP, requestedToolCalls));
         int runtimeSteps = Math.max(1,
                 Math.min(MAX_PLANNED_RUNTIME_STEPS_PER_STEP, requestedRuntimeSteps));

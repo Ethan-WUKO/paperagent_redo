@@ -108,6 +108,28 @@ class PlanningAgentPlannerTest {
     }
 
     @Test
+    void candidateStepReservesExactEvidenceReadsAndFinalProposalWithinRuntimeCeiling() {
+        when(modelProvider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("""
+                {"summary":"Prepare requested edit","steps":[
+                  {"id":"change","title":"Prepare change","description":"Edit Runner.java", "type":"TOOL",
+                   "dependencies":[],"allowedTools":["project_propose_candidate"],
+                   "budget":{"maxToolCalls":1,"maxRuntimeSteps":4},
+                   "successCriteria":"Candidate remains NOT_APPLIED"}
+                ]}
+                """), "stop", null));
+
+        PlanningAgentPlanner.PlanSpec plan = planner.createPlan(
+                "modify Runner.java to use Math.addExact", "deepseek", "model", "key", null, null,
+                List.of("project_read_file", "project_propose_candidate"));
+
+        assertThat(plan.steps()).singleElement().satisfies(step -> {
+            assertThat(step.allowedTools()).containsExactly("project_propose_candidate");
+            assertThat(step.budget().maxToolCalls()).isEqualTo(3);
+            assertThat(step.budget().maxRuntimeSteps()).isEqualTo(4);
+        });
+    }
+
+    @Test
     void recoveryPlannerReturnsOnlyExplicitPendingSupersessionsAndStepBudgets() {
         when(modelProvider.chat(any())).thenReturn(new ChatResponse(ChatMessage.assistant("""
                 {"summary":"Replace stale remaining work","supersededStepIds":["step_3","step_3","done_step"],

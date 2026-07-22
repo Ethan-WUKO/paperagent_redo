@@ -37,6 +37,7 @@ class AgentLlmRouterTest {
     @ValueSource(strings = {
             "1+1等于多少？不要读取项目文件。",
             "1+1等于多少？无需读取 Notes.md。",
+            "Java int is how many bits? Do not read Project files.",
             "What is 1+1? Do not read Notes.md.",
             "What is 1+1 without reading Notes.md?"
     })
@@ -54,7 +55,31 @@ class AgentLlmRouterTest {
         assertThat(selection.orchestration().reasonCodes())
                 .contains(AgentStrategyReasonCode.LLM_ROUTER_DIRECT)
                 .doesNotContain(AgentStrategyReasonCode.LLM_ROUTER_SUGGESTION_NOT_ALLOWED);
+        assertThat(selection.orchestration().materialRequirements()).isEmpty();
         verify(fixture.provider(), times(1)).chat(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "Do not read Project files, but compile and run Worker23Calculator.java.",
+            "Do not read Project files, but modify Worker23Calculator.java to use Math.addExact."
+    })
+    void noReadClauseCannotRemoveCodeEvidenceFromExecutionOrChangeBoundary(String message) {
+        Fixture fixture = fixture("""
+                {"strategy":"DIRECT","taskStructure":"KNOWLEDGE_ANSWER",\
+                "requiresProjectTools":false,"requiresMultipleSteps":false}
+                """);
+
+        AgentStrategySelection selection = fixture.selector.decide(AgentCoordinationRequest.projectRead(
+                fixture.request(message, 6, 8)));
+
+        assertThat(selection.selectedStrategy()).isEqualTo(AgentStrategy.PLAN_EXECUTE);
+        assertThat(selection.serverCandidates()).containsExactly(AgentStrategy.DIRECT, AgentStrategy.PLAN_EXECUTE);
+        assertThat(selection.orchestration().materialRequirements())
+                .extracting(ResearchMaterialRequirement::material)
+                .containsExactly(ResearchMaterialKind.CODE);
+        assertThat(selection.orchestration().reasonCodes())
+                .contains(AgentStrategyReasonCode.PROJECT_TOOLS_REQUIRE_PLAN);
     }
 
     @Test

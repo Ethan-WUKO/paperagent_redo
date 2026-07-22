@@ -86,6 +86,30 @@ class SandboxStepTypeNormalizationTest {
                 List.of("java", "src/main/java/LRUCache.java"))).doesNotThrowAnyException();
     }
 
+    @Test
+    void doesNotTreatGeneratedClassArtifactAsCSourceMaterial() {
+        AgentPlanStep step = new AgentPlanStep(1L, "sandbox", 1, "Compile Worker23Calculator.java",
+                "Compile Worker23Calculator.java with javac", "SANDBOX_EXECUTE", "[]",
+                "[\"sandbox_execute\"]", "Generate Worker23Calculator.class");
+
+        assertThat(PlanAgentService.requiredSandboxMaterialPaths(step))
+                .containsExactly("Worker23Calculator.java");
+    }
+
+    @Test
+    void reusesOneExplicitGoalSourceForAPathlessFollowUpSandboxStep() {
+        AgentPlanStep step = new AgentPlanStep(1L, "run", 2, "Run Worker23Calculator",
+                "Run the compiled Worker23Calculator class", "SANDBOX_EXECUTE", "[\"compile\"]",
+                "[\"sandbox_execute\"]", "Capture stdout and stderr");
+
+        assertThat(PlanAgentService.requiredSandboxMaterialPaths(step,
+                "Compile and run Worker23Calculator.java after confirmation"))
+                .containsExactly("Worker23Calculator.java");
+        assertThat(PlanAgentService.requiredSandboxMaterialPaths(step,
+                "Run First.java and Second.java"))
+                .isEmpty();
+    }
+
     private PlanningAgentPlanner.StepSpec step(String type, List<String> tools, String description) {
         return new PlanningAgentPlanner.StepSpec(
                 "s1", "Inspect", description, type, List.of(), tools, "Report governed result");
