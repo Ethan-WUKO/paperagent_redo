@@ -505,14 +505,14 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
-    void permitsIdempotentRetryOnlyAfterFailureWithClientRequestId() {
+    void permitsOneBoundedRetryOnlyAfterChangingFailedArguments() {
         ToolRegistry registry = new ToolRegistry().register(new RetriableStubToolExecutor("start_export", objectMapper));
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
         when(chatModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class), any(AgentRuntimeRequest.class)))
                 .thenReturn(ChatResponse.builder().aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
                         .id("call-1").name("start_export").arguments("{\"clientRequestId\":\"retry-1\"}").build()))).build())
                 .thenReturn(ChatResponse.builder().aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
-                        .id("call-2").name("start_export").arguments("{\"clientRequestId\":\"retry-1\"}").build()))).build())
+                        .id("call-2").name("start_export").arguments("{\"clientRequestId\":\"retry-2\"}").build()))).build())
                 .thenReturn(ChatResponse.builder().aiMessage(AiMessage.from("Export started.")).build());
 
         AgentRuntimeResult result = new LangChain4jToolCallingStrategy(chatModel, toolProvider(registry), objectMapper)
@@ -525,21 +525,20 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
-    void idempotentRetryBudgetOfOneAllowsExactlyOneRepeat() {
+    void identicalFailedCallIsNotExecutedAgain() {
         ToolRegistry registry = new ToolRegistry().register(new RetriableStubToolExecutor("start_export", objectMapper, false));
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
         when(chatModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class), any(AgentRuntimeRequest.class)))
                 .thenReturn(toolCall("call-1", "start_export", "{\"clientRequestId\":\"retry-1\"}"))
                 .thenReturn(toolCall("call-2", "start_export", "{\"clientRequestId\":\"retry-1\"}"))
-                .thenReturn(toolCall("call-3", "start_export", "{\"clientRequestId\":\"retry-1\"}"))
                 .thenReturn(answer("The bounded retry result is final."));
 
         AgentRuntimeResult result = new LangChain4jToolCallingStrategy(chatModel, toolProvider(registry), objectMapper)
                 .run(request(List.of("start_export"), 4, 1));
 
         assertThat(result.success()).isTrue();
-        assertThat(result.toolTrace()).hasSize(3);
-        assertThat(result.toolTrace().get(2)).contains("reused=true", "Duplicate tool call blocked");
+        assertThat(result.toolTrace()).hasSize(2);
+        assertThat(result.toolTrace().get(1)).contains("reused=true", "Duplicate failed tool call blocked");
     }
 
     @Test
@@ -656,7 +655,7 @@ class LangChain4jToolCallingStrategyTest {
     }
 
     @Test
-    void scopeRefinementValidationDoesNotConsumeExecutionBudget() {
+    void scopeRefinementValidationDoesNotConsumeExecutionBudget() throws Exception {
         ToolRegistry registry = new ToolRegistry().register(new ScopeRefinementStubToolExecutor(objectMapper));
         LangChain4jChatModelAdapter chatModel = mock(LangChain4jChatModelAdapter.class);
         when(chatModel.chat(any(ChatRequest.class), any(AgentRuntimeRequest.class)))
@@ -678,6 +677,20 @@ class LangChain4jToolCallingStrategyTest {
         assertThat(result.toolTrace()).hasSize(3);
         assertThat(result.fallbacks()).contains(
                 "Tool scope refinement required; execution budget was not consumed: project_cross_material_search");
+        ArgumentCaptor<ChatRequest> requests = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel, org.mockito.Mockito.times(3)).chat(requests.capture(), any(AgentRuntimeRequest.class));
+        var repairMessage = requests.getAllValues().get(1).messages().stream()
+                .filter(dev.langchain4j.data.message.ToolExecutionResultMessage.class::isInstance)
+                .map(dev.langchain4j.data.message.ToolExecutionResultMessage.class::cast)
+                .filter(message -> "call-1".equals(message.id()))
+                .findFirst().orElseThrow();
+        JsonNode repair = objectMapper.readTree(repairMessage.text()).path("repairContext");
+        assertThat(repair.path("failedTool").asText()).isEqualTo("project_cross_material_search");
+        assertThat(repair.path("arguments").path("query").asText()).isEqualTo("objective");
+        assertThat(repair.path("errorCode").asText()).isEqualTo("VALIDATION_ERROR");
+        assertThat(repair.path("errorMessage").asText()).contains("requires relativePaths");
+        assertThat(repair.path("retryable").asBoolean()).isTrue();
+        assertThat(repair.path("remainingAttempts").asInt()).isEqualTo(1);
     }
 
     @Test

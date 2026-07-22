@@ -7,9 +7,9 @@
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
 > Worker 3 只读工具工程基线：`1fc1e0f`（五个受治理科研工具与 Evidence 闭环）
-> 当前工程基线：GitHub `origin/main` 最新提交（Worker 16 已验收并进入发布流程）
+> 当前工程基线：GitHub `origin/main` 最新提交（Worker 17 已验收；Worker 18 随本次发布进入主线）
 > Worker 启动基线：以串行任务包中冻结的完整 `HEAD` 为准
-> 当前发布状态：`WORKER_17_ACCEPTED / STAGE_10_READY`
+> 当前发布状态：`WORKER_18_ACCEPTED / STAGE_11_READY`
 > 设计依据：《通用 Agent Runtime 设计》《Agent 对比分析与后续改造建议》
 
 > 当前进度：Worker 1 至 Worker 7 已完成主对话复审。用户已完成 Project 文件树/预览、五个科研工具和 Plan 关键场景测试；`56e6b5c` 已加入浏览器文件夹上传、托管对象存储、Project 会话与 Plan 展示，并修复规划 JSON 截断、步骤 Verifier 截断、依赖证据复用和受控 PARTIAL。Worker 4 基线 `ff6f6e5` 统一了 Chat/ReAct/Plan 的 run identity、status/phase/outcome、canonical answer 与 PARTIAL/取消/失败语义。Worker 5 基线 `1c40159` 在该投影上增加 L0 Task Workspace，保存目标、成功条件、计划引用、观测步骤摘要、剩余工作和有界短期记忆；任意 JSON 快照中的记忆只能降级为明确标记的非权威审计摘要，不能伪造 Evidence、Candidate、Artifact、失败结果或工具观察。`823a820` 在不扩权的前提下完成 Worker 5 后本地回归闭环。Worker 6 基线 `956ce42` 以服务端 manifest 的 portable relative path、文件大小和 SHA-256 内容哈希确定性派生 ProjectVersion，并将 Project Evidence、Plan 持久化 Evidence、Candidate 与 Artifact 绑定到同一版本；旧 Evidence 缺少完整版本、范围或 parser provenance 时保持 fail-closed，不能伪造 VERIFIED。Worker 7A 至 7D 完成长短期记忆治理、受信只读接入、用户确认/拒绝/纠正/删除和双语治理界面。Worker 8A 基线 `d4970cd` 冻结受信 ProjectVersion 沙箱快照、不可变 UTF-8 全文替换 Candidate、base/result hash、EvidenceRefs、审查 diff、预算和 `NOT_APPLIED` 验证契约。Worker 8B 基线 `83c6b56` 将该契约接入服务端受信工作副本：只读取 Candidate 与 Evidence 涉及的文本文件，读取前后对完整 manifest 二次校验，任意未请求文件并发变化也返回 409；Candidate 只能由显式结构化 intent 和当前受信 Evidence ledger 生成，公共 artifact API 不能伪造保留类型，持久化后每次读取都重新物化、证明和验证，始终保持 `NOT_APPLIED`。Worker 8C 基线 `8ff3339` 新增受治理的 `project_propose_candidate` 生产入口，并通过当前轮真实工具结果和服务端 artifact 再认证投影 Candidate；Project 页从真实 API 展示多文件变更、ProjectVersion、指纹、验证状态、review diff 与 Evidence provenance，始终保持 `NOT_APPLIED`。主对话独立验证 Worker 8C 定向后端 66/66、完整 reactor 889 项零失败且 9 项既有条件跳过、前端 3/3、生产构建及 `git diff --check` 通过。Worker 8 不包含真实 Project 写入、命令、外部网络、migration 或自动应用；真实模型生成、多文件展示、409 STALE 和 422 INVALID 仍由用户进行本地 UI 验收。MVP 发布门脚本仍有基线遗留的绝对路径创建用例禁用治理项，发布前必须单独收口。该结论不表示用户本地科研验收完成，也不表示持久化 checkpoint/重启恢复、多版本历史与导出或安全应用已经完成。
@@ -29,6 +29,8 @@
 > Worker 12 本地验收收口（2026-07-18）：用户已确认 Worker 12 验收完成，收口提交为 `78a6d0b`。真实 Project 会话 107、Plan 60 以 `COMPLETED / PARTIAL` 完成；AUTO 只调度 `paper_injection.tex` 的 `project_latex_outline` 与 `implementation.py` 的 `project_code_symbols`，未访问明确禁止的第三个文件。父合成保持 `allowedTools=[]`、`maxToolCalls=0`、`maxSteps=1`，语义一致性维持 `UNRESOLVED/PARTIAL`，Candidate 为 0，ProjectVersion 未改变，6 条 Evidence 均为 CURRENT；刷新后会话、Plan、Evidence 与 canonical answer 从后端恢复。验收修复还补齐服务器 token 预算、受控 Plan 精确工具持久化、父 Agent canonical answer 文案、Project 会话 URL 恢复和 Project 文件名 Markdown 误链接。主对话独立复跑后端定向 21/21、前端 15/15、完整 reactor 1048 项零失败零错误且 9 项条件跳过、前端生产构建与 `git diff --check`，均通过。该结论仅表示 Worker 12 的受控只读场景完成本地验收，不等于自由多 Agent、完整科研 Project 或 Pro 模式验收完成。
 
 > Worker 15 与 E2B 部署收口（2026-07-21）：Candidate 沙箱验证、显式接受后生成新 ProjectVersion 的闭环已进入 GitHub `main`；E2B 作为新增 Provider 接入，原有 `docker-sbx` 保留。远端基线 `db36b82` 包含 Candidate E2B 验证、一键服务器部署和 HTTP 沙箱确认修复。下一轮不继续扩 Provider，而是按阶段 8 至阶段 11 收口统一入口、LLM 路由、记忆、界面、Evidence 分层、工具自修复及后续复杂执行范式。
+
+> Worker 18 验收收口（2026-07-22）：普通 DIRECT 不再被 Project Evidence 误阻断，Project 事实及 Candidate、沙箱、Apply/回滚/导出硬边界保持不变；工具校验错误获得脱敏 `RepairContext` 并仅允许一次改变参数或方法的有界修复，相同失败调用复用失败结果且不重复执行。`FAILED/TIMED_OUT`、`CANCELLED`、`PARTIAL` 已贯通 Plan、任务投影、事件、UI 与唯一助手消息。真实 E2B 超时会话 193 / Plan 193 验证等待确认时无内部错误串，超时后原 assistant 行就地收敛为终态，连续 GET、刷新和 API 重启后仍保持 1 user + 1 assistant。主对话独立复跑 handoff、timeout 与控制器集成后端 28/28、前端 14/14，均通过；Worker 完整离线 Maven 1230 项、前端 43+6 项、类型检查、生产构建和 `git diff --check` 均通过。
 
 ## 1. 目标与边界
 
@@ -382,7 +384,7 @@ Plan：
 
 ### 阶段 10：Evidence 分层、工具自修复与状态语义
 
-状态：`READY_TO_START`
+状态：`COMPLETED`
 
 - 普通知识问答、产品说明和操作咨询不因缺少 Project Evidence 被阻断；只有引用当前 Project 事实、Candidate 验证/应用和其他外部影响操作进入对应硬校验。
 - 工具失败后向模型提供结构化、脱敏的工具名、参数、错误码、错误消息和剩余尝试次数，使下一次调用能够修正参数或改变方法。
@@ -390,11 +392,13 @@ Plan：
 - 对齐后端、Event、前端与 canonical answer 的 `PARTIAL / FAILED / CANCELLED / TIMED_OUT` 语义。
 - 原始 stdout/stderr 可查看；只读总结必须标明“基于输出、未独立验证”，且不能覆盖执行事实。
 
-退出条件：普通问答不再被 Evidence 闸门误伤；可恢复工具错误能够通过修改参数恢复；重复失败有确定终止条件；相同终态在 API、事件、界面和最终回答中含义一致。
+完成记录：Worker 18 引入小型脱敏 `RepairContext`，复用现有步骤与工具预算完成一次参数/方法修复；完全相同的失败调用不再执行，不可恢复错误不重试。普通 DIRECT 的 Evidence 例外保持为服务端验证的无工具知识路径，Project 文件事实仍要求当前受信 Evidence。沙箱等待确认使用安全 handoff，Plan 终态通过 Plan ID 绑定原地更新同一 assistant，不新增第二条消息；真实超时、取消、失败、刷新与重启恢复已验收。
+
+退出条件：已满足。普通问答不再被 Evidence 闸门误伤；可恢复工具错误能够通过修改参数恢复；重复失败有确定终止条件；相同终态在 API、事件、界面和最终回答中含义一致。
 
 ### 阶段 11：Plan-and-Execute、步骤内 ReAct 与事件触发 Reflection
 
-状态：`DEFERRED_UNTIL_STAGE_8_10_ACCEPTED`
+状态：`READY_TO_START`
 
 - Planner 生成目标、依赖步骤、成功条件和预算；每个可执行步骤内部使用受预算约束的 ReAct 获取真实结果。
 - 仅在步骤失败、结果不足、结果冲突或确定性验证不通过时触发 Reflection；不得每一步固定反思。
@@ -669,15 +673,16 @@ Worker 开发
 
 ### Worker 18：Evidence 分层、工具自修复与状态语义
 
-状态：`READY_TO_START`
+状态：`COMPLETED`
 
 - 对应阶段 10。普通问答不受 Project Evidence 硬闸门阻断；Project 事实声明和外部影响操作继续使用对应校验。
 - 工具错误以结构化、脱敏上下文反馈给模型，允许改变参数或方法的有界重试，禁止相同失败循环和不可恢复错误重试。
 - 对齐 `PARTIAL / FAILED / CANCELLED / TIMED_OUT`，保留原始输出和明确标注的只读总结。
+- 验收完成：参数修复、相同失败阻断、不可恢复错误停止、DIRECT Evidence 分层、沙箱确认/超时/取消和单 assistant 终态恢复均已通过自动测试与真实用户旅程；未开放 Project ReAct 或第二套重试系统。
 
 ### Worker 19：Plan-and-Execute、步骤内 ReAct 与事件触发 Reflection
 
-状态：`DEFERRED_REVIEW_REQUIRED`
+状态：`READY_TO_START`
 
 - 对应阶段 11。只能在 Worker 16 至 Worker 18 验收并取得真实运行数据后启动，启动前由主对话重新冻结设计和预算。
 - Planner 负责目标、依赖和成功条件；步骤内部使用 ReAct；Reflection 只由失败、结果不足、冲突或验证不通过触发。

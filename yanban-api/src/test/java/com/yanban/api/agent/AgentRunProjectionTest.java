@@ -84,6 +84,21 @@ class AgentRunProjectionTest {
     }
 
     @Test
+    void durableWaitingPlanKeepsOneConsistentRecoveryCapability() {
+        AgentRuntimeResult result = new AgentRuntimeResult(false, "Plan waiting", List.of(), 1,
+                null, List.of(), List.of(), null, null, null)
+                .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.WAITING_FOR_USER,
+                        "WAITING", false, null)
+                .withPlanPersistenceLevel("L2_DURABLE");
+        AgentRunProjection projection = AgentRunProjection.fromRuntime(result,
+                new AgentRunIdentity("AGENT_PLAN", "plan-waiting", 1L, 1L, 42L));
+
+        assertThat(projection.persistenceLevel()).isEqualTo("L2_DURABLE");
+        assertThat(projection.checkpointAvailable()).isTrue();
+        assertThat(projection.restartResumable()).isTrue();
+    }
+
+    @Test
     void onlyPersistedL2PlanProjectsRecoveryCapabilityAndHistoricalProjectPlanRemainsL1() {
         AgentRuntimeResult result = new AgentRuntimeResult(true, "done", List.of(), 1,
                 null, List.of(), List.of(), null, null, null);

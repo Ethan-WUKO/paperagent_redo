@@ -148,6 +148,14 @@ public class LangChain4jToolCallingStrategy {
         List<String> toolTrace = new ArrayList<>();
         List<String> fallbacks = new ArrayList<>();
         Map<String, InvocationState> invocationStates = new LinkedHashMap<>();
+        RepairContext pendingRepair = request.repairContext();
+        if (pendingRepair != null) {
+            ToolExecutionOutcome previousFailure = new ToolExecutionOutcome(false,
+                    pendingRepair.toModelToolResult(objectMapper), pendingRepair.errorMessage(),
+                    pendingRepair.errorCode(), pendingRepair.retryable(), false, false);
+            invocationStates.put(pendingRepair.signature(objectMapper),
+                    InvocationState.after(null, "previous-attempt", previousFailure, 0));
+        }
         Set<String> verifiedObservations = new LinkedHashSet<>();
         int projectEvidenceEpoch = 0;
         Set<String> allowedTools = new LinkedHashSet<>(request.toolPolicy().allowedTools());
@@ -224,7 +232,7 @@ public class LangChain4jToolCallingStrategy {
             int reusedToolCallsThisStep = 0;
             for (int i = 0; i < requests.size(); i++) {
                 ToolExecutionRequest toolRequest = requests.get(i);
-                String signature = toolRequest.name() + "|" + normalizeArguments(toolRequest.arguments());
+                String signature = toolSignature(toolRequest.name(), toolRequest.arguments());
                 InvocationState previous = invocationStates.get(signature);
                 String repeatError = repeatError(toolRequest, previous,
                         request.toolPolicy().maxDuplicateToolCalls(), projectEvidenceEpoch);
@@ -242,7 +250,7 @@ public class LangChain4jToolCallingStrategy {
                     log.info("LangChain4j tool result reused step={} tool={} args={} priorSuccess={} originalToolCallId={} reason={}",
                             step + 1,
                             toolRequest.name(),
-                            abbreviate(defaultString(toolRequest.arguments(), "{}")),
+                            abbreviate(sanitizedArguments(toolRequest.arguments())),
                             previous.outcome().success(),
                             previous.sourceToolCallId(),
                             repeatError);
@@ -271,6 +279,16 @@ public class LangChain4jToolCallingStrategy {
                 }
                 toolCalls++;
                 newToolCallsThisStep++;
+                boolean repairAttempt = pendingRepair != null;
+                if (repairAttempt && (!pendingRepair.retryable() || pendingRepair.remainingAttempts() <= 0)) {
+                    String reason = "Repair attempt unavailable for non-retryable or exhausted failure";
+                    toolCalls--;
+                    newToolCallsThisStep--;
+                    addSkippedToolResults(messages, toolTrace, requests, i, step + 1, reason);
+                    return finalAnswerWithoutMoreTools(
+                            messages, toolTrace, fallbacks, step + 1, totalUsage, request, reason);
+                }
+                if (repairAttempt) pendingRepair = pendingRepair.withRemainingAttempts(0);
 
                 emitProcess(request, "正在调用工具：" + toolRequest.name());
                 ToolExecutionOutcome toolResult;
@@ -299,17 +317,27 @@ public class LangChain4jToolCallingStrategy {
                 log.info("LangChain4j tool step={} tool={} args={} success={} error={}",
                         step + 1,
                         toolRequest.name(),
-                        abbreviate(defaultString(toolRequest.arguments(), "{}")),
+                        abbreviate(sanitizedArguments(toolRequest.arguments())),
                         toolResult.success(),
                         toolResult.success() ? null : abbreviate(defaultString(toolResult.errorMessage(), "tool_failed")));
-                toolTrace.add(buildToolTraceLine(step + 1, toolRequest, toolResult));
+                RepairContext failureContext = null;
+                if (!toolResult.success()) {
+                    boolean canRepair = toolResult.retryable()
+                            && !repairAttempt
+                            && step + 1 < request.maxSteps()
+                            && toolCalls < effectiveToolLimit;
+                    failureContext = RepairContext.create(objectMapper, toolRequest.name(), toolRequest.arguments(),
+                            toolResult.errorCode(), toolResult.errorMessage(), canRepair, canRepair ? 1 : 0);
+                    fallbacks.add(failureContext.toFallback(objectMapper));
+                }
+                toolTrace.add(buildToolTraceLine(step + 1, toolRequest, toolResult, failureContext));
                 emitProcess(request, toolResult.success()
                         ? "工具调用完成：" + toolRequest.name()
                         : "工具调用失败：" + toolRequest.name() + "，" + defaultString(toolResult.errorMessage(), "tool_failed"));
                 messages.add(ToolExecutionResultMessage.from(
                         toolRequest.id(),
                         toolRequest.name(),
-                        toolResult.content()
+                        failureContext == null ? toolResult.content() : failureContext.toModelToolResult(objectMapper)
                 ));
                 String missingTarget = missingExplicitProjectFile(
                         explicitProjectFiles, toolRequest, toolResult);
@@ -331,6 +359,19 @@ public class LangChain4jToolCallingStrategy {
                     return finalAnswerWithoutMoreTools(
                             messages, toolTrace, fallbacks, step + 1, totalUsage, request, reason);
                 }
+                if (failureContext != null) {
+                    pendingRepair = failureContext;
+                    String reason = failureContext.retryable()
+                            ? "Awaiting one bounded parameter or method repair"
+                            : "Tool failure is non-retryable or its repair budget is exhausted";
+                    addSkippedToolResults(messages, toolTrace, requests, i + 1, step + 1, reason);
+                    if (!failureContext.retryable()) {
+                        return finalAnswerWithoutMoreTools(
+                                messages, toolTrace, fallbacks, step + 1, totalUsage, request, reason);
+                    }
+                    break;
+                }
+                if (repairAttempt) pendingRepair = null;
             }
             if (newToolCallsThisStep == 0 && reusedToolCallsThisStep > 0) {
                 String reason = "No new tool progress: all " + reusedToolCallsThisStep
@@ -611,7 +652,7 @@ public class LangChain4jToolCallingStrategy {
             toolTrace.add("step=" + step
                     + " tool=" + request.name()
                     + " executed=false budgetConsumed=false success=false reused=false skipped=true"
-                    + " args=" + defaultString(request.arguments(), "{}")
+                    + " args=" + sanitizedArguments(request.arguments())
                     + " success=false error=" + reason);
         }
     }
@@ -659,17 +700,18 @@ public class LangChain4jToolCallingStrategy {
             if (!allowedTools.contains(toolRequest.name())) {
                 return outcome(false,
                         toolProvider.failureContent("tool_permission_denied: " + toolRequest.name()),
-                        "tool_permission_denied");
+                        "tool_permission_denied", "PERMISSION_DENIED", false);
             }
             dev.langchain4j.service.tool.ToolExecutor executor = providerResult.toolExecutorByName(toolRequest.name());
             if (executor == null) {
-                return outcome(false, toolProvider.failureContent("tool_not_found: " + toolRequest.name()), "tool_not_found");
+                return outcome(false, toolProvider.failureContent("tool_not_found: " + toolRequest.name()),
+                        "tool_not_found", "NOT_FOUND", false);
             }
             String content = executor.execute(toolRequest, userId);
             return classifyToolContent(content);
         } catch (Exception ex) {
             String error = defaultString(ex.getMessage(), ex.getClass().getSimpleName());
-            return outcome(false, toolProvider.failureContent(error), error);
+            return outcome(false, toolProvider.failureContent(error), error, "INTERNAL_ERROR", false);
         }
     }
 
@@ -681,21 +723,30 @@ public class LangChain4jToolCallingStrategy {
             JsonNode node = objectMapper.readTree(content);
             if (node.isObject() && node.has("success") && !node.path("success").asBoolean(true)) {
                 String error = node.path("errorMessage").asText(node.path("error").asText("tool_failed"));
-            return outcome(false, content, error, node.path("errorCode").asText(""));
+                String errorCode = node.path("errorCode").asText("INTERNAL_ERROR");
+                boolean retryable = node.path("retryable").asBoolean(false)
+                        || "VALIDATION_ERROR".equals(errorCode);
+                return outcome(false, content, error, errorCode, retryable);
             }
         } catch (Exception ignored) {
             // Text and domain-specific JSON without the ToolResult success field remain successful payloads.
         }
-        return outcome(true, content, null, null);
+        return outcome(true, content, null, null, false);
     }
 
     private ToolExecutionOutcome outcome(boolean success, String content, String errorMessage) {
-        return outcome(success, content, errorMessage, null);
+        return outcome(success, content, errorMessage, null, false);
     }
 
     private ToolExecutionOutcome outcome(boolean success, String content, String errorMessage, String errorCode) {
+        return outcome(success, content, errorMessage, errorCode, false);
+    }
+
+    private ToolExecutionOutcome outcome(boolean success, String content, String errorMessage,
+                                         String errorCode, boolean retryable) {
         AsyncObservation async = asyncObservation(content);
-        return new ToolExecutionOutcome(success, content, errorMessage, errorCode, async.observed(), async.terminal());
+        return new ToolExecutionOutcome(success, content, errorMessage, errorCode, retryable,
+                async.observed(), async.terminal());
     }
 
     private AsyncObservation asyncObservation(String content) {
@@ -718,16 +769,21 @@ public class LangChain4jToolCallingStrategy {
         }
     }
 
-    private String buildToolTraceLine(int step, ToolExecutionRequest toolRequest, ToolExecutionOutcome toolResult) {
+    private String buildToolTraceLine(int step, ToolExecutionRequest toolRequest, ToolExecutionOutcome toolResult,
+                                      RepairContext repairContext) {
         return "step=" + step
                 + " tool=" + toolRequest.name()
                 + " executed=true"
                 + " budgetConsumed=" + !toolResult.scopeRefinementRequired()
                 + " success=" + toolResult.success()
                 + " reused=false skipped=false"
-                + " args=" + defaultString(toolRequest.arguments(), "{}")
+                + " args=" + sanitizedArguments(toolRequest.arguments())
                 + (toolResult.success() ? summarizeToolObservation(toolResult.content())
-                : " error=" + defaultString(toolResult.errorMessage(), "tool_failed"));
+                : " errorCode=" + defaultString(toolResult.errorCode(), "INTERNAL_ERROR")
+                + " retryable=" + (repairContext != null && repairContext.retryable())
+                + " remainingAttempts=" + (repairContext == null ? 0 : repairContext.remainingAttempts())
+                + " error=" + (repairContext == null
+                ? defaultString(toolResult.errorMessage(), "tool_failed") : repairContext.errorMessage()));
     }
 
     private String summarizeToolObservation(String content) {
@@ -786,7 +842,7 @@ public class LangChain4jToolCallingStrategy {
                 + " executed=false budgetConsumed=false"
                 + " success=" + previous.outcome().success()
                 + " reused=true skipped=false"
-                + " args=" + defaultString(toolRequest.arguments(), "{}")
+                + " args=" + sanitizedArguments(toolRequest.arguments())
                 + " originalToolCallId=" + defaultString(previous.sourceToolCallId(), "unknown")
                 + " reason=" + reason
                 + (previous.outcome().success() ? ""
@@ -960,16 +1016,9 @@ public class LangChain4jToolCallingStrategy {
                 }
                 yield previous.asyncTerminal() ? "Repeated asynchronous poll after terminal state" : null;
             }
-            case ALLOW_LIMITED -> {
-                if (previous.success()) {
-                    yield "Duplicate idempotent retry requires a prior failure";
-                }
-                if (descriptor.idempotencyPolicy() == ToolDescriptor.IdempotencyPolicy.NONE
-                        || !hasIdempotencyKey(request.arguments())) {
-                    yield "Duplicate idempotent retry requires an idempotency key";
-                }
-                yield previous.count() > maxDuplicates ? "Duplicate tool call blocked" : null;
-            }
+            case ALLOW_LIMITED -> previous.success()
+                    ? "Duplicate successful tool call blocked"
+                    : "Duplicate failed tool call blocked";
         };
     }
 
@@ -987,12 +1036,27 @@ public class LangChain4jToolCallingStrategy {
         }
     }
 
+    private String toolSignature(String toolName, String arguments) {
+        RepairContext context = RepairContext.create(objectMapper, toolName, arguments,
+                "INTERNAL_ERROR", "signature", false, 0);
+        return context.signature(objectMapper);
+    }
+
+    private String sanitizedArguments(String arguments) {
+        try {
+            return objectMapper.writeValueAsString(
+                    canonicalize(RepairContext.sanitizeArguments(objectMapper, arguments)));
+        } catch (Exception ignored) {
+            return "{}";
+        }
+    }
+
     private List<String> summarizeToolRequests(List<ToolExecutionRequest> requests) {
         if (requests == null || requests.isEmpty()) {
             return List.of();
         }
         return requests.stream()
-                .map(request -> request.name() + "(" + abbreviate(defaultString(request.arguments(), "{}")) + ")")
+                .map(request -> request.name() + "(" + abbreviate(sanitizedArguments(request.arguments())) + ")")
                 .toList();
     }
 
@@ -1125,6 +1189,7 @@ public class LangChain4jToolCallingStrategy {
     }
 
     private record ToolExecutionOutcome(boolean success, String content, String errorMessage, String errorCode,
+                                        boolean retryable,
                                         boolean asyncStateObserved, boolean asyncTerminal) {
         private boolean scopeRefinementRequired() {
             return !success && "VALIDATION_ERROR".equals(errorCode)

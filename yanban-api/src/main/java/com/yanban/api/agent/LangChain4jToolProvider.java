@@ -2,12 +2,14 @@ package com.yanban.api.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.yanban.core.tool.ToolCall;
 import com.yanban.core.tool.ToolDefinition;
 import com.yanban.core.tool.ToolExecutionContext;
 import com.yanban.core.tool.ToolDescriptor;
 import com.yanban.core.tool.ToolRegistry;
 import com.yanban.core.tool.ToolResult;
+import com.yanban.core.tool.ToolErrorCode;
 import com.yanban.api.agent.worker.ControlledWorkerExecutionScope;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -157,7 +159,7 @@ public class LangChain4jToolProvider implements ToolProvider {
                 if (invocationAccepted && ex instanceof RuntimeException runtimeException) {
                     ControlledWorkerExecutionScope.recordFailure(toolName, arguments, runtimeException);
                 }
-                return failureContent(defaultString(ex.getMessage(), ex.getClass().getSimpleName()));
+                return failureContent(ex);
             } finally {
                 ToolExecutionContext.clear();
             }
@@ -191,7 +193,7 @@ public class LangChain4jToolProvider implements ToolProvider {
                     ControlledWorkerExecutionScope.recordFailure(
                             binding.specification().name(), arguments, runtimeException);
                 }
-                return failureContent(defaultString(ex.getMessage(), ex.getClass().getSimpleName()));
+                return failureContent(ex);
             } finally {
                 ToolExecutionContext.clear();
             }
@@ -199,12 +201,28 @@ public class LangChain4jToolProvider implements ToolProvider {
     }
 
     public String failureContent(String errorMessage) {
+        return failureContent(ToolErrorCode.INTERNAL_ERROR, errorMessage, false);
+    }
+
+    private String failureContent(Exception exception) {
+        String message = defaultString(exception.getMessage(), exception.getClass().getSimpleName());
+        boolean invalidArguments = exception instanceof JsonProcessingException
+                || message.matches("(?is).*(json|argument|parameter|required field|deserialize|missing required).*" );
+        return invalidArguments
+                ? failureContent(ToolErrorCode.VALIDATION_ERROR,
+                        exception instanceof JsonProcessingException
+                                ? "Tool arguments must be valid JSON." : message,
+                        true)
+                : failureContent(ToolErrorCode.INTERNAL_ERROR, message, false);
+    }
+
+    private String failureContent(ToolErrorCode code, String errorMessage, boolean retryable) {
         try {
             return objectMapper.writeValueAsString(objectMapper.createObjectNode()
                     .put("success", false)
-                    .put("errorCode", "INTERNAL_ERROR")
+                    .put("errorCode", code == null ? ToolErrorCode.INTERNAL_ERROR.name() : code.name())
                     .put("errorMessage", defaultString(errorMessage, "tool_failed"))
-                    .put("retryable", false));
+                    .put("retryable", retryable));
         } catch (Exception ex) {
             return "{\"success\":false,\"error\":\"tool_result_serialization_failed\"}";
         }

@@ -59,13 +59,35 @@ public class PlanRuntimeAdapter implements RuntimeAdapter {
                         && StringUtils.hasText(statusException.getReason())
                         ? statusException.getReason()
                         : (StringUtils.hasText(ex.getMessage()) ? ex.getMessage() : ex.getClass().getSimpleName());
+                if (createdPlanId != null && error.startsWith("SANDBOX_CONFIRMATION_REQUIRED")) {
+                    try {
+                        AgentPlanResponse waiting = planAgentService.getPlan(request.userId(), createdPlanId);
+                        if (isSandboxConfirmationWaiting(waiting)) {
+                            String content = "Plan execution is waiting for your confirmation or another required action.";
+                            return new AgentRuntimeResult(false, content, transcriptWithAssistant(request, content),
+                                    waiting.steps().size(), null, List.of(), List.of(), null, null, null)
+                                    .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.WAITING_FOR_USER,
+                                            "WAITING", false, null)
+                                    .withPlanId(createdPlanId)
+                                    .withPlanPersistenceLevel(waiting.persistenceLevel());
+                        }
+                    } catch (RuntimeException ignored) {
+                        // Preserve the original governed failure if the persisted waiting state cannot be verified.
+                    }
+                }
                 return new AgentRuntimeResult(false, null, List.of(), 0, error, List.of(), List.of(),
                         null, null, null)
-                        .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.RUNTIME_FAILED, "FAILURE", false, null)
+                        .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.RUNTIME_FAILED, "FAILED", false, null)
                         .withPlanId(createdPlanId);
             }
         }
         return execute(request, request.planId(), request.shouldPersistPlanConversationSummary(true));
+    }
+
+    private boolean isSandboxConfirmationWaiting(AgentPlanResponse plan) {
+        return plan != null && "REVIEWING".equals(plan.status()) && plan.steps() != null
+                && plan.steps().stream().anyMatch(step -> step != null && "PENDING".equals(step.status())
+                && step.allowedTools() != null && step.allowedTools().contains("sandbox_execute"));
     }
 
     private AgentRuntimeResult execute(AgentRuntimeRequest request, Long planId,
@@ -167,13 +189,21 @@ public class PlanRuntimeAdapter implements RuntimeAdapter {
             return new PlanTerminal(true, false, AgentStopReason.COMPLETED,
                     "SUCCESS", AgentRuntimeStopSignal.NONE);
         }
+        if ("CANCELLED".equals(plan.executionOutcome())) {
+            return new PlanTerminal(false, false, AgentStopReason.CANCELLED,
+                    "CANCELLED", AgentRuntimeStopSignal.NONE);
+        }
+        if ("TIMED_OUT".equals(plan.executionOutcome())) {
+            return new PlanTerminal(false, false, AgentStopReason.TIMED_OUT,
+                    "TIMED_OUT", AgentRuntimeStopSignal.NONE);
+        }
         return switch (plan.status()) {
             case "PAUSED" -> new PlanTerminal(false, false, AgentStopReason.PAUSED,
                     "PAUSED", AgentRuntimeStopSignal.NONE);
             case "REVIEWING", "RUNNING" -> new PlanTerminal(false, false, AgentStopReason.WAITING_FOR_USER,
                     "WAITING", AgentRuntimeStopSignal.NONE);
             default -> new PlanTerminal(false, false, AgentStopReason.RUNTIME_FAILED,
-                    "FAILURE", AgentRuntimeStopSignal.NONE);
+                    "FAILED", AgentRuntimeStopSignal.NONE);
         };
     }
 

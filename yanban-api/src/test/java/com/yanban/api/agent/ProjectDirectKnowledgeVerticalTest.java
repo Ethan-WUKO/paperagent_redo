@@ -117,6 +117,27 @@ class ProjectDirectKnowledgeVerticalTest {
     }
 
     @Test
+    void projectOperationConsultationDoesNotRequireProjectFileEvidence() throws Exception {
+        String token = register("project_operation_consultation_user");
+        insertProject(currentUserId(token), 42L);
+        long sessionId = createProjectSession(token, 42L, "Operation consultation");
+
+        mockMvc.perform(post("/api/v1/projects/{projectId}/agent/sessions/{sessionId}/messages",
+                        42L, sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"如何在页面里刷新 Candidate 列表？不要读取项目文件。\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.completionStatus").value("VERIFIED"))
+                .andExpect(jsonPath("$.projectEvidence.length()").value(0))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+
+        assertThat(formalMessages(sessionId)).extracting(AgentMessage::getRole)
+                .containsExactly("user", "assistant");
+    }
+
+    @Test
     void projectPlanClaimWithoutEvidenceStillPersistsOnlyTheCanonicalRejection() throws Exception {
         String token = register("project_react_evidence_user");
         insertProject(currentUserId(token), REACT_PROJECT_ID);

@@ -180,6 +180,30 @@ class CompletionVerifierTest {
     }
 
     @Test
+    void planWaitingForSandboxConfirmationIsAControlledPartialWithoutInternalFailureText() {
+        String internal = "SANDBOX_CONFIRMATION_REQUIRED: confirm scope; DOMAIN_REQUIRED_TOOL_NOT_EXECUTED";
+        AgentRuntimeResult raw = new AgentRuntimeResult(false, internal,
+                List.of(ChatMessage.assistant(internal)), 1, null, List.of(), List.of(), null, null, null)
+                .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.WAITING_FOR_USER,
+                        "WAITING", false, null)
+                .withPlanId(99L);
+
+        AgentRuntimeResult result = verifier.verify(projectRequest(AgentStrategy.PLAN_EXECUTE,
+                "Run src/Main.java in the governed sandbox."), raw);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.outcome()).isEqualTo("PARTIAL");
+        assertThat(result.stopReason()).isEqualTo(AgentStopReason.WAITING_FOR_USER);
+        assertThat(result.completionVerification().status()).isEqualTo(CompletionStatus.PARTIAL);
+        assertThat(result.errorMessage()).isNull();
+        assertThat(result.assistantContent())
+                .isEqualTo("Plan execution is waiting for your confirmation or another required action.")
+                .doesNotContain("SANDBOX_CONFIRMATION_REQUIRED", "DOMAIN_");
+        assertThat(result.messages()).filteredOn(message -> "assistant".equals(message.role()))
+                .singleElement().extracting(ChatMessage::content).isEqualTo(result.assistantContent());
+    }
+
+    @Test
     void failedToolCallDoesNotEraseLaterTrustedEvidenceAndUsefulAnswer() {
         AgentRuntimeResult raw = new AgentRuntimeResult(true, "Useful answer from the narrower successful read.",
                 List.of(tool(42, "src/Main.java", "h1")), 2, null,
@@ -398,7 +422,7 @@ class CompletionVerifierTest {
                 DomainRuntimeFacts.ToolOutcome outcome = new DomainRuntimeFacts.ToolOutcome(
                         "project_read_file", 1, null, true, true, call > 1, false, false);
                 if (call == 1) {
-                    return success("first call failed", new ArrayList<>(request.history()))
+                    return repairableFailure("first call failed", new ArrayList<>(request.history()))
                             .withDomainRuntimeFacts(new DomainRuntimeFacts(List.of(outcome), List.of(), List.of()));
                 }
                 repairRequest.set(request);
@@ -424,6 +448,11 @@ class CompletionVerifierTest {
         assertThat(repairRequest.get().toolPolicy().allowedTools())
                 .containsExactlyElementsOf(original.toolPolicy().allowedTools());
         assertThat(repairRequest.get().projectContext()).isEqualTo(original.projectContext());
+        assertThat(repairRequest.get().repairContext()).isNotNull();
+        assertThat(repairRequest.get().repairContext().failedTool()).isEqualTo("project_read_file");
+        assertThat(repairRequest.get().repairContext().remainingAttempts()).isEqualTo(1);
+        assertThat(repairRequest.get().withStrategy(strategy).repairContext())
+                .isEqualTo(repairRequest.get().repairContext());
     }
 
     @Test
@@ -435,7 +464,7 @@ class CompletionVerifierTest {
                 calls.incrementAndGet();
                 DomainRuntimeFacts.ToolOutcome failed = new DomainRuntimeFacts.ToolOutcome(
                         "project_read_file", 1, null, true, true, false, false, false);
-                return success("still unsupported", new ArrayList<>(request.history()))
+                return repairableFailure("still unsupported", new ArrayList<>(request.history()))
                         .withDomainRuntimeFacts(new DomainRuntimeFacts(List.of(failed), List.of(), List.of()));
             }
         };
@@ -1137,5 +1166,14 @@ class CompletionVerifierTest {
 
     private AgentRuntimeResult success(String content, List<ChatMessage> messages) {
         return new AgentRuntimeResult(true, content, messages, 1, null, List.of(), List.of(), null, null, null);
+    }
+
+    private AgentRuntimeResult repairableFailure(String content, List<ChatMessage> messages) {
+        ObjectMapper mapper = new ObjectMapper();
+        RepairContext context = RepairContext.create(mapper, "project_read_file",
+                "{\"projectId\":42,\"relativePath\":\"src/Main.java\"}",
+                "VALIDATION_ERROR", "line range must be adjusted", true, 1);
+        return new AgentRuntimeResult(true, content, messages, 1, null, List.of(),
+                List.of(context.toFallback(mapper)), null, null, null);
     }
 }

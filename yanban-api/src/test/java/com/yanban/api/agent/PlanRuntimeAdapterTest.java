@@ -44,9 +44,14 @@ class PlanRuntimeAdapterTest {
         assertThat(PlanRuntimeAdapter.classify(plan("COMPLETED", null, List.of(step("DEGRADED")))).outcome())
                 .isEqualTo("PARTIAL");
         assertThat(PlanRuntimeAdapter.classify(plan("FAILED", "model says everything is fine", List.of())).outcome())
-                .isEqualTo("FAILURE");
+                .isEqualTo("FAILED");
         assertThat(PlanRuntimeAdapter.classify(plan("PAUSED", null, List.of())).outcome()).isEqualTo("PAUSED");
         assertThat(PlanRuntimeAdapter.classify(plan("RUNNING", null, List.of())).outcome()).isEqualTo("WAITING");
+        assertThat(PlanRuntimeAdapter.classify(plan("CANCELLED", "User cancelled plan.", List.of())).outcome())
+                .isEqualTo("CANCELLED");
+        assertThat(PlanRuntimeAdapter.classify(plan("FAILED", "sandbox timed out",
+                List.of(step("FAILED", "stdout retained", "SANDBOX_TIMED_OUT")))).outcome())
+                .isEqualTo("TIMED_OUT");
         assertThat(PlanRuntimeAdapter.classify(plan("FAILED", "arbitrary error text", List.of()),
                 AgentRuntimeStopSignal.MAX_STEPS_BUDGET_EXHAUSTED).outcome()).isEqualTo("BUDGET_STOP");
     }
@@ -85,7 +90,7 @@ class PlanRuntimeAdapterTest {
                 AgentToolCallingMode.LANGCHAIN4J_TOOL_BINDING, List.of(), 0, 0, "trace", null, null).withPlanId(19L));
 
         assertThat(result.success()).isFalse();
-        assertThat(result.outcome()).isEqualTo("FAILURE");
+        assertThat(result.outcome()).isEqualTo("FAILED");
         assertThat(result.planId()).isEqualTo(19L);
         verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", true);
         verify(service, never()).createPlanWithinAdapter(org.mockito.ArgumentMatchers.any());
@@ -96,7 +101,7 @@ class PlanRuntimeAdapterTest {
         PlanAgentService service = mock(PlanAgentService.class);
         AgentPlanResponse durable = new AgentPlanResponse(19L, 11L, "goal", "summary", "FAILED",
                 false, null, "failed", null, null, null, null, List.of(),
-                "FAILURE", null, "L2_DURABLE");
+                "FAILED", null, "L2_DURABLE");
         when(service.executePlanResultWithinAdapter(7L, 19L, "trace", true))
                 .thenReturn(new PlanAgentService.PlanExecutionResult(durable, AgentRuntimeStopSignal.NONE));
 
@@ -279,7 +284,7 @@ class PlanRuntimeAdapterTest {
         AgentRuntimeResult result = new PlanRuntimeAdapter(service).run(autoProjectRequest());
 
         assertThat(result.success()).isFalse();
-        assertThat(result.outcome()).isEqualTo("FAILURE");
+        assertThat(result.outcome()).isEqualTo("FAILED");
         assertThat(result.planId()).isEqualTo(19L);
         assertThat(result.errorMessage()).contains("execution unavailable");
     }
@@ -363,11 +368,12 @@ class PlanRuntimeAdapterTest {
     @Test
     void runtimeForcedSandboxPlanUsesCreateAndExecutePathToSurfaceConfirmation() {
         PlanAgentService service = mock(PlanAgentService.class);
-        when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(plan("REVIEWING", null, List.of(new AgentPlanStepResponse(
+        AgentPlanResponse waiting = plan("REVIEWING", null, List.of(new AgentPlanStepResponse(
                         1L, "run", 1, "Run", "Run src/main/java/xhs_1111.java", "SANDBOX_EXECUTE",
                         List.of(), List.of("sandbox_execute"), "receipt", "PENDING", 0,
-                        null, null, null, null))));
+                        null, null, null, null)));
+        when(service.createPlanWithinAdapter(org.mockito.ArgumentMatchers.any())).thenReturn(waiting);
+        when(service.getPlan(7L, 19L)).thenReturn(waiting);
         when(service.executePlanResultWithinAdapter(7L, 19L, "trace", false))
                 .thenThrow(new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.CONFLICT,
@@ -384,7 +390,10 @@ class PlanRuntimeAdapterTest {
         assertThat(PlanRuntimeAdapter.isServerAutoProjectPlan(request)).isTrue();
         assertThat(result.success()).isFalse();
         assertThat(result.planId()).isEqualTo(19L);
-        assertThat(result.errorMessage()).contains("SANDBOX_CONFIRMATION_REQUIRED");
+        assertThat(result.stopReason()).isEqualTo(AgentStopReason.WAITING_FOR_USER);
+        assertThat(result.outcome()).isEqualTo("WAITING");
+        assertThat(result.errorMessage()).isNull();
+        assertThat(result.assistantContent()).doesNotContain("SANDBOX_CONFIRMATION_REQUIRED", "DOMAIN_");
         verify(service).executePlanResultWithinAdapter(7L, 19L, "trace", false);
     }
 

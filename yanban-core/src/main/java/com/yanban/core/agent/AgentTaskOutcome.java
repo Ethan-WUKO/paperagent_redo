@@ -4,5 +4,6 @@ public enum AgentTaskOutcome {
     SUCCEEDED,
     PARTIAL,
     FAILED,
-    CANCELLED
+    CANCELLED,
+    TIMED_OUT
 }

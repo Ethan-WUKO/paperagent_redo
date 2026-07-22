@@ -124,6 +124,41 @@ class AgentServiceResearchEvidenceTest {
         assertThat(projected.success()).isTrue();
     }
 
+    @Test
+    void finalProjectionPreservesActionablePlanWaitingWithoutProjectEvidence() {
+        ProjectRuntimeContext context = new ProjectRuntimeContext(7L, 42L);
+        AgentRuntimeResult waiting = runtime(List.of())
+                .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.WAITING_FOR_USER,
+                        "PARTIAL", false, null);
+
+        AgentRuntimeResult projected = AgentService.enforceProjectEvidenceRequirement(
+                context, "Run src/Main.java in the governed sandbox.", null, waiting, 0);
+
+        assertThat(projected.success()).isTrue();
+        assertThat(projected.stopReason()).isEqualTo(AgentStopReason.WAITING_FOR_USER);
+        assertThat(projected.outcome()).isEqualTo("PARTIAL");
+    }
+
+    @Test
+    void synchronousTurnCompletesPartialWhileCanonicalPlanRemainsWaiting() {
+        ProjectRuntimeContext context = new ProjectRuntimeContext(7L, 42L);
+        AgentTurn turn = new AgentTurn(3L, 7L, 10L);
+        ReflectionTestUtils.setField(turn, "id", 101L);
+        AgentRuntimeResult waiting = runtime(List.of())
+                .withCanonicalAssistantContent(
+                        "Plan execution is waiting for your confirmation or another required action.", 0)
+                .withCoordination(AgentStrategy.PLAN_EXECUTE, AgentStopReason.WAITING_FOR_USER,
+                        "PARTIAL", false, null)
+                .withPlanId(55L);
+
+        AgentRunProjection projection = AgentService.finalRunProjection(waiting, turn, context);
+
+        assertThat(projection.identity().source()).isEqualTo("AGENT_TURN");
+        assertThat(projection.state().outcome()).isEqualTo(AgentTaskOutcome.PARTIAL);
+        assertThat(projection.canonicalAnswer()).isEqualTo(waiting.assistantContent());
+        assertThat(projection.persistenceLevel()).isEqualTo("L0_REQUEST_BOUND");
+    }
+
     private AgentRuntimeResult runtime(List<ChatMessage> messages) { return new AgentRuntimeResult(true,"ok",messages,1,null,List.of(),List.of(),null,null,null); }
     private ChatMessage request(String id) { return new ChatMessage("assistant", null, List.of(new ToolCall(id,"function",new ToolCall.FunctionCall("project_latex_outline","{}"))),null); }
     private String envelope(String projectVersion, String hash, String trust) { return "{\"status\":\"COMPLETE\",\"items\":[],\"evidenceRefs\":[{\"projectVersion\":\""+projectVersion+"\",\"relativePath\":\"paper.tex\",\"fileHash\":\""+hash+"\",\"range\":{\"startLine\":1,\"endLine\":1},\"parserVersion\":\"latex-outline@1\",\"trustLabel\":\""+trust+"\"}]}"; }

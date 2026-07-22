@@ -20,6 +20,7 @@ import com.yanban.core.agent.AgentTurn;
 import com.yanban.core.agent.AgentTurnRepository;
 import com.yanban.core.agent.AgentRunIdentity;
 import com.yanban.core.agent.AgentTaskOutcome;
+import com.yanban.core.agent.AgentTaskState;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
@@ -59,6 +60,9 @@ public class AgentService {
     private static final int SESSION_FACT_MAX_CHARACTERS = 320;
     private static final List<String> CHAT_VISIBLE_ROLES = List.of("user", "assistant");
     private static final int PROCESS_SUMMARY_MAX_LINES = 8;
+    static final String PLAN_CONFIRMATION_HANDOFF =
+            "Plan execution is waiting for your confirmation or another required action.";
+    private static final String PLAN_HANDOFF_MARKER_PREFIX = "plan-handoff:";
     private static final AgentStrategySelector STRATEGY_SELECTOR = new AgentStrategySelector();
 
     private final AgentSessionRepository sessions;
@@ -542,7 +546,8 @@ public class AgentService {
                     || (finalProjection.state().outcome() == AgentTaskOutcome.PARTIAL
                     && finalProjection.canonicalAnswer() != null);
             List<AgentMessage> runtimeMessages = runtimeAnswerIsCanonical
-                    ? saveRuntimeMessages(session.getId(), userId, result.messages(), effectiveHistory.size())
+                    ? saveRuntimeMessages(session.getId(), userId, result.messages(), effectiveHistory.size(),
+                    result.stopReason() == AgentStopReason.WAITING_FOR_USER ? result.planId() : null)
                     : List.of();
             saved.addAll(runtimeMessages);
             log.info("Agent runtime completed sessionId={} userId={} success={} strategy={} stopReason={} outcome={} degraded={} steps={} assistantPreview={} toolTrace={} fallbacks={} promptTokens={} completionTokens={} totalTokens={}",
@@ -750,6 +755,7 @@ public class AgentService {
                                                                 AgentStrategySelection selection,
                                                                 AgentRuntimeResult result, int historySize) {
         if (context != null && result != null && result.success()
+                && result.stopReason() != AgentStopReason.WAITING_FOR_USER
                 && !CompletionVerifier.isVerifiedRouterDirectKnowledgeSelection(selection, result)
                 && CompletionVerifier.requiresProjectFileEvidence(userMessage)
                 && !hasProjectFileEvidence(result.trustedEvidenceLedger())) {
@@ -765,9 +771,16 @@ public class AgentService {
         if (result == null || turn == null || turn.getId() == null) {
             throw new IllegalArgumentException("final run projection requires a persisted turn and runtime result");
         }
-        return AgentRunProjection.fromRuntime(result, new AgentRunIdentity(
+        AgentRunIdentity identity = new AgentRunIdentity(
                 "AGENT_TURN", turn.getId().toString(), turn.getUserId(), turn.getSessionId(),
-                projectContext == null ? null : projectContext.projectId()));
+                projectContext == null ? null : projectContext.projectId());
+        if (result.stopReason() == AgentStopReason.WAITING_FOR_USER && result.planId() != null
+                && StringUtils.hasText(result.assistantContent())) {
+            return new AgentRunProjection(identity,
+                    AgentTaskState.completed(AgentTaskOutcome.PARTIAL),
+                    result.assistantContent(), "L0_REQUEST_BOUND", false, false);
+        }
+        return AgentRunProjection.fromRuntime(result, identity);
     }
 
     private static boolean hasProjectFileEvidence(EvidenceLedger ledger) {
@@ -1445,12 +1458,60 @@ public class AgentService {
     private List<AgentMessage> saveRuntimeMessages(Long sessionId,
                                                    Long userId,
                                                    List<ChatMessage> allMessages,
-                                                   int persistedHistorySize) {
+                                                   int persistedHistorySize,
+                                                   Long handoffPlanId) {
         List<AgentMessage> saved = new ArrayList<>();
-        for (ChatMessage chatMessage : runtimeMessagesToPersist(allMessages, persistedHistorySize)) {
+        List<ChatMessage> selected = bindPlanHandoffMarker(
+                runtimeMessagesToPersist(allMessages, persistedHistorySize), handoffPlanId);
+        for (ChatMessage chatMessage : selected) {
             saved.add(saveAndCacheMessage(sessionId, userId, chatMessage));
         }
         return saved;
+    }
+
+    static List<ChatMessage> bindPlanHandoffMarker(List<ChatMessage> messages, Long planId) {
+        if (messages == null || messages.isEmpty() || planId == null) return messages == null ? List.of() : messages;
+        ArrayList<ChatMessage> bound = new ArrayList<>(messages);
+        for (int index = bound.size() - 1; index >= 0; index--) {
+            ChatMessage message = bound.get(index);
+            if (message != null && "assistant".equalsIgnoreCase(message.role())
+                    && PLAN_CONFIRMATION_HANDOFF.equals(message.content())
+                    && (message.toolCalls() == null || message.toolCalls().isEmpty())) {
+                bound.set(index, new ChatMessage(message.role(), message.content(), message.toolCalls(),
+                        planHandoffMarker(planId)));
+                break;
+            }
+        }
+        return List.copyOf(bound);
+    }
+
+    @Transactional
+    public boolean reconcilePlanHandoffMessage(Long sessionId, Long planId, String terminalContent) {
+        if (sessionId == null || planId == null || !StringUtils.hasText(terminalContent)) return false;
+        AgentMessage handoff = messages.findFirstBySessionIdAndToolCallIdOrderByIdDesc(
+                        sessionId, planHandoffMarker(planId))
+                .orElse(null);
+        if (handoff == null) return false;
+        handoff.replaceContent(terminalContent);
+        AgentMessage saved = messages.saveAndFlush(handoff);
+        messageCache.evictSession(saved.getUserId(), sessionId);
+        return true;
+    }
+
+    private static String planHandoffMarker(Long planId) {
+        return PLAN_HANDOFF_MARKER_PREFIX + planId;
+    }
+
+    static String terminalPlanAssistantContent(AgentPlanResponse plan) {
+        if (plan == null || plan.executionOutcome() == null) return null;
+        return switch (plan.executionOutcome()) {
+            case "SUCCESS" -> "Plan execution completed successfully. Review the Plan card for the final result.";
+            case "PARTIAL" -> "Plan execution completed with a partial result. Review the Plan card for completed steps and remaining limitations.";
+            case "TIMED_OUT" -> "Plan execution timed out. Completed steps and retained output remain available in the Plan card.";
+            case "FAILED" -> "Plan execution failed. Review the Plan card for completed steps and failure details.";
+            case "CANCELLED" -> "Plan execution was cancelled.";
+            default -> null;
+        };
     }
 
     /** Deterministic persistence boundary: history and internal repair prompts never become new rows. */

@@ -3,6 +3,7 @@ package com.yanban.core.agent;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -16,6 +17,8 @@ public interface AgentMessageRepository extends JpaRepository<AgentMessage, Long
     List<AgentMessage> findBySessionIdAndRoleInOrderByIdDesc(Long sessionId, Collection<String> roles, Pageable pageable);
 
     List<AgentMessage> findBySessionIdAndRoleInAndIdLessThanOrderByIdDesc(Long sessionId, Collection<String> roles, Long beforeId, Pageable pageable);
+
+    Optional<AgentMessage> findFirstBySessionIdAndToolCallIdOrderByIdDesc(Long sessionId, String toolCallId);
 
     long countByUserIdAndRoleAndCreatedAtAfter(Long userId, String role, Instant createdAt);
 

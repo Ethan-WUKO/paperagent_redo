@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { AgentPlanResponse } from '../src/api/agent';
 import { requiresSandboxConfirmation, sandboxConfirmationStepCount } from '../src/utils/projectSandboxConfirmation';
+import { isControlledProjectPartial, isSandboxConfirmationRequiredText, projectPlanFailureReason, withoutInternalRuntimeCodes } from '../src/utils/projectCompletion';
 
 function plan(status: string, type = 'SANDBOX_EXECUTE', stepStatus = 'PENDING'): AgentPlanResponse {
   return {
@@ -45,5 +47,49 @@ describe('Project sandbox confirmation', () => {
     expect(requiresSandboxConfirmation(plan('RUNNING'))).toBe(false);
     expect(requiresSandboxConfirmation(plan('REVIEWING', 'ANALYSIS'))).toBe(false);
     expect(requiresSandboxConfirmation(plan('REVIEWING', 'SANDBOX_EXECUTE', 'COMPLETED'))).toBe(false);
+  });
+
+  it('keeps the actionable confirmation card free of red internal failure strings', () => {
+    const waiting = plan('REVIEWING');
+    waiting.errorMessage = 'SANDBOX_CONFIRMATION_REQUIRED: DOMAIN_SANDBOX_POLICY: confirmation required';
+    waiting.steps[0].errorMessage = 'DOMAIN_SANDBOX_POLICY: internal detail';
+
+    expect(requiresSandboxConfirmation(waiting)).toBe(true);
+    expect(projectPlanFailureReason(waiting)).toBe('');
+    expect(isSandboxConfirmationRequiredText(waiting.errorMessage)).toBe(true);
+    expect(withoutInternalRuntimeCodes(waiting.errorMessage)).toBe('');
+  });
+
+  it('treats an actionable confirmation wait as partial instead of a chat failure', () => {
+    expect(isControlledProjectPartial({
+      success: false,
+      assistantContent: 'Plan execution is waiting for your confirmation or another required action.',
+      steps: 1,
+      errorMessage: null,
+      navigationUrl: null,
+      messages: [],
+      debug: null,
+      projectEvidence: [],
+      completionStatus: 'PARTIAL',
+      stopReason: 'WAITING_FOR_USER',
+      outcome: 'PARTIAL',
+      candidateArtifact: null,
+    })).toBe(true);
+  });
+
+  it('keeps websocket, HTTP, and persisted legacy confirmation errors out of the chat error surface', () => {
+    const source = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
+    expect(source.match(/isSandboxConfirmationRequiredText\(payload\.error\)/g)?.length).toBe(1);
+    expect(source).toContain('isSandboxConfirmationRequiredText(response.errorMessage)');
+    expect(source).toContain("role === 'assistant' && isSandboxConfirmationRequiredText(item.content)");
+  });
+
+  it('reloads the single persisted assistant after every terminal or cancelled Plan transition', () => {
+    const source = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
+    expect(source).toContain(
+      'await Promise.all([loadMessages(sessionId, epoch), loadCandidates(sessionId, epoch)]);',
+    );
+    expect(source.match(/await Promise\.all\(\[loadMessages\(sessionId, epoch\), loadPlans\(sessionId, epoch\)\]\);/g)?.length)
+      .toBeGreaterThanOrEqual(2);
   });
 });

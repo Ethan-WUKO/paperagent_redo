@@ -79,13 +79,26 @@ public record AgentPlanResponse(
         boolean partial = steps != null && steps.stream().anyMatch(step -> step != null
                 && ("DEGRADED".equals(step.status()) || "SKIPPED".equals(step.status())));
         if ("COMPLETED".equals(lifecycleStatus)) return partial ? "PARTIAL" : "SUCCESS";
+        if ("CANCELLED".equals(lifecycleStatus)) return "CANCELLED";
         if ("FAILED".equals(lifecycleStatus)) {
+            if (hasTerminalCode(steps, "TIMED_OUT")) return "TIMED_OUT";
+            if (hasTerminalCode(steps, "CANCELLED")) return "CANCELLED";
             boolean preservedResult = steps != null && steps.stream().anyMatch(step -> step != null
                     && ("COMPLETED".equals(step.status()) || "DEGRADED".equals(step.status()))
                     && step.result() != null && !step.result().isBlank());
-            return partial && preservedResult ? "PARTIAL" : "FAILURE";
+            return partial && preservedResult ? "PARTIAL" : "FAILED";
         }
         return lifecycleStatus;
+    }
+
+    private static boolean hasTerminalCode(List<AgentPlanStepResponse> steps, String code) {
+        if (steps == null || steps.isEmpty()) return false;
+        String marker = code == null ? "" : code.toUpperCase(java.util.Locale.ROOT);
+        return steps.stream().filter(java.util.Objects::nonNull).anyMatch(step -> {
+            String error = step.errorMessage() == null ? "" : step.errorMessage().toUpperCase(java.util.Locale.ROOT);
+            return error.equals(marker) || error.startsWith("SANDBOX_" + marker)
+                    || error.startsWith(marker + ":") || error.contains("_" + marker + ":");
+        });
     }
 
     private static String finalAnswer(List<AgentPlanStepResponse> steps) {

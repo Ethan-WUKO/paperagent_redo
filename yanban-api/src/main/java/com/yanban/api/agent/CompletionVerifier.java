@@ -90,8 +90,10 @@ public class CompletionVerifier {
         }
         if (toolFailure) {
             reasons.add("at least one governed tool call failed");
+            RepairContext repair = RepairContext.fromFallbacks(objectMapper, result.fallbacks());
             return decision(CompletionStatus.PARTIAL, reasons, ledger,
-                    !deterministicMissingTarget
+                    repair != null && repair.retryable() && repair.remainingAttempts() > 0
+                            && !deterministicMissingTarget
                             && reflectionAttempts == 0 && domainAllowsRepair(domain), reflectionAttempts, domain);
         }
         if (request.projectContext() != null && !isVerifiedRouterDirectKnowledgeRequest(request)
@@ -148,6 +150,15 @@ public class CompletionVerifier {
                     result.domainRuntimeFacts().withConsistencyFacts(domain.consistencyFacts()));
         }
         CandidateArtifactResponse candidate = candidateFor(request, result, verification);
+        if (result.stopReason() == AgentStopReason.WAITING_FOR_USER && result.planId() != null) {
+            AgentRuntimeResult waiting = result.withCanonicalAssistantContent(
+                    AgentService.PLAN_CONFIRMATION_HANDOFF,
+                    request.history().size());
+            return waiting.asControlledPartial().withCompletionVerification(verification)
+                    .withCandidateArtifact(candidate)
+                    .withCoordination(result.selectedStrategy(), AgentStopReason.WAITING_FOR_USER,
+                            "PARTIAL", false, result.degradedFrom());
+        }
         AgentRuntimeResult applied = switch (verification.status()) {
             case VERIFIED -> result.withCompletionVerification(verification).withCandidateArtifact(candidate)
                     .withCoordination(result.selectedStrategy(), AgentStopReason.COMPLETED, "VERIFIED", result.degraded(), result.degradedFrom());
@@ -160,7 +171,7 @@ public class CompletionVerifier {
             case INSUFFICIENT_EVIDENCE -> failure(request.projectContext() == null
                             ? result : insufficientEvidenceResult(request, result, verification), verification,
                     AgentStopReason.PLAN_PARTIAL, "INSUFFICIENT_EVIDENCE", candidate);
-            case FAILED -> failure(result, verification, AgentStopReason.RUNTIME_FAILED, "FAILED", candidate);
+            case FAILED -> failure(result, verification, terminalStopReason(result), terminalFailureOutcome(result), candidate);
         };
         return projectCanonicalCompletion(request, applied, verification);
     }
@@ -174,6 +185,7 @@ public class CompletionVerifier {
                                                            AgentRuntimeResult result,
                                                            CompletionVerification verification) {
         if (!StringUtils.hasText(result.assistantContent())) return result;
+        if (result.stopReason() == AgentStopReason.WAITING_FOR_USER) return result;
         DomainVerification domain = verification.domainVerification();
         boolean hasConsistencyDecision = domain != null && domain.applicable()
                 && domain.consistencyStatus() != DomainVerification.ConsistencyStatus.NOT_REQUIRED;
@@ -231,7 +243,7 @@ public class CompletionVerifier {
             return false;
         }
         return request.projectContext() == null
-                || !requiresProjectFileEvidence(request.userMessage())
+                || !requiresProjectFileEvidence(request)
                 || hasCurrentProjectFileEvidence(result.evidenceLedger(), request.projectContext().projectId(),
                 request.controlledWorkerDispatch() != null);
     }
@@ -249,7 +261,7 @@ public class CompletionVerifier {
         if (!result.success() || !StringUtils.hasText(result.assistantContent()) || request.projectContext() == null) {
             return false;
         }
-        return !requiresProjectFileEvidence(request.userMessage())
+        return !requiresProjectFileEvidence(request)
                 || hasCurrentProjectFileEvidence(result.evidenceLedger(), request.projectContext().projectId(),
                 request.controlledWorkerDispatch() != null);
     }
@@ -268,6 +280,23 @@ public class CompletionVerifier {
         String error = verification.reasons().isEmpty() ? outcome : String.join("; ", verification.reasons());
         return result.asVerifiedFailure(error).withCompletionVerification(verification).withCandidateArtifact(candidate)
                 .withCoordination(result.selectedStrategy(), stopReason, outcome, result.degraded(), result.degradedFrom());
+    }
+
+    private AgentStopReason terminalStopReason(AgentRuntimeResult result) {
+        if (result != null && result.stopReason() != null
+                && (result.stopReason() == AgentStopReason.CANCELLED
+                || result.stopReason() == AgentStopReason.TIMED_OUT)) {
+            return result.stopReason();
+        }
+        return AgentStopReason.RUNTIME_FAILED;
+    }
+
+    private String terminalFailureOutcome(AgentRuntimeResult result) {
+        if (result == null || !StringUtils.hasText(result.outcome())) return "FAILED";
+        return switch (result.outcome()) {
+            case "CANCELLED", "TIMED_OUT" -> result.outcome();
+            default -> "FAILED";
+        };
     }
 
     private CandidateArtifactResponse candidateFor(AgentRuntimeRequest request, AgentRuntimeResult result,
@@ -417,6 +446,11 @@ public class CompletionVerifier {
      */
     static boolean requiresProjectFileEvidence(String task) {
         return !isPureProjectCapabilityInquiry(task);
+    }
+
+    static boolean requiresProjectFileEvidence(AgentRuntimeRequest request) {
+        return request != null && !isVerifiedRouterDirectKnowledgeRequest(request)
+                && requiresProjectFileEvidence(request.userMessage());
     }
 
     /**

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import type { AgentPlanResponse, SendMessageResponse } from '../src/api/agent';
 import {
   isControlledProjectPartial,
+  projectPlanDisplayStatus,
   projectPlanExecutionOutcome,
   projectPlanFinalAnswer,
   projectPlanLifecycle,
@@ -120,5 +122,32 @@ describe('Project Plan server-owned terminal projection', () => {
     };
 
     expect(projectPlanFinalAnswer(plan)).toBe('');
+  });
+
+  it('renders timeout from execution outcome while lifecycle remains FAILED', () => {
+    const plan: AgentPlanResponse = {
+      id: 49,
+      sessionId: 11,
+      goal: 'run in sandbox',
+      summary: 'summary',
+      status: 'FAILED',
+      ragDisabled: true,
+      skillId: null,
+      errorMessage: 'sandbox timed out',
+      createdAt: '2026-07-22T00:00:00',
+      updatedAt: '2026-07-22T00:01:00',
+      startedAt: '2026-07-22T00:00:01',
+      finishedAt: '2026-07-22T00:01:00',
+      steps: [],
+      executionOutcome: 'TIMED_OUT',
+      finalAnswer: null,
+    };
+
+    expect(projectPlanLifecycle(plan)).toBe('FAILED');
+    expect(projectPlanExecutionOutcome(plan)).toBe('TIMED_OUT');
+    expect(projectPlanDisplayStatus(plan, false)).toBe('已超时');
+    expect(projectPlanDisplayStatus(plan, true)).toBe('Timed out');
+    const source = readFileSync(new URL('../src/views/ProjectPreviewPage.vue', import.meta.url), 'utf8');
+    expect(source).toContain('planTagType(projectPlanExecutionOutcome(item.plan))');
   });
 });

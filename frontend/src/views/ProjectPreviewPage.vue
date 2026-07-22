@@ -410,7 +410,7 @@
                           <span>{{ item.plan.summary || abbreviateText(item.plan.goal, 100) }}</span>
                         </span>
                         <span class="project-execution-card__meta">
-                          <NTag size="tiny" :type="planTagType(planDisplayStatus(item.plan))">{{ planDisplayStatus(item.plan) }}</NTag>
+                          <NTag size="tiny" :type="planTagType(projectPlanExecutionOutcome(item.plan))">{{ planDisplayStatus(item.plan) }}</NTag>
                           <span>{{ planProgressLabel(item.plan) }}</span>
                           <span>{{ formatPlanElapsed(planElapsedMs(item.plan)) || '0s' }}</span>
                         </span>
@@ -633,7 +633,11 @@ import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/composables/useI18n';
 import {
   isControlledProjectPartial,
+  isSandboxConfirmationRequiredText,
+  projectPlanDisplayStatus,
   projectPlanExecutionOutcome,
+  projectPlanFailureReason,
+  withoutInternalRuntimeCodes,
   withoutInternalProjectEvidenceRefs,
 } from '@/utils/projectCompletion';
 import { requiresSandboxConfirmation, sandboxConfirmationStepCount } from '@/utils/projectSandboxConfirmation';
@@ -992,13 +996,15 @@ function resetProjectFolderSelection() {
 }
 
 function planDisplayStatus(plan: AgentPlanResponse) {
-  return projectPlanExecutionOutcome(plan);
+  return projectPlanDisplayStatus(plan, isEnglish.value);
 }
 
 function planTagType(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {
   const value = status.toUpperCase();
   if (value.includes('COMPLETED') || value.includes('VERIFIED')) return 'success';
   if (value.includes('FAILED')) return 'error';
+  if (value.includes('TIMED_OUT')) return 'error';
+  if (value.includes('CANCELLED')) return 'warning';
   if (value.includes('REVIEWING')) return 'warning';
   if (value.includes('PENDING') || value.includes('RUNNING')) return 'info';
   if (value.includes('PARTIAL') || value.includes('DEGRADED') || value.includes('SKIPPED')) return 'warning';
@@ -1103,16 +1109,10 @@ function planProgressLabel(plan: AgentPlanResponse) {
   return `${completed}/${plan.steps.length} steps`;
 }
 
-function planFailureReason(plan: AgentPlanResponse) {
-  if (plan.errorMessage?.trim()) return withoutInternalProjectEvidenceRefs(plan.errorMessage);
-  const failedStep = [...plan.steps]
-    .sort((left, right) => right.sortOrder - left.sortOrder)
-    .find((step) => step.errorMessage?.trim());
-  return failedStep?.errorMessage ? withoutInternalProjectEvidenceRefs(failedStep.errorMessage) : '';
-}
+const planFailureReason = projectPlanFailureReason;
 
 function planStepPreviewLine(step: AgentPlanResponse['steps'][number]) {
-  const source = withoutInternalProjectEvidenceRefs(step.errorMessage || step.result || step.description || '');
+  const source = withoutInternalRuntimeCodes(step.errorMessage || step.result || step.description || '');
   if (source.trim()) return abbreviateText(source, 140);
   const status = step.status.toUpperCase();
   if (status === 'RUNNING') return 'Running now.';
@@ -1127,7 +1127,7 @@ function planStepMessageContent(step: AgentPlanResponse['steps'][number]) {
   }
   const status = step.status.toUpperCase();
   if (step.errorMessage) {
-    lines.push(`Error: ${withoutInternalProjectEvidenceRefs(step.errorMessage)}`);
+    lines.push(`Error: ${withoutInternalRuntimeCodes(step.errorMessage)}`);
   }
   if (step.result) {
     lines.push(withoutInternalProjectEvidenceRefs(step.result));
@@ -1612,6 +1612,7 @@ function buildProjectMessages(serverMessages: AgentMessageResponse[]) {
     }
     if (role === 'user' || role === 'assistant') {
       flushProcess();
+      if (role === 'assistant' && isSandboxConfirmationRequiredText(item.content)) continue;
       result.push({ localId: `server-${item.id}`, role, content: item.content || '', createdAt: item.createdAt });
     }
   }
@@ -1902,6 +1903,17 @@ async function sendProjectWebSocket(projectId: number, sessionId: number, conten
         return;
       }
       if (payload.type === 'error') {
+        if (isSandboxConfirmationRequiredText(payload.error)) {
+          replaceAssistantContent('');
+          finishProcess();
+          if (!settled) {
+            settled = true;
+            cleanup();
+            resolve();
+          }
+          socket.close();
+          return;
+        }
         fail(payload.error || 'Project Agent request failed.');
         socket.close();
         return;
@@ -1930,6 +1942,11 @@ async function sendProjectWebSocket(projectId: number, sessionId: number, conten
 async function sendProjectHttp(projectId: number, sessionId: number, content: string, clientRequestId: string) {
   const response = (await sendProjectMessage(projectId, sessionId, { content, ragDisabled: true, clientRequestId })).data;
   evidence.value = response.projectEvidence || [];
+  if (isSandboxConfirmationRequiredText(response.errorMessage)
+      || isSandboxConfirmationRequiredText(response.assistantContent)) {
+    replaceAssistantContent('');
+    return;
+  }
   if (response.assistantContent != null) replaceAssistantContent(response.assistantContent);
   if (!response.success && !isControlledProjectPartial(response)) {
     throw new Error(response.errorMessage || 'Project Agent request failed.');
@@ -2028,7 +2045,7 @@ async function confirmSandboxExecution(plan: AgentPlanResponse) {
     const response = await confirmAndQueueSandboxPlan(plan.id, newClientRequestId());
     if (epoch !== projectEpoch) return;
     selectedPlan.value = response.data;
-    await loadPlans(sessionId, epoch);
+    await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch)]);
     const refreshed = plans.value.find((item) => item.id === plan.id);
     if (refreshed) await selectPlan(refreshed, epoch);
     void pollPlanUntilTerminal(sessionId, plan.id, epoch, 0);
@@ -2053,7 +2070,7 @@ async function cancelProjectPlan(plan: AgentPlanResponse) {
     const response = await cancelPlan(plan.id);
     if (epoch !== projectEpoch) return;
     selectedPlan.value = response.data;
-    await loadPlans(sessionId, epoch);
+    await Promise.all([loadMessages(sessionId, epoch), loadPlans(sessionId, epoch)]);
     const refreshed = plans.value.find((item) => item.id === plan.id);
     if (refreshed) await selectPlan(refreshed, epoch);
   } catch (cause) {
@@ -2111,7 +2128,7 @@ async function pollPlanUntilTerminal(sessionId: number, planId: number, epoch: n
   await selectPlan(plan);
   if (requiresSandboxConfirmation(plan)) return;
   if (planTerminal(plan.status)) {
-    await loadCandidates(sessionId, epoch);
+    await Promise.all([loadMessages(sessionId, epoch), loadCandidates(sessionId, epoch)]);
     return;
   }
   if (attempt >= 150) {

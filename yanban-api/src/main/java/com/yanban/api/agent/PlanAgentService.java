@@ -631,6 +631,8 @@ public class PlanAgentService {
                                 "traceId", traceId,
                                 "error", plan.getErrorMessage()
                         ));
+                        reconcileTerminalPlanHandoff(toResponse(plan,
+                                steps.findByPlanIdOrderBySortOrderAsc(plan.getId())));
                     }
                 }
             } catch (Exception markEx) {
@@ -867,8 +869,7 @@ public class PlanAgentService {
                     markPlanBudgetExceeded(plan, allSteps, session.getId(), userId, traceId, persistConversationSummary);
                     allSteps = steps.findByPlanIdOrderBySortOrderAsc(plan.getId());
                     AgentPlanResponse response = toResponse(plan, allSteps);
-                    return new PlanExecutionResult(response, AgentRuntimeStopSignal.MAX_STEPS_BUDGET_EXHAUSTED,
-                            evidenceFromStepEvents(plan.getId()), domainRuntimeFacts(response));
+                    return completedExecution(response);
                 }
 
                 AgentPlanStep failedStep = firstFailedStep(allSteps);
@@ -893,7 +894,9 @@ public class PlanAgentService {
                     plan.markFailed("Step " + failedStep.getStepKey() + " failed: " + failedStep.getErrorMessage());
                     Map<String, Object> failureEvent = Map.of(
                             "traceId", traceId,
-                            "error", plan.getErrorMessage()
+                            "error", plan.getErrorMessage(),
+                            "status", plan.getStatus(),
+                            "outcome", toResponse(plan, allSteps).executionOutcome()
                     );
                     if (currentExecutionLease() != null) {
                         recordEvent(plan.getId(), failedStep.getId(), "plan_failed", failureEvent);
@@ -978,8 +981,16 @@ public class PlanAgentService {
     }
 
     private PlanExecutionResult completedExecution(AgentPlanResponse plan) {
+        reconcileTerminalPlanHandoff(plan);
         return new PlanExecutionResult(plan, AgentRuntimeStopSignal.NONE, evidenceFromStepEvents(plan.id()),
                 domainRuntimeFacts(plan));
+    }
+
+    private void reconcileTerminalPlanHandoff(AgentPlanResponse plan) {
+        String content = AgentService.terminalPlanAssistantContent(plan);
+        if (content != null) {
+            agentService.reconcilePlanHandoffMessage(plan.sessionId(), plan.id(), content);
+        }
     }
 
     record PlanExecutionResult(AgentPlanResponse plan, AgentRuntimeStopSignal stopSignal,
@@ -1010,9 +1021,12 @@ public class PlanAgentService {
                 persistStep(step);
             }
             if (sandboxConfirmations != null) sandboxConfirmations.cancel(userId, planId);
-            recordEvent(plan.getId(), null, "plan_cancelled", Map.of("reason", "User cancelled plan."));
+            recordEvent(plan.getId(), null, "plan_cancelled", Map.of(
+                    "reason", "User cancelled plan.", "status", "CANCELLED", "outcome", "CANCELLED"));
         }
-        return toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
+        AgentPlanResponse response = toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
+        reconcileTerminalPlanHandoff(response);
+        return response;
     }
 
     private boolean planStepSatisfied(AgentPlanStep step) {
@@ -1094,7 +1108,7 @@ public class PlanAgentService {
         Set<String> requiredMaterialPaths = requiredProjectMaterialPaths(step);
         for (int attempt = Math.max(0, step.getAttemptCount()); attempt < MAX_STEP_ATTEMPTS; attempt++) {
             if (deadlineExceeded(deadlineAt)) {
-                step.markFailed("Plan execution budget exceeded before this step completed.");
+                step.markFailed("TIMED_OUT: Plan execution budget exceeded before this step completed.");
                 recordEvent(plan.getId(), step.getId(), "step_failed", Map.of(
                         "stepKey", step.getStepKey(),
                         "error", step.getErrorMessage(),
@@ -2959,7 +2973,7 @@ public class PlanAgentService {
                                         Long userId,
                                         String traceId,
                                         boolean persistConversationSummary) {
-        String error = "Plan execution budget exceeded after " + PLAN_BUDGET_SECONDS + " seconds.";
+        String error = "TIMED_OUT: Plan execution budget exceeded after " + PLAN_BUDGET_SECONDS + " seconds.";
         for (AgentPlanStep step : allSteps) {
             if (AgentPlanStepStatus.PENDING.name().equals(step.getStatus())) {
                 step.markSkipped(error);
@@ -2972,11 +2986,7 @@ public class PlanAgentService {
         }
         steps.flush();
         plan.markFailed(error);
-        Map<String, Object> event = Map.of(
-                "traceId", traceId,
-                "budgetSeconds", PLAN_BUDGET_SECONDS,
-                "error", error
-        );
+        Map<String, Object> event = planBudgetExceededEventPayload(traceId, error);
         if (currentExecutionLease() != null) {
             recordEvent(plan.getId(), null, "plan_budget_exceeded", event);
             finishDurablePlan(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()), "BUDGET_EXHAUSTED");
@@ -2987,6 +2997,16 @@ public class PlanAgentService {
         if (persistConversationSummary) {
             persistConversationSummary(userId, sessionId, plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
         }
+    }
+
+    static Map<String, Object> planBudgetExceededEventPayload(String traceId, String error) {
+        return Map.of(
+                "traceId", traceId,
+                "budgetSeconds", PLAN_BUDGET_SECONDS,
+                "error", error,
+                "status", "FAILED",
+                "outcome", "TIMED_OUT"
+        );
     }
 
     private boolean planCancelled(Long planId, Long userId) {

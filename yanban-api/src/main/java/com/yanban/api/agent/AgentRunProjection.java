@@ -25,12 +25,24 @@ public record AgentRunProjection(AgentRunIdentity identity, AgentTaskState state
         if (result.stopReason() == AgentStopReason.PAUSED) {
             return new AgentRunProjection(identity,
                     AgentTaskState.active(AgentTaskStatus.PAUSED, AgentTaskPhase.PAUSED),
-                    null, persistenceLevel, durableProjectPlan, false);
+                    null, persistenceLevel, durableProjectPlan, durableProjectPlan);
         }
         if (result.stopReason() == AgentStopReason.WAITING_FOR_USER) {
             return new AgentRunProjection(identity,
                     AgentTaskState.active(AgentTaskStatus.WAITING_INPUT, AgentTaskPhase.WAITING_INPUT),
-                    null, persistenceLevel, durableProjectPlan, false);
+                    null, persistenceLevel, durableProjectPlan, durableProjectPlan);
+        }
+        if (result.stopReason() == AgentStopReason.CANCELLED || "CANCELLED".equals(result.outcome())) {
+            return new AgentRunProjection(identity,
+                    AgentTaskState.completed(AgentTaskOutcome.CANCELLED),
+                    hasCanonicalAnswer(result) ? result.assistantContent() : null,
+                    persistenceLevel, durableProjectPlan, durableProjectPlan);
+        }
+        if (result.stopReason() == AgentStopReason.TIMED_OUT || "TIMED_OUT".equals(result.outcome())) {
+            return new AgentRunProjection(identity,
+                    AgentTaskState.completed(AgentTaskOutcome.TIMED_OUT),
+                    hasCanonicalAnswer(result) ? result.assistantContent() : null,
+                    persistenceLevel, durableProjectPlan, durableProjectPlan);
         }
         boolean controlledStop = result.runtimeStopSignal() != AgentRuntimeStopSignal.NONE
                 || result.stopReason() == AgentStopReason.PLAN_PARTIAL

@@ -25,6 +25,7 @@ import com.yanban.api.project.ProjectService;
 import com.yanban.core.agent.AgentPlan;
 import com.yanban.core.agent.AgentPlanEventRepository;
 import com.yanban.core.agent.AgentPlanExecutionLease;
+import com.yanban.core.agent.AgentPlanEvent;
 import com.yanban.core.agent.AgentPlanRepository;
 import com.yanban.core.agent.AgentPlanRunLeaseService;
 import com.yanban.core.agent.AgentPlanStep;
@@ -375,8 +376,12 @@ class SandboxEnabledContextTest {
             Fixture fixture=createFixture(status); leases.release(fixture.lease(),"DISPATCHED");
             assertThat(projection.project(fixture.executionId())).isEqualTo(SandboxReceiptProjectionService.Result.PROJECTED);
             assertThat(steps.findById(fixture.step().getId()).orElseThrow().getStatus()).isEqualTo("FAILED");
-            assertThat(events.findByPlanIdOrderByCreatedAtAsc(fixture.plan().getId()))
-                    .extracting(event->event.getEventType()).contains("sandbox_execution_failed");
+            AgentPlanEvent failureEvent = events.findByPlanIdOrderByCreatedAtAsc(fixture.plan().getId()).stream()
+                    .filter(event -> "sandbox_execution_failed".equals(event.getEventType()))
+                    .findFirst().orElseThrow();
+            var payload = json.readTree(failureEvent.getPayloadJson());
+            assertThat(payload.path("status").asText()).isEqualTo(status.name());
+            assertThat(payload.path("timedOut").asBoolean()).isEqualTo(status == SandboxExecutionStatus.TIMED_OUT);
         }
     }
 

@@ -77,4 +77,11 @@ public class AgentMessage {
     public String getToolCallId() { return toolCallId; }
     public Long getPaperTaskId() { return paperTaskId; }
     public Instant getCreatedAt() { return createdAt; }
+
+    public void replaceContent(String content) {
+        if (!"assistant".equalsIgnoreCase(role) || content == null || content.isBlank()) {
+            throw new IllegalArgumentException("only an assistant message can receive non-blank replacement content");
+        }
+        this.content = content;
+    }
 }

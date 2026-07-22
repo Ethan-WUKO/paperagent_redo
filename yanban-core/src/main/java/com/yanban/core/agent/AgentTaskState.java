@@ -37,6 +37,7 @@ public record AgentTaskState(AgentTaskStatus status, AgentTaskPhase phase, Agent
             case SUCCEEDED, PARTIAL -> AgentTaskStatus.COMPLETED;
             case FAILED -> AgentTaskStatus.FAILED;
             case CANCELLED -> AgentTaskStatus.CANCELLED;
+            case TIMED_OUT -> AgentTaskStatus.FAILED;
         };
         return new AgentTaskState(status, AgentTaskPhase.FINALIZING, outcome);
     }
@@ -44,7 +45,7 @@ public record AgentTaskState(AgentTaskStatus status, AgentTaskPhase phase, Agent
     private static boolean matchesTerminalOutcome(AgentTaskStatus status, AgentTaskOutcome outcome) {
         return switch (status) {
             case COMPLETED -> outcome == AgentTaskOutcome.SUCCEEDED || outcome == AgentTaskOutcome.PARTIAL;
-            case FAILED -> outcome == AgentTaskOutcome.FAILED;
+            case FAILED -> outcome == AgentTaskOutcome.FAILED || outcome == AgentTaskOutcome.TIMED_OUT;
             case CANCELLED, STOPPED -> outcome == AgentTaskOutcome.CANCELLED;
             default -> false;
         };
