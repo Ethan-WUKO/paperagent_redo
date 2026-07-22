@@ -425,11 +425,15 @@ Plan：
 
 ### 阶段 13：受控 Final Synthesis
 
-状态：`PENDING`
+状态：`COMPLETED`
 
 - 在 Plan 终态后由无工具、无写权限、无网络的只读总结阶段综合用户问题、受信代码/步骤结果、receipt、原始 stdout/stderr、限制和受治理语言偏好。
 - 最终回答必须直接回答用户问题，并明确区分已验证事实、受支持结论、推理和未验证限制；模型不可用时使用可读的确定性回退。
 - 只能原地形成一个 assistant 和一个 canonical answer，不能触发 Project/Plan/Evidence 写入、Candidate 应用或后续执行。
+
+完成记录：Worker 21 在 Plan 终态增加唯一、无工具、只读且限时的 Final Synthesis，服务端有界组装用户问题、受治理偏好、Worker 20 事实证据、可信 Project 片段、步骤结果和原始 stdout/stderr。Provider、status、exitCode 和 timedOut 只取 VERIFIED ExecutionFact；模型事实标签冲突、工具调用、空结果、异常或超时时整段回退为确定性答案。正常终态只给模型一次综合机会，GET/list 和重启缺口不调用模型，并通过数据库锁内首个 canonical 胜出实现并发幂等。真实旅程覆盖 E2B Java 成功、非零失败、中文偏好、恶意 stdout、连续刷新和 API 重启恢复，始终只有一个正式 assistant 和一个 canonical answer。
+
+退出条件：已满足。聊天区直接回答用户问题，不再只提示查看 Plan 卡；失败、取消和超时不会被写成成功；成功 receipt 不会因语义未独立验证而降级；DIRECT、Project 顶层 `DIRECT / PLAN_EXECUTE`、Candidate 和 Evidence 边界不回归。
 
 ### 阶段 14：结果展示与状态降噪
 
@@ -738,9 +742,10 @@ Worker 开发
 
 ### Worker 21：受控 Final Synthesis
 
-状态：`PENDING`
+状态：`COMPLETED`
 
 - 对应阶段 13。服务端只读组装用户原始问题、必要步骤/代码内容、长期语言偏好与 Worker 20 的事实证据底座，输出唯一最终回答。
+- 验收完成：无工具 Final Synthesis、权威事实包装、冲突模型输出回退、模型失败回退、单 handoff/canonical、并发恢复幂等、刷新重启稳定以及真实 E2B 成功/失败旅程均通过。主审关闭了 GET/list 重复调用模型及模型正文伪造 receipt 字段两项 P1。
 
 ### Worker 22：结果展示与状态降噪
 

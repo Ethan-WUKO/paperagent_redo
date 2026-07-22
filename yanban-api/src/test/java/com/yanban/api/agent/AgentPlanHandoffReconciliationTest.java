@@ -2,9 +2,12 @@ package com.yanban.api.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,8 +47,9 @@ class AgentPlanHandoffReconciliationTest {
         assertThat(service.reconcilePlanHandoffMessage(163L, 163L, terminal)).isTrue();
 
         AgentMessageResponse apiMessage = AgentMessageResponse.from(persisted);
-        assertThat(apiMessage.content()).isEqualTo(
-                "Plan execution timed out. Completed steps and retained output remain available in the Plan card.");
+        assertThat(apiMessage.content())
+                .contains("executionOutcome=TIMED_OUT", "taskOutcome=TIMED_OUT")
+                .doesNotContain("Review the Plan card");
         assertThat(apiMessage.toolCallId()).isEqualTo("plan-handoff:163");
         verify(messages).saveAndFlush(persisted);
         verify(cache).evictSession(1L, 163L);
@@ -55,10 +59,10 @@ class AgentPlanHandoffReconciliationTest {
     @Test
     void eachGovernedTerminalOutcomeReplacesItsOwnPersistedWaitWithoutAddingAMessage() {
         List<OutcomeCase> cases = List.of(
-                new OutcomeCase(201L, "FAILED", "TIMED_OUT", "Plan execution timed out."),
-                new OutcomeCase(202L, "FAILED", "FAILED", "Plan execution failed."),
-                new OutcomeCase(203L, "CANCELLED", "CANCELLED", "Plan execution was cancelled."),
-                new OutcomeCase(204L, "FAILED", "PARTIAL", "Plan execution completed with a partial result."));
+                new OutcomeCase(201L, "FAILED", "TIMED_OUT", "executionOutcome=TIMED_OUT"),
+                new OutcomeCase(202L, "FAILED", "FAILED", "executionOutcome=FAILED"),
+                new OutcomeCase(203L, "CANCELLED", "CANCELLED", "executionOutcome=CANCELLED"),
+                new OutcomeCase(204L, "FAILED", "PARTIAL", "executionOutcome=PARTIAL"));
 
         for (OutcomeCase terminalCase : cases) {
             AgentMessageRepository messages = mock(AgentMessageRepository.class);
@@ -74,7 +78,9 @@ class AgentPlanHandoffReconciliationTest {
             String terminal = AgentService.terminalPlanAssistantContent(
                     plan(terminalCase.planId(), terminalCase.status(), terminalCase.outcome()));
             assertThat(service.reconcilePlanHandoffMessage(163L, terminalCase.planId(), terminal)).isTrue();
-            assertThat(AgentMessageResponse.from(persisted).content()).startsWith(terminalCase.contentPrefix());
+            assertThat(AgentMessageResponse.from(persisted).content())
+                    .contains(terminalCase.contentPrefix())
+                    .doesNotContain("Review the Plan card");
             verify(messages).saveAndFlush(persisted);
             verify(messages, never()).save(any(AgentMessage.class));
         }
@@ -95,6 +101,25 @@ class AgentPlanHandoffReconciliationTest {
     }
 
     @Test
+    void repeatedTerminalReconciliationDoesNotWriteTheSameAssistantAgain() {
+        AgentMessageRepository messages = mock(AgentMessageRepository.class);
+        AgentMessageCacheService cache = mock(AgentMessageCacheService.class);
+        AgentService service = service(messages, cache);
+        AgentMessage persisted = new AgentMessage(163L, 1L, "assistant",
+                AgentService.PLAN_CONFIRMATION_HANDOFF, null, "plan-handoff:163", null);
+        when(messages.findFirstBySessionIdAndToolCallIdOrderByIdDesc(163L, "plan-handoff:163"))
+                .thenReturn(Optional.of(persisted));
+        when(messages.saveAndFlush(persisted)).thenReturn(persisted);
+
+        String terminal = "唯一的最终回答";
+        assertThat(service.reconcilePlanHandoffMessage(163L, 163L, terminal)).isTrue();
+        assertThat(service.reconcilePlanHandoffMessage(163L, 163L, terminal)).isTrue();
+
+        verify(messages, times(1)).saveAndFlush(persisted);
+        verify(cache, times(1)).evictSession(1L, 163L);
+    }
+
+    @Test
     void planTerminalBoundaryDelegatesEveryAuthoritativeOutcomeToTheSingleMessageReconciler() {
         AgentService agentService = mock(AgentService.class);
         PlanAgentService plans = new PlanAgentService(
@@ -107,13 +132,10 @@ class AgentPlanHandoffReconciliationTest {
         ReflectionTestUtils.invokeMethod(plans, "reconcileTerminalPlanHandoff", plan("CANCELLED", "CANCELLED"));
         ReflectionTestUtils.invokeMethod(plans, "reconcileTerminalPlanHandoff", plan("FAILED", "PARTIAL"));
 
-        verify(agentService).reconcilePlanHandoffMessage(163L, 163L,
-                "Plan execution timed out. Completed steps and retained output remain available in the Plan card.");
-        verify(agentService).reconcilePlanHandoffMessage(163L, 163L,
-                "Plan execution failed. Review the Plan card for completed steps and failure details.");
-        verify(agentService).reconcilePlanHandoffMessage(163L, 163L, "Plan execution was cancelled.");
-        verify(agentService).reconcilePlanHandoffMessage(163L, 163L,
-                "Plan execution completed with a partial result. Review the Plan card for completed steps and remaining limitations.");
+        verify(agentService).reconcilePlanHandoffMessage(eq(163L), eq(163L), contains("executionOutcome=TIMED_OUT"));
+        verify(agentService).reconcilePlanHandoffMessage(eq(163L), eq(163L), contains("executionOutcome=FAILED"));
+        verify(agentService).reconcilePlanHandoffMessage(eq(163L), eq(163L), contains("executionOutcome=CANCELLED"));
+        verify(agentService).reconcilePlanHandoffMessage(eq(163L), eq(163L), contains("executionOutcome=PARTIAL"));
     }
 
     @Test

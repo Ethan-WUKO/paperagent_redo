@@ -1495,6 +1495,7 @@ public class AgentService {
                         sessionId, planHandoffMarker(planId))
                 .orElse(null);
         if (handoff == null) return false;
+        if (terminalContent.strip().equals(handoff.getContent())) return true;
         handoff.replaceContent(terminalContent);
         AgentMessage saved = messages.saveAndFlush(handoff);
         messageCache.evictSession(saved.getUserId(), sessionId);
@@ -1507,12 +1508,10 @@ public class AgentService {
 
     static String terminalPlanAssistantContent(AgentPlanResponse plan) {
         if (plan == null || plan.executionOutcome() == null) return null;
+        if (StringUtils.hasText(plan.finalAnswer())) return plan.finalAnswer().strip();
         return switch (plan.executionOutcome()) {
-            case "SUCCESS" -> "Plan execution completed successfully. Review the Plan card for the final result.";
-            case "PARTIAL" -> "Plan execution completed with a partial result. Review the Plan card for completed steps and remaining limitations.";
-            case "TIMED_OUT" -> "Plan execution timed out. Completed steps and retained output remain available in the Plan card.";
-            case "FAILED" -> "Plan execution failed. Review the Plan card for completed steps and failure details.";
-            case "CANCELLED" -> "Plan execution was cancelled.";
+            case "SUCCESS", "PARTIAL", "TIMED_OUT", "FAILED", "CANCELLED", "UNAVAILABLE" ->
+                    FinalSynthesisService.deterministicFallback(plan, List.of(), null);
             default -> null;
         };
     }

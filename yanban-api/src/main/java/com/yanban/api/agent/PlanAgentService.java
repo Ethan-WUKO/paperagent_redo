@@ -108,6 +108,8 @@ public class PlanAgentService {
     private com.yanban.api.agent.sandbox.SandboxCapabilityPolicyResolver sandboxCapabilityPolicy;
     @Autowired(required = false)
     private SandboxPlanConfirmationService sandboxConfirmations;
+    @Autowired(required = false)
+    private FinalSynthesisService finalSynthesisService;
     private final ExecutorService planExecutor = Executors.newFixedThreadPool(
             PLAN_EXECUTOR_THREADS, daemonThreadFactory("yanban-plan-executor-"));
     private final ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(
@@ -496,18 +498,24 @@ public class PlanAgentService {
                 resolved.reason() + "+runtime_policy_ceiling");
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<AgentPlanResponse> listSessionPlans(Long userId, Long sessionId) {
         agentService.getOwnedSession(userId, sessionId);
-        return plans.findBySessionIdAndUserIdOrderByCreatedAtDesc(sessionId, userId).stream()
-                .map(plan -> toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId())))
-                .toList();
+        List<AgentPlanResponse> responses = new ArrayList<>();
+        for (AgentPlan plan : plans.findBySessionIdAndUserIdOrderByCreatedAtDesc(sessionId, userId)) {
+            AgentPlanResponse response = recoverTerminalSynthesis(plan);
+            reconcileTerminalPlanHandoff(response);
+            responses.add(response);
+        }
+        return List.copyOf(responses);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AgentPlanResponse getPlan(Long userId, Long planId) {
         AgentPlan plan = getOwnedPlan(userId, planId);
-        return toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
+        AgentPlanResponse response = recoverTerminalSynthesis(plan);
+        reconcileTerminalPlanHandoff(response);
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -632,8 +640,9 @@ public class PlanAgentService {
                                 "traceId", traceId,
                                 "error", plan.getErrorMessage()
                         ));
-                        reconcileTerminalPlanHandoff(toResponse(plan,
+                        AgentPlanResponse terminal = finalizeTerminalSynthesis(toResponse(plan,
                                 steps.findByPlanIdOrderBySortOrderAsc(plan.getId())));
+                        reconcileTerminalPlanHandoff(terminal);
                     }
                 }
             } catch (Exception markEx) {
@@ -983,9 +992,84 @@ public class PlanAgentService {
     }
 
     private PlanExecutionResult completedExecution(AgentPlanResponse plan) {
-        reconcileTerminalPlanHandoff(plan);
-        return new PlanExecutionResult(plan, AgentRuntimeStopSignal.NONE, evidenceFromStepEvents(plan.id()),
-                domainRuntimeFacts(plan));
+        AgentPlanResponse finalized = finalizeTerminalSynthesis(plan);
+        reconcileTerminalPlanHandoff(finalized);
+        return new PlanExecutionResult(finalized, AgentRuntimeStopSignal.NONE, evidenceFromStepEvents(finalized.id()),
+                domainRuntimeFacts(finalized));
+    }
+
+    private AgentPlanResponse finalizeTerminalSynthesis(AgentPlanResponse projection) {
+        if (projection == null || !terminalStatus(projection.status())) return projection;
+        AgentPlan stored = projection.id() == null ? null : plans.findById(projection.id()).orElse(null);
+        if (stored == null || !stored.terminal()) return projection;
+        List<AgentPlanStep> planSteps = steps.findByPlanIdOrderBySortOrderAsc(stored.getId());
+        if (!StringUtils.hasText(stored.getCanonicalAnswer())) {
+            String answer = synthesizeTerminalAnswer(stored, planSteps);
+            String hash = AgentPlanCheckpointService.sha256(answer);
+            if (runLeases != null) {
+                AgentPlan published = runLeases.publishTerminalCanonical(
+                        stored.getId(), stored.getUserId(), answer, hash);
+                if (published != null) stored = published;
+            } else {
+                stored.publishCanonicalAnswer(answer, hash);
+                AgentPlan saved = plans.saveAndFlush(stored);
+                if (saved != null) stored = saved;
+            }
+            if (!StringUtils.hasText(stored.getCanonicalAnswer())) stored.publishCanonicalAnswer(answer, hash);
+        }
+        return toResponse(stored, planSteps);
+    }
+
+    /**
+     * Read/restart crash-gap repair is deliberately model-free. Production publication goes through
+     * the locked, idempotent canonical boundary so concurrent GET/list requests all observe the same
+     * answer and cannot compete with the normal terminal publisher.
+     */
+    private AgentPlanResponse recoverTerminalSynthesis(AgentPlan observed) {
+        if (observed == null) return null;
+        List<AgentPlanStep> observedSteps = steps.findByPlanIdOrderBySortOrderAsc(observed.getId());
+        if (!observed.terminal() || StringUtils.hasText(observed.getCanonicalAnswer())) {
+            return toResponse(observed, observedSteps);
+        }
+        AgentPlanResponse projection = toResponse(observed, observedSteps);
+        String fallback = FinalSynthesisService.deterministicFallback(
+                projection, observedSteps, governedMemoryContext(observed));
+        String hash = AgentPlanCheckpointService.sha256(fallback);
+        AgentPlan published;
+        if (runLeases != null) {
+            published = runLeases.publishTerminalCanonical(
+                    observed.getId(), observed.getUserId(), fallback, hash);
+        } else {
+            // Focused non-Spring tests do not install the transactional publisher. Re-read before
+            // publishing so their behavior still mirrors the production idempotency contract.
+            published = plans.findByIdAndUserId(observed.getId(), observed.getUserId()).orElse(observed);
+            if (!StringUtils.hasText(published.getCanonicalAnswer())) {
+                published.publishCanonicalAnswer(fallback, hash);
+                AgentPlan saved = plans.saveAndFlush(published);
+                if (saved != null) published = saved;
+            }
+        }
+        return toResponse(published, steps.findByPlanIdOrderBySortOrderAsc(published.getId()));
+    }
+
+    private String synthesizeTerminalAnswer(AgentPlan plan, List<AgentPlanStep> planSteps) {
+        AgentPlanResponse projection = toResponse(plan, planSteps);
+        if (finalSynthesisService == null) {
+            return FinalSynthesisService.deterministicFallback(
+                    projection, planSteps, governedMemoryContext(plan));
+        }
+        AgentSession session = agentService.getOwnedSession(plan.getUserId(), plan.getSessionId());
+        String answer = finalSynthesisService.synthesize(plan, session, planSteps,
+                events.findByPlanIdOrderByCreatedAtAsc(plan.getId()), projection,
+                MDC.get("traceId"));
+        return StringUtils.hasText(answer) ? answer : FinalSynthesisService.deterministicFallback(
+                projection, planSteps, governedMemoryContext(plan));
+    }
+
+    private boolean terminalStatus(String status) {
+        return AgentPlanStatus.COMPLETED.name().equals(status)
+                || AgentPlanStatus.FAILED.name().equals(status)
+                || AgentPlanStatus.CANCELLED.name().equals(status);
     }
 
     private void reconcileTerminalPlanHandoff(AgentPlanResponse plan) {
@@ -1026,7 +1110,8 @@ public class PlanAgentService {
             recordEvent(plan.getId(), null, "plan_cancelled", Map.of(
                     "reason", "User cancelled plan.", "status", "CANCELLED", "outcome", "CANCELLED"));
         }
-        AgentPlanResponse response = toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId()));
+        AgentPlanResponse response = finalizeTerminalSynthesis(
+                toResponse(plan, steps.findByPlanIdOrderBySortOrderAsc(plan.getId())));
         reconcileTerminalPlanHandoff(response);
         return response;
     }
@@ -3236,12 +3321,8 @@ public class PlanAgentService {
     }
 
     private void persistConversationSummary(Long userId, Long sessionId, AgentPlan plan, List<AgentPlanStep> allSteps) {
-        try {
-            agentService.saveMessage(sessionId, userId, ChatMessage.user("/plan " + plan.getGoal()));
-            agentService.saveMessage(sessionId, userId, ChatMessage.assistant(buildFinalSummary(plan, allSteps)));
-        } catch (Exception ex) {
-            log.warn("Failed to persist plan conversation summary planId={}", plan.getId(), ex);
-        }
+        // The chat-visible Plan lifecycle owns one user row and one assistant handoff row. Final synthesis replaces
+        // that handoff in place; it must never manufacture a second /plan turn or assistant answer.
     }
 
     private void recordRuntimeGuardrailEvent(AgentPlan plan, AgentPlanStep step, String error, String traceId) {
@@ -3676,13 +3757,8 @@ public class PlanAgentService {
     private AgentPlan finishDurablePlan(AgentPlan plan, List<AgentPlanStep> planSteps, String status) {
         AgentPlanExecutionLease lease = currentExecutionLease();
         if (lease == null) return persistPlan(plan);
-        String canonical = AgentPlanStatus.COMPLETED.name().equals(plan.getStatus())
-                ? (containsSandboxStep(plan.getId()) ? buildFinalSummary(plan, planSteps)
-                        : toResponse(plan, planSteps).finalAnswer()) : null;
-        if (AgentPlanStatus.COMPLETED.name().equals(plan.getStatus()) && !StringUtils.hasText(canonical)) {
-            canonical = buildFinalSummary(plan, planSteps);
-        }
-        String canonicalHash = StringUtils.hasText(canonical) ? AgentPlanCheckpointService.sha256(canonical) : null;
+        String canonical = synthesizeTerminalAnswer(plan, planSteps);
+        String canonicalHash = AgentPlanCheckpointService.sha256(canonical);
         return runLeases.finish(lease, plan, canonical, canonicalHash, status);
     }
 

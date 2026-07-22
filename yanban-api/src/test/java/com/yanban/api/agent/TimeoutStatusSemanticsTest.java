@@ -65,7 +65,7 @@ class TimeoutStatusSemanticsTest {
 
         assertThat(plan.executionOutcome()).isEqualTo("FAILED");
         assertThat(AgentService.terminalPlanAssistantContent(plan))
-                .startsWith("Plan execution failed.")
-                .doesNotContain("completed successfully");
+                .contains("executionOutcome=FAILED", "taskOutcome=FAILED")
+                .doesNotContain("completed successfully", "Review the Plan card");
     }
 }

@@ -131,18 +131,32 @@ public class AgentPlanRunLeaseService {
         if (source == null || !source.terminal()) {
             throw new IllegalArgumentException("durable Plan finish requires a terminal lifecycle");
         }
-        boolean completed = AgentPlanStatus.COMPLETED.name().equals(source.getStatus());
-        if (completed && (canonicalAnswer == null || canonicalAnswer.isBlank()
-                || canonicalHash == null || canonicalHash.length() != 64)) {
-            throw new IllegalArgumentException("completed durable Plan requires one canonical answer and digest");
-        }
-        if (!completed && (canonicalAnswer != null || canonicalHash != null)) {
-            throw new IllegalArgumentException("non-completed durable Plan cannot publish a canonical answer");
+        if (canonicalAnswer == null || canonicalAnswer.isBlank()
+                || canonicalHash == null || canonicalHash.length() != 64) {
+            throw new IllegalArgumentException("terminal durable Plan requires one canonical answer and digest");
         }
         AgentPlan plan = requireOwnedLease(lease, true);
         plan.copyLifecycleFrom(source);
         plan.publishCanonicalAnswer(canonicalAnswer, canonicalHash);
         plan.releaseLease(recoveryStatus == null ? "TERMINAL" : recoveryStatus);
+        return plans.saveAndFlush(plan);
+    }
+
+    /** Publishes the one terminal answer for cancellation/recovery paths that no longer own a run lease. */
+    @Transactional
+    public AgentPlan publishTerminalCanonical(Long planId, Long userId, String answer, String hash) {
+        AgentPlan plan = plans.findLockedByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Plan does not exist"));
+        if (!plan.terminal()) {
+            throw new IllegalStateException("canonical answer requires a terminal Plan");
+        }
+        // Recovery readers may race with the normal terminal publisher. The row lock makes the
+        // first published canonical authoritative; every later publisher converges on that value
+        // instead of overwriting it or surfacing an immutable-canonical exception.
+        if (plan.getCanonicalAnswer() != null && !plan.getCanonicalAnswer().isBlank()) {
+            return plan;
+        }
+        plan.publishCanonicalAnswer(answer, hash);
         return plans.saveAndFlush(plan);
     }
 

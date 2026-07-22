@@ -195,6 +195,7 @@ public class AgentPlan {
         this.startedAt = null;
         this.finishedAt = null;
         this.recoveryStatus = "RETRY_QUEUED";
+        clearCanonicalAnswerForExplicitRetry();
     }
 
     /** Explicit durable retry keeps the original elapsed-time budget and checkpoint history. */
@@ -203,6 +204,7 @@ public class AgentPlan {
         this.errorMessage = null;
         this.finishedAt = null;
         this.recoveryStatus = "RETRY_QUEUED";
+        clearCanonicalAnswerForExplicitRetry();
     }
 
     public boolean terminal() {
@@ -263,8 +265,11 @@ public class AgentPlan {
         this.recoveryStatus = "CHECKPOINTED";
     }
 
-    void publishCanonicalAnswer(String answer, String hash) {
+    public void publishCanonicalAnswer(String answer, String hash) {
         if (answer == null || answer.isBlank()) return;
+        if (hash == null || hash.length() != 64) {
+            throw new IllegalArgumentException("canonical answer digest is invalid");
+        }
         if (canonicalAnswer == null) {
             canonicalAnswer = answer;
             canonicalAnswerHash = hash;
@@ -273,6 +278,11 @@ public class AgentPlan {
         if (!canonicalAnswer.equals(answer) || !java.util.Objects.equals(canonicalAnswerHash, hash)) {
             throw new IllegalStateException("canonical answer is already published");
         }
+    }
+
+    private void clearCanonicalAnswerForExplicitRetry() {
+        this.canonicalAnswer = null;
+        this.canonicalAnswerHash = null;
     }
 
     void copyLifecycleFrom(AgentPlan source) {

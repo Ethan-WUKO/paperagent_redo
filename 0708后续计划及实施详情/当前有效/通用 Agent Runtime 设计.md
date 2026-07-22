@@ -659,6 +659,12 @@ expiresAt?
 
 DIRECT、REACT、Planner、Plan 步骤和最终总结必须消费同一受信 ContextPackage。任何策略不得另建一条绕过记忆治理的提示链，也不得把未经确认的模型猜测自动写入长期记忆。
 
+### 7.7.1 受控 Final Synthesis
+
+Plan 终态只允许一次只读 Final Synthesis。服务端先固定 `executionOutcome / taskOutcome / answerStatus`、VERIFIED ExecutionFact、受信 Project 片段、必要步骤结果和受治理偏好，再把有界数据交给无工具模型生成展示文本。模型不能写入 Project、Plan、Evidence、Candidate 或触发后续执行，也不能覆盖 Provider、status、exitCode、timedOut 等执行事实。
+
+模型返回空文本、工具调用、超时、异常或与权威执行事实冲突时，Runtime 使用确定性回退。正常终态可以调用模型一次；GET/list、刷新和重启缺口只复用已持久化 canonical answer，缺失时生成确定性回退，不再次调用模型。所有路径都原地更新同一个 `plan-handoff:<planId>` assistant，禁止第二条最终回答和旧 `/plan` 会话写入。
+
 ### 7.8 任务工作区和证据账本
 
 每个任务维护独立工作区逻辑视图：

@@ -284,7 +284,8 @@ class SandboxEnabledContextTest {
         assertThat(finished.getStatus()).isEqualTo("COMPLETED");
         assertThat(finished.getCanonicalAnswer()).isNotBlank();
         assertThat(finished.getCanonicalAnswer()).contains(
-                "Sandbox execution facts: status=SUCCEEDED", "exitCode=0");
+                "executionOutcome=SUCCESS", "provider=docker-sbx", "status=SUCCEEDED", "exitCode=0")
+                .doesNotContain("Review the Plan card");
         assertThat(finished.getCanonicalAnswerHash()).isEqualTo(sha256(finished.getCanonicalAnswer()));
         ReflectionTestUtils.invokeMethod(planAgentService,"recoverExpiredDurablePlansSynchronously");
         assertThat(plans.findById(plan.getId()).orElseThrow().getCanonicalAnswer()).isEqualTo(finished.getCanonicalAnswer());
@@ -414,8 +415,8 @@ class SandboxEnabledContextTest {
                 .filteredOn(message -> "assistant".equals(message.getRole()))
                 .singleElement()
                 .satisfies(message -> assertThat(message.getContent())
-                        .startsWith("Plan execution failed.")
-                        .doesNotContain("completed successfully"));
+                        .contains("executionOutcome=FAILED", "status=FAILED", "exitCode=1")
+                        .doesNotContain("completed successfully", "Review the Plan card"));
     }
 
     @Test
@@ -441,7 +442,8 @@ class SandboxEnabledContextTest {
                 .filteredOn(message -> "assistant".equals(message.getRole()))
                 .singleElement()
                 .satisfies(message -> assertThat(message.getContent())
-                        .startsWith("Plan execution completed successfully."));
+                        .contains("executionOutcome=SUCCESS", "status=SUCCEEDED", "exitCode=0")
+                        .doesNotContain("Review the Plan card"));
     }
 
     @Test

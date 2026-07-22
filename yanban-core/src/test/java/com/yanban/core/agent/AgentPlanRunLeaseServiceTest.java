@@ -172,11 +172,64 @@ class AgentPlanRunLeaseServiceTest {
                 .isInstanceOf(IllegalStateException.class);
     }
 
+    @Test
+    void failedTerminalPublishesCanonicalAndExplicitRetryClearsOnlyThatPresentation() {
+        AgentPlan plan = durablePlan(108L);
+        AgentPlanExecutionLease lease = leases.claim(
+                plan.getId(), 108L, "owner-a", Duration.ofSeconds(5)).orElseThrow();
+        AgentPlan source = plans.findById(plan.getId()).orElseThrow();
+        source.markFailed("exit 17");
+
+        leases.finish(lease, source, "failure answer", "f".repeat(64), "FAILED");
+        AgentPlan stored = plans.findById(plan.getId()).orElseThrow();
+        assertThat(stored.getCanonicalAnswer()).isEqualTo("failure answer");
+
+        stored.resetForDurableRetry();
+        plans.saveAndFlush(stored);
+        AgentPlan retried = plans.findById(plan.getId()).orElseThrow();
+        assertThat(retried.getCanonicalAnswer()).isNull();
+        assertThat(retried.getCanonicalAnswerHash()).isNull();
+        assertThat(retried.getStatus()).isEqualTo("REVIEWING");
+    }
+
+    @Test
+    void concurrentTerminalPublishersConvergeOnTheFirstLockedCanonical() throws Exception {
+        AgentPlan plan = durablePlan(109L);
+        plan.markFailed("recovered terminal");
+        plans.saveAndFlush(plan);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<AgentPlan> first = executor.submit(() -> publishAfterBarrier(
+                    plan, 109L, "fallback-a", "a".repeat(64), ready, start));
+            Future<AgentPlan> second = executor.submit(() -> publishAfterBarrier(
+                    plan, 109L, "fallback-b", "b".repeat(64), ready, start));
+            ready.await();
+            start.countDown();
+
+            String firstAnswer = first.get().getCanonicalAnswer();
+            String secondAnswer = second.get().getCanonicalAnswer();
+            AgentPlan stored = plans.findById(plan.getId()).orElseThrow();
+            assertThat(firstAnswer).isEqualTo(secondAnswer).isEqualTo(stored.getCanonicalAnswer());
+            assertThat(stored.getCanonicalAnswer()).isIn("fallback-a", "fallback-b");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     private boolean claimAfterBarrier(AgentPlan plan, Long userId, String owner,
                                       CountDownLatch ready, CountDownLatch start) throws Exception {
         ready.countDown();
         start.await();
         return leases.claim(plan.getId(), userId, owner, Duration.ofSeconds(5)).isPresent();
+    }
+
+    private AgentPlan publishAfterBarrier(AgentPlan plan, Long userId, String answer, String hash,
+                                          CountDownLatch ready, CountDownLatch start) throws Exception {
+        ready.countDown();
+        start.await();
+        return leases.publishTerminalCanonical(plan.getId(), userId, answer, hash);
     }
 
     private AgentPlan durablePlan(Long userId) {
