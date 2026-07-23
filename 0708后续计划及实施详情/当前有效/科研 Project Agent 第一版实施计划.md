@@ -2,7 +2,7 @@
 
 > 文档状态：当前执行权威计划
 > 创建日期：2026-07-12
-> 最近同步：2026-07-22
+> 最近同步：2026-07-23
 > 已审查工程基线：GitHub `origin/main` 最新提交（Worker 23 验收收口）
 > Worker 1 验收基线：`e1f733d`（离线发布门与本地验收矩阵）
 > Worker 2 契约工程基线：`8e274ab`（科研工具与结构化索引纯契约）
@@ -768,6 +768,41 @@ Worker 开发
 - 收口修复保持最小范围：纯 DIRECT 的显式 no-read 不再误生 Evidence；执行/修改请求仍保留 CODE 与版本边界；并列否定执行意图不再误触发沙箱；`.class` 不再被解析成 `.c`；无路径 sandbox follow-up 仅在 Plan goal 恰有一个显式材料路径时回退；重复的精确 Candidate Evidence 选择最新等价观测，不接受版本/hash/range/parser 不匹配。
 - 独立门禁通过：完整 API reactor 1282 项零失败零错误、10 项条件跳过；Broker reactor、前端 74 项 Vitest、6 项 markdown、`vue-tsc`、生产构建和 `git diff --check` 均通过。固定流程记录于 `docs/process/project-coding-acceptance.md`。
 
+### Worker 24：统一同会话上下文包与临时调试视图
+
+状态：`PLANNED`
+
+- 冻结范围：只处理同一个 session 内的跨轮次上下文，不实现跨 session 任务恢复、任务账本或旧会话自动继承。
+- 目标：复用并扩展现有 `ContextPackage`，稳定组装当前用户原文、最近完整 canonical 轮次、较早滚动摘要、当前 ProjectVersion、有效 Evidence 引用和受治理长期偏好。
+- 最近对话必须按完整轮次保留；滚动摘要只压缩更早语义，不能替代路径、版本、hash、Plan、Candidate、确认和执行事实。
+- 前端增加临时、可折叠的上下文调试视图，重点展示实际内容、分区、来源、截断与丢弃原因。该视图仅用于开发调试，后续可隐藏或删除；不得展示密钥、环境变量、内部思维链或未授权内容。
+- 本 Worker 不定义 TaskFrame，不改变 `DIRECT / PLAN_EXECUTE` 路由，不修改 Planner/Reflection 行为，不增加工具、权限、Provider、migration 或 Candidate 写入能力。
+- 必测：当前消息完整；最近多轮 canonical 原文顺序稳定；process/临时消息不污染；较早内容进入滚动摘要；预算截断保留完整轮次；ProjectVersion/Evidence/长期偏好分区正确；刷新和 API 重启内容稳定；DIRECT、Plan、Candidate、沙箱确认和单 canonical answer 不回归；桌面与窄屏调试视图可读且无溢出。
+
+### Worker 25：最小 TaskFrame 与同会话指代解析
+
+状态：`PLANNED_AFTER_WORKER_24`
+
+- 基于 Worker 24 的统一上下文包解析目标、动作、对象、约束、交付物、歧义和来源轮次。
+- 建立同一 session 内 active entity/target；“这份代码”“刚才那个结果”“继续”等只能绑定当前版本中唯一有效对象，否则询问用户。
+- 区分命令、询问、确认、拒绝和澄清；不实现跨 session 任务恢复。
+
+### Worker 26：统一 TaskFrame 消费与目标漂移约束
+
+状态：`PLANNED_AFTER_WORKER_25`
+
+- Router、Planner、Plan Step、Reflection 和 Final Synthesis 消费同一份已验证 TaskFrame。
+- Planner 只拆解任务；步骤语义、工具权限、预算和成功条件必须一致。
+- Repair/Reflection 只能修复参数、范围、步骤和方法，不得改变目标对象、语言、读写边界或交付物。
+
+### Worker 27：短期工作记忆与滚动摘要收口
+
+状态：`PLANNED_AFTER_WORKER_26`
+
+- 在同一 session 内持久化滚动摘要、活跃任务、活跃对象和未完成要求，并在 API 重启后恢复。
+- 摘要只在唯一 canonical answer 后更新，不能把等待确认、Candidate 或推断写成已完成事实。
+- 长期记忆继续只承载用户确认的稳定偏好和事实，不承担当前任务状态，不跨 session 自动恢复任务。
+
 ## 16. 审查与停止条件
 
 主对话发现以下任一情况必须停止自动推进：
@@ -796,4 +831,4 @@ Worker 开发
 9. 长任务能够暂停、恢复、取消和明确失败。
 10. 不发生越权读取、未授权写入、虚假实验或虚假完成。
 
-阶段 8 至阶段 15 已完成两轮体验、可靠性、结果语义和编码闭环收口。Pro 模式的自主研究循环仍不属于本版，必须另行规划、冻结权限和验收矩阵后才能启动。
+阶段 8 至阶段 15 已完成两轮体验、可靠性、结果语义和编码闭环收口。真实使用进一步暴露了同一 session 内上下文组装、任务理解、跨轮次指代和短期工作记忆缺口，后续按 Worker 24 至 Worker 27 串行收口。Pro 模式的自主研究循环仍不属于本版，必须另行规划、冻结权限和验收矩阵后才能启动。
